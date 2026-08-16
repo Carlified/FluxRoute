@@ -1,0 +1,232 @@
+unit LefLibrary;
+
+interface
+
+uses
+  System.SysUtils,
+  System.Classes,
+  System.Generics.Collections,
+  System.Generics.Defaults,
+  System.StrUtils;
+
+type
+  TPinDirection = (pdUnknown, pdInput, pdOutput, pdInOut); //Delphi version of enum
+
+  TPortShape = class //assumes port is a rect - no reason to think otherwise
+  public
+    Layer: string;
+    x1, x2, y1, y2: Double;
+  end;
+
+  TPort = class
+  public
+    Name: string;
+    Direction: TPinDirection;
+    Shapes: TObjectList<TPortShape>; // allows multi layer ports (only used with pads)
+    constructor Create;
+    destructor Destroy; override;
+  end;
+
+  TCell = class
+  public
+    Name: string;
+    Width: Double;
+    Height: Double;
+    Ports: TObjectList<TPort>;
+    PortsByName: TDictionary<string, TPort>; //for quick lookup with blif parser
+    constructor Create;
+    destructor Destroy; override;
+    // Returns nil if the pin doesn't exist on this cell.
+    function FindPort(const PinName: string): TPort;
+  end;
+
+  TLibrary = class
+  public
+    Cells: TObjectList<TCell>;
+    CellsByName: TDictionary<string, TCell>; //used for verifying blif files
+    constructor Create;
+    destructor Destroy; override;
+    // Returns nil if the cell doesn't exist in the library.
+    function FindCell(const CellName: string): TCell;
+  end;
+
+// Parses a LEF file and returns a fully-populated TLibrary.
+// Caller owns the result and must Free it.
+function LoadLefLibrary(const FileName: string): TLibrary;
+
+implementation
+
+{ TPort }
+
+constructor TPort.Create;
+begin
+  Direction := pdUnknown;
+  Shapes := TObjectList<TPortShape>.Create(True);
+end;
+
+destructor TPort.Destroy;
+begin
+  Shapes.Free;
+  inherited;
+end;
+
+{ TCell }
+
+constructor TCell.Create;
+begin
+  Ports := TObjectList<TPort>.Create(True);
+  PortsByName := TDictionary<string, TPort>.Create(TIStringComparer.Ordinal);
+end;
+
+destructor TCell.Destroy;
+begin
+  Ports.Free;
+  PortsByName.Free; // does not own the TPort objects -- Ports does
+  inherited;
+end;
+
+function TCell.FindPort(const PinName: string): TPort;
+begin
+  if not PortsByName.TryGetValue(PinName, Result) then
+    Result := nil;
+end;
+
+{ TLibrary }
+
+constructor TLibrary.Create;
+begin
+  Cells := TObjectList<TCell>.Create(True);
+  CellsByName := TDictionary<string, TCell>.Create(TIStringComparer.Ordinal);
+end;
+
+destructor TLibrary.Destroy;
+begin
+  Cells.Free;
+  CellsByName.Free; // does not own the TCell objects -- Cells does
+  inherited;
+end;
+
+function TLibrary.FindCell(const CellName: string): TCell;
+begin
+  if not CellsByName.TryGetValue(CellName, Result) then
+    Result := nil;
+end;
+
+{ Parsing }
+
+function ParseDirection(const Token: string): TPinDirection;
+begin
+  if SameText(Token, 'INPUT') then
+    Result := pdInput
+  else if SameText(Token, 'OUTPUT') then
+    Result := pdOutput
+  else if SameText(Token, 'INOUT') then
+    Result := pdInOut
+  else
+    Result := pdUnknown;
+end;
+
+function LoadLefLibrary(const FileName: string): TLibrary;
+var
+  i: Integer;
+  Lines: TStringList;
+  Line: string;
+  Parts: TArray<string>;
+  CurrentCell: TCell;
+  CurrentPort: TPort;
+  Shape: TPortShape;
+  CurrentLayer: string;
+begin
+  Result := TLibrary.Create;
+  Lines := TStringList.Create;
+  try
+    Lines.LoadFromFile(FileName);
+    CurrentCell := nil;
+    CurrentPort := nil;
+    CurrentLayer := '';
+
+    for i := 0 to Lines.Count - 1 do
+    begin
+      Line := Trim(Lines[i]);
+
+      if StartsText('MACRO', Line) then
+      begin
+        Parts := Line.Split([' '], TStringSplitOptions.ExcludeEmpty);
+        CurrentCell := TCell.Create;
+        CurrentCell.Name := Parts[1];
+        Result.Cells.Add(CurrentCell);
+        Result.CellsByName.AddOrSetValue(CurrentCell.Name, CurrentCell);
+      end
+
+      else if (CurrentCell <> nil) and StartsText('SIZE', Line) then
+      begin
+        Parts := Line.Split([' '], TStringSplitOptions.ExcludeEmpty);
+        CurrentCell.Width := StrToFloat(Parts[1]);
+        CurrentCell.Height := StrToFloat(Parts[3]);
+      end
+
+      else if (CurrentCell <> nil) and StartsText('PIN', Line) then
+      begin
+        Parts := Line.Split([' '], TStringSplitOptions.ExcludeEmpty);
+        CurrentPort := TPort.Create;
+        CurrentPort.Name := Parts[1];
+        CurrentCell.Ports.Add(CurrentPort);
+        CurrentCell.PortsByName.AddOrSetValue(CurrentPort.Name, CurrentPort);
+        CurrentLayer := '';
+      end
+
+      else if (CurrentCell <> nil) and (CurrentPort <> nil) and
+        StartsText('DIRECTION', Line) then
+      begin
+        Parts := Line.Split([' '], TStringSplitOptions.ExcludeEmpty);
+        CurrentPort.Direction := ParseDirection(Parts[1]);
+      end
+
+      else if (CurrentCell <> nil) and (CurrentPort <> nil) and
+        StartsText('LAYER', Line) then
+      begin
+        Parts := Line.Split([' '], TStringSplitOptions.ExcludeEmpty);
+        CurrentLayer := Parts[1];
+      end
+
+      else if (CurrentCell <> nil) and (CurrentPort <> nil) and
+        StartsText('RECT', Line) then
+      begin
+        Parts := Line.Split([' '], TStringSplitOptions.ExcludeEmpty);
+        Shape := TPortShape.Create;
+        Shape.Layer := CurrentLayer;
+        Shape.x1 := StrToFloat(Parts[1]);
+        Shape.y1 := StrToFloat(Parts[2]);
+        Shape.x2 := StrToFloat(Parts[3]);
+        Shape.y2 := StrToFloat(Parts[4]);
+        CurrentPort.Shapes.Add(Shape);
+      end
+
+      else if StartsText('END', Line) then
+      begin
+        if Assigned(CurrentCell) then
+        begin
+          Parts := Line.Split([' '], TStringSplitOptions.ExcludeEmpty);
+          if Length(Parts) > 1 then
+          begin
+            if SameText(Parts[1], CurrentCell.Name) then
+            begin
+              CurrentCell := nil;
+              CurrentPort := nil;
+              CurrentLayer := '';
+            end
+            else if Assigned(CurrentPort) and SameText(Parts[1], CurrentPort.Name) then
+            begin
+              CurrentPort := nil;
+              CurrentLayer := '';
+            end;
+          end;
+        end;
+      end;
+    end;
+  finally
+    Lines.Free;
+  end;
+end;
+
+end.

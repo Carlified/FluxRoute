@@ -1,0 +1,134 @@
+object Form1: TForm1
+  Left = 0
+  Top = 0
+  Caption = 'Place and Route Tool'
+  ClientHeight = 480
+  ClientWidth = 640
+  FormFactor.Width = 320
+  FormFactor.Height = 480
+  FormFactor.Devices = [Desktop]
+  DesignerMasterStyle = 0
+  OnCreate = FormCreate
+  object Label1: TLabel
+    Position.X = 24.000000000000000000
+    Position.Y = 8.000000000000000000
+    Size.Width = 592.000000000000000000
+    Size.Height = 40.000000000000000000
+    Text = 'Select a LEF file to begin.'
+    TextSettings.WordWrap = True
+    TabOrder = 1
+  end
+  object TabControl1: TTabControl
+    Position.X = 0.000000000000000000
+    Position.Y = 48.000000000000000000
+    Size.Width = 640.000000000000000000
+    Size.Height = 368.000000000000000000
+    TabPosition = None
+    object TabItem1: TTabItem
+      Position.X = 0.000000000000000000
+      Position.Y = 0.000000000000000000
+      Size.Width = 640.000000000000000000
+      Size.Height = 368.000000000000000000
+      Text = 'Start'
+      TabOrder = 0
+      object WelcomeLabel: TLabel
+        Position.X = 24.000000000000000000
+        Position.Y = 24.000000000000000000
+        Size.Width = 592.000000000000000000
+        Size.Height = 80.000000000000000000
+        Text = 'Welcome to the Place and Route Tool.'
+        TextSettings.WordWrap = True
+        TabOrder = 1
+      end
+      object Button1: TButton
+        Position.X = 24.000000000000000000
+        Position.Y = 120.000000000000000000
+        Size.Width = 150.000000000000000000
+        Size.Height = 32.000000000000000000
+        Size.PlatformDefault = False
+        Text = 'Select LEF file'
+        TextSettings.Trimming = None
+        OnClick = Button1Click
+        TabOrder = 2
+      end
+      object Button2: TButton
+        Position.X = 24.000000000000000000
+        Position.Y = 160.000000000000000000
+        Size.Width = 150.000000000000000000
+        Size.Height = 32.000000000000000000
+        Size.PlatformDefault = False
+        Text = 'Run LEF parser'
+        TextSettings.Trimming = None
+        Enabled = False
+        OnClick = Button2Click
+        TabOrder = 3
+      end
+    end
+    object TabItem2: TTabItem
+      Position.X = 0.000000000000000000
+      Position.Y = 0.000000000000000000
+      Size.Width = 640.000000000000000000
+      Size.Height = 368.000000000000000000
+      Text = 'Sources'
+      TabOrder = 1
+      object Button3: TButton
+        Position.X = 24.000000000000000000
+        Position.Y = 24.000000000000000000
+        Size.Width = 150.000000000000000000
+        Size.Height = 32.000000000000000000
+        Size.PlatformDefault = False
+        Text = 'Select cell folder'
+        TextSettings.Trimming = None
+        OnClick = Button3Click
+        TabOrder = 1
+      end
+      object Button4: TButton
+        Position.X = 24.000000000000000000
+        Position.Y = 64.000000000000000000
+        Size.Width = 150.000000000000000000
+        Size.Height = 32.000000000000000000
+        Size.PlatformDefault = False
+        Text = 'Find linked files'
+        TextSettings.Trimming = None
+        Enabled = False
+        OnClick = Button4Click
+        TabOrder = 2
+      end
+      object ListBox1: TListBox
+        Position.X = 24.000000000000000000
+        Position.Y = 112.000000000000000000
+        Size.Width = 592.000000000000000000
+        Size.Height = 240.000000000000000000
+        TabOrder = 3
+      end
+    end
+  end
+  object ButtonBack: TButton
+    Position.X = 480.000000000000000000
+    Position.Y = 432.000000000000000000
+    Size.Width = 70.000000000000000000
+    Size.Height = 32.000000000000000000
+    Size.PlatformDefault = False
+    Text = '< Back'
+    TextSettings.Trimming = None
+    Enabled = False
+    OnClick = ButtonBackClick
+    TabOrder = 8
+  end
+  object ButtonNext: TButton
+    Position.X = 556.000000000000000000
+    Position.Y = 432.000000000000000000
+    Size.Width = 70.000000000000000000
+    Size.Height = 32.000000000000000000
+    Size.PlatformDefault = False
+    Text = 'Next >'
+    TextSettings.Trimming = None
+    Enabled = False
+    OnClick = ButtonNextClick
+    TabOrder = 9
+  end
+  object OpenDialog1: TOpenDialog
+    Left = 256
+    Top = 224
+  end
+end

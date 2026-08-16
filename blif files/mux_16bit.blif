@@ -1,0 +1,139 @@
+# 16-bit Multiplexer made from 4-bit muxes
+# Inputs: d0-d15 (16 data inputs), sel0-sel3 (4 select lines for binary encoding)
+# Output: out (selected output)
+#
+# Structure: Four 4-bit 2:1 muxes (one per bit position) feed into a 4:1 mux tree
+# Each stage demonstrates fanout: select lines split to multiple mux instances
+
+.model mux_16bit
+.inputs d0 d1 d2 d3 d4 d5 d6 d7 d8 d9 d10 d11 d12 d13 d14 d15 sel0 sel1 sel2 sel3
+.outputs out
+
+# ========== First stage: Four 4-bit 2:1 muxes ==========
+# These select between bit 0 and bit 8 based on sel3
+
+# Mux for position 0: selects between d0 and d8
+.gate THmitll_NOTT a=sel3 q=not_sel3_0
+.gate THmitll_AND2T a=sel3 b=d8 q=sel3_d8_0
+.gate THmitll_AND2T a=not_sel3_0 b=d0 q=not_sel3_d0_0
+.gate THmitll_OR2T a=sel3_d8_0 b=not_sel3_d0_0 q=mux0_stage1_raw
+.gate THmitll_JTLT a=mux0_stage1_raw q=mux0_stage1
+
+# Mux for position 1: selects between d1 and d9
+.gate THmitll_NOTT a=sel3 q=not_sel3_1
+.gate THmitll_AND2T a=sel3 b=d9 q=sel3_d9_1
+.gate THmitll_AND2T a=not_sel3_1 b=d1 q=not_sel3_d1_1
+.gate THmitll_OR2T a=sel3_d9_1 b=not_sel3_d1_1 q=mux1_stage1_raw
+.gate THmitll_JTLT a=mux1_stage1_raw q=mux1_stage1
+
+# Mux for position 2: selects between d2 and d10
+.gate THmitll_NOTT a=sel3 q=not_sel3_2
+.gate THmitll_AND2T a=sel3 b=d10 q=sel3_d10_2
+.gate THmitll_AND2T a=not_sel3_2 b=d2 q=not_sel3_d2_2
+.gate THmitll_OR2T a=sel3_d10_2 b=not_sel3_d2_2 q=mux2_stage1_raw
+.gate THmitll_JTLT a=mux2_stage1_raw q=mux2_stage1
+
+# Mux for position 3: selects between d3 and d11
+.gate THmitll_NOTT a=sel3 q=not_sel3_3
+.gate THmitll_AND2T a=sel3 b=d11 q=sel3_d11_3
+.gate THmitll_AND2T a=not_sel3_3 b=d3 q=not_sel3_d3_3
+.gate THmitll_OR2T a=sel3_d11_3 b=not_sel3_d3_3 q=mux3_stage1_raw
+.gate THmitll_JTLT a=mux3_stage1_raw q=mux3_stage1
+
+# ========== Second stage: Bit muxes using sel2 ==========
+# These select between positions 0-3 and 4-11 based on sel2
+
+# Mux for bit 0: selects between mux0_stage1 and d4 (or d12 after stage 1)
+# Actually restructured: stage 1 feeds into stage 2
+# Mux stage 2 bit 0: selects between stage1[0] and d4/d12 based on sel2
+
+# Instead, let's properly cascade: 
+# Stage 1 selects from d0,d8 / d1,d9 / d2,d10 / d3,d11 based on sel3
+# Stage 2 selects from d4,d12 / d5,d13 / d6,d14 / d7,d15 based on sel3
+
+# Mux for position 4: selects between d4 and d12
+.gate THmitll_NOTT a=sel3 q=not_sel3_4
+.gate THmitll_AND2T a=sel3 b=d12 q=sel3_d12_4
+.gate THmitll_AND2T a=not_sel3_4 b=d4 q=not_sel3_d4_4
+.gate THmitll_OR2T a=sel3_d12_4 b=not_sel3_d4_4 q=mux4_stage1_raw
+.gate THmitll_JTLT a=mux4_stage1_raw q=mux4_stage1
+
+# Mux for position 5: selects between d5 and d13
+.gate THmitll_NOTT a=sel3 q=not_sel3_5
+.gate THmitll_AND2T a=sel3 b=d13 q=sel3_d13_5
+.gate THmitll_AND2T a=not_sel3_5 b=d5 q=not_sel3_d5_5
+.gate THmitll_OR2T a=sel3_d13_5 b=not_sel3_d5_5 q=mux5_stage1_raw
+.gate THmitll_JTLT a=mux5_stage1_raw q=mux5_stage1
+
+# Mux for position 6: selects between d6 and d14
+.gate THmitll_NOTT a=sel3 q=not_sel3_6
+.gate THmitll_AND2T a=sel3 b=d14 q=sel3_d14_6
+.gate THmitll_AND2T a=not_sel3_6 b=d6 q=not_sel3_d6_6
+.gate THmitll_OR2T a=sel3_d14_6 b=not_sel3_d6_6 q=mux6_stage1_raw
+.gate THmitll_JTLT a=mux6_stage1_raw q=mux6_stage1
+
+# Mux for position 7: selects between d7 and d15
+.gate THmitll_NOTT a=sel3 q=not_sel3_7
+.gate THmitll_AND2T a=sel3 b=d15 q=sel3_d15_7
+.gate THmitll_AND2T a=not_sel3_7 b=d7 q=not_sel3_d7_7
+.gate THmitll_OR2T a=sel3_d15_7 b=not_sel3_d7_7 q=mux7_stage1_raw
+.gate THmitll_JTLT a=mux7_stage1_raw q=mux7_stage1
+
+# ========== Third stage: Muxes using sel2 ==========
+# Selects between stage 1 (0-3) and stage 1 (4-7) based on sel2
+
+# Mux combining positions 0 and 4
+.gate THmitll_NOTT a=sel2 q=not_sel2_0
+.gate THmitll_AND2T a=sel2 b=mux4_stage1 q=sel2_mux4_0
+.gate THmitll_AND2T a=not_sel2_0 b=mux0_stage1 q=not_sel2_mux0_0
+.gate THmitll_OR2T a=sel2_mux4_0 b=not_sel2_mux0_0 q=mux01_stage2_raw
+.gate THmitll_JTLT a=mux01_stage2_raw q=mux01_stage2
+
+# Mux combining positions 1 and 5
+.gate THmitll_NOTT a=sel2 q=not_sel2_1
+.gate THmitll_AND2T a=sel2 b=mux5_stage1 q=sel2_mux5_1
+.gate THmitll_AND2T a=not_sel2_1 b=mux1_stage1 q=not_sel2_mux1_1
+.gate THmitll_OR2T a=sel2_mux5_1 b=not_sel2_mux1_1 q=mux15_stage2_raw
+.gate THmitll_JTLT a=mux15_stage2_raw q=mux15_stage2
+
+# Mux combining positions 2 and 6
+.gate THmitll_NOTT a=sel2 q=not_sel2_2
+.gate THmitll_AND2T a=sel2 b=mux6_stage1 q=sel2_mux6_2
+.gate THmitll_AND2T a=not_sel2_2 b=mux2_stage1 q=not_sel2_mux2_2
+.gate THmitll_OR2T a=sel2_mux6_2 b=not_sel2_mux2_2 q=mux26_stage2_raw
+.gate THmitll_JTLT a=mux26_stage2_raw q=mux26_stage2
+
+# Mux combining positions 3 and 7
+.gate THmitll_NOTT a=sel2 q=not_sel2_3
+.gate THmitll_AND2T a=sel2 b=mux7_stage1 q=sel2_mux7_3
+.gate THmitll_AND2T a=not_sel2_3 b=mux3_stage1 q=not_sel2_mux3_3
+.gate THmitll_OR2T a=sel2_mux7_3 b=not_sel2_mux3_3 q=mux37_stage2_raw
+.gate THmitll_JTLT a=mux37_stage2_raw q=mux37_stage2
+
+# ========== Fourth stage: Muxes using sel1 ==========
+# Selects among the four results from stage 2 based on sel1
+
+# Mux combining mux01 and mux26
+.gate THmitll_NOTT a=sel1 q=not_sel1_0
+.gate THmitll_AND2T a=sel1 b=mux26_stage2 q=sel1_mux26_0
+.gate THmitll_AND2T a=not_sel1_0 b=mux01_stage2 q=not_sel1_mux01_0
+.gate THmitll_OR2T a=sel1_mux26_0 b=not_sel1_mux01_0 q=mux0126_stage3_raw
+.gate THmitll_JTLT a=mux0126_stage3_raw q=mux0126_stage3
+
+# Mux combining mux15 and mux37
+.gate THmitll_NOTT a=sel1 q=not_sel1_1
+.gate THmitll_AND2T a=sel1 b=mux37_stage2 q=sel1_mux37_1
+.gate THmitll_AND2T a=not_sel1_1 b=mux15_stage2 q=not_sel1_mux15_1
+.gate THmitll_OR2T a=sel1_mux37_1 b=not_sel1_mux15_1 q=mux1537_stage3_raw
+.gate THmitll_JTLT a=mux1537_stage3_raw q=mux1537_stage3
+
+# ========== Fifth stage: Final mux using sel0 ==========
+# Selects between the two final candidates based on sel0
+
+.gate THmitll_NOTT a=sel0 q=not_sel0
+.gate THmitll_AND2T a=sel0 b=mux1537_stage3 q=sel0_mux1537
+.gate THmitll_AND2T a=not_sel0 b=mux0126_stage3 q=not_sel0_mux0126
+.gate THmitll_OR2T a=sel0_mux1537 b=not_sel0_mux0126 q=out_raw
+.gate THmitll_JTLT a=out_raw q=out
+
+.end

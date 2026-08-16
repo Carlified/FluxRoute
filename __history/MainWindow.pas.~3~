@@ -1,0 +1,84 @@
+unit MainWindow;
+
+interface
+
+uses
+  System.SysUtils, System.Types, System.UITypes, System.Classes, System.Variants,
+  FMX.Types, FMX.Controls, FMX.Forms, FMX.Graphics, FMX.Dialogs, FMX.StdCtrls,
+  FMX.Controls.Presentation, FMX.ListBox,
+  LefLibrary;
+
+type
+  TForm1 = class(TForm)
+    Label1: TLabel;
+    Button1: TButton;
+    OpenDialog1: TOpenDialog;
+    Button2: TButton;
+    ListBox1: TListBox;
+    procedure Button1Click(Sender: TObject);
+    procedure Button2Click(Sender: TObject);
+  private
+    FLefFile: string;
+    FLib: TLibrary;
+    procedure FreeLib;
+  public
+    { Public declarations }
+  end;
+
+var
+  Form1: TForm1;
+
+implementation
+
+{$R *.fmx}
+
+procedure TForm1.FreeLib;
+begin
+  FLib.Free;
+  FLib := nil;
+end;
+
+procedure TForm1.Button1Click(Sender: TObject);
+begin
+  OpenDialog1.Filter := 'LEF files (*.lef)|*.lef|All files (*.*)|*.*';
+  OpenDialog1.FilterIndex := 1;
+  if OpenDialog1.Execute then
+  begin
+    FLefFile := OpenDialog1.FileName;
+    ListBox1.Clear;
+    Label1.Text := 'Selected: ' + FLefFile;
+  end;
+end;
+
+procedure TForm1.Button2Click(Sender: TObject);
+var
+  Lib: TLibrary;
+  i: Integer;
+begin
+  if FLefFile = '' then
+  begin
+    ShowMessage('Select a LEF file first.');
+    Exit;
+  end;
+
+  try
+    Lib := LoadLefLibrary(FLefFile);
+  except
+    on E: Exception do
+    begin
+      ShowMessage('Failed to parse LEF file:' + sLineBreak + sLineBreak + E.Message);
+      Exit;
+    end;
+  end;
+
+  FreeLib;
+  FLib := Lib;
+
+  ListBox1.Clear;
+  for i := 0 to FLib.Cells.Count - 1 do
+    ListBox1.Items.Add(FLib.Cells[i].Name);
+  Label1.Text := Format('Loaded %d cell(s) from %s',
+    [FLib.Cells.Count, ExtractFileName(FLefFile)]);
+end;
+
+end.

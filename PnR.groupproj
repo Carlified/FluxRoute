@@ -1,0 +1,48 @@
+﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <PropertyGroup>
+        <ProjectGuid>{89AD78D0-8E6B-414A-9D6F-03A0D2783C59}</ProjectGuid>
+    </PropertyGroup>
+    <ItemGroup>
+        <Projects Include="BlifParser.dproj">
+            <Dependencies/>
+        </Projects>
+        <Projects Include="LefParser.dproj">
+            <Dependencies/>
+        </Projects>
+    </ItemGroup>
+    <ProjectExtensions>
+        <Borland.Personality>Default.Personality.12</Borland.Personality>
+        <Borland.ProjectType/>
+        <BorlandProject>
+            <Default.Personality/>
+        </BorlandProject>
+    </ProjectExtensions>
+    <Target Name="BlifParser">
+        <MSBuild Projects="BlifParser.dproj"/>
+    </Target>
+    <Target Name="BlifParser:Clean">
+        <MSBuild Projects="BlifParser.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="BlifParser:Make">
+        <MSBuild Projects="BlifParser.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="LefParser">
+        <MSBuild Projects="LefParser.dproj"/>
+    </Target>
+    <Target Name="LefParser:Clean">
+        <MSBuild Projects="LefParser.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="LefParser:Make">
+        <MSBuild Projects="LefParser.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="Build">
+        <CallTarget Targets="BlifParser;LefParser"/>
+    </Target>
+    <Target Name="Clean">
+        <CallTarget Targets="BlifParser:Clean;LefParser:Clean"/>
+    </Target>
+    <Target Name="Make">
+        <CallTarget Targets="BlifParser:Make;LefParser:Make"/>
+    </Target>
+    <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
+</Project>

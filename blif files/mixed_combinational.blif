@@ -1,0 +1,22 @@
+# Exercises every combinational cell in the THmitll_* library:
+# AND2T, OR2T, XORT, NOTT, JTLT, SPLITT (SPLITT itself isn't
+# instantiated here since fanout is left for your tooling to insert).
+#
+# out  = 2:1 mux: (sel AND d1) OR (NOT(sel) AND d0), then buffered
+#        through a JTLT -- JTL cells commonly appear in real RSFQ
+#        layouts as path-balancing buffers rather than for logic.
+# diff = d0 XOR d1
+
+.model mux_and_diff
+.inputs sel d0 d1
+.outputs out diff
+
+.gate THmitll_NOTT  a=sel q=not_sel
+.gate THmitll_AND2T a=sel    b=d1 q=p1
+.gate THmitll_AND2T a=not_sel b=d0 q=p2
+.gate THmitll_OR2T  a=p1 b=p2 q=mux_raw
+.gate THmitll_JTLT  a=mux_raw q=out
+
+.gate THmitll_XORT  a=d0 b=d1 q=diff
+
+.end

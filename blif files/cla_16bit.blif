@@ -1,0 +1,241 @@
+# 16-bit Carry-Lookahead Adder (CLA)
+# Inputs: a0-a15, b0-b15, cin (carry in)
+# Outputs: sum0-sum15, cout (carry out)
+#
+# CLA uses generate (G) and propagate (P) signals:
+#   P[i] = a[i] XOR b[i]
+#   G[i] = a[i] AND b[i]
+#   c[i+1] = G[i] OR (P[i] AND c[i])
+#
+# This implementation divides into 4-bit CLA blocks chained together
+
+.model cla_16bit
+.inputs a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 cin
+.outputs sum0 sum1 sum2 sum3 sum4 sum5 sum6 sum7 sum8 sum9 sum10 sum11 sum12 sum13 sum14 sum15 cout
+
+# ========== Block 0: bits 3-0 ==========
+
+# Propagate and Generate for block 0
+.gate THmitll_XORT a=a0 b=b0 q=p0
+.gate THmitll_AND2T a=a0 b=b0 q=g0
+
+.gate THmitll_XORT a=a1 b=b1 q=p1
+.gate THmitll_AND2T a=a1 b=b1 q=g1
+
+.gate THmitll_XORT a=a2 b=b2 q=p2
+.gate THmitll_AND2T a=a2 b=b2 q=g2
+
+.gate THmitll_XORT a=a3 b=b3 q=p3
+.gate THmitll_AND2T a=a3 b=b3 q=g3
+
+# Carry logic for block 0
+# c0 = cin (input carry)
+# c1 = g0 OR (p0 AND cin)
+.gate THmitll_AND2T a=p0 b=cin q=p0_cin
+.gate THmitll_OR2T a=g0 b=p0_cin q=c1
+
+# c2 = g1 OR (p1 AND g0) OR (p1 AND p0 AND cin)
+.gate THmitll_AND2T a=p1 b=g0 q=p1_g0
+.gate THmitll_AND2T a=p1 b=p0 q=p1_p0
+.gate THmitll_AND2T a=p1_p0 b=cin q=p1_p0_cin
+.gate THmitll_OR2T a=g1 b=p1_g0 q=c2_temp1
+.gate THmitll_OR2T a=c2_temp1 b=p1_p0_cin q=c2
+
+# c3 = g2 OR (p2 AND g1) OR (p2 AND p1 AND g0) OR (p2 AND p1 AND p0 AND cin)
+.gate THmitll_AND2T a=p2 b=g1 q=p2_g1
+.gate THmitll_AND2T a=p2 b=p1 q=p2_p1
+.gate THmitll_AND2T a=p2_p1 b=g0 q=p2_p1_g0
+.gate THmitll_AND2T a=p2_p1 b=p0 q=p2_p1_p0
+.gate THmitll_AND2T a=p2_p1_p0 b=cin q=p2_p1_p0_cin
+.gate THmitll_OR2T a=g2 b=p2_g1 q=c3_temp1
+.gate THmitll_OR2T a=c3_temp1 b=p2_p1_g0 q=c3_temp2
+.gate THmitll_OR2T a=c3_temp2 b=p2_p1_p0_cin q=c3
+
+# c4 = g3 OR (p3 AND g2) OR (p3 AND p2 AND g1) OR (p3 AND p2 AND p1 AND g0) OR (p3 AND p2 AND p1 AND p0 AND cin)
+.gate THmitll_AND2T a=p3 b=g2 q=p3_g2
+.gate THmitll_AND2T a=p3 b=p2 q=p3_p2
+.gate THmitll_AND2T a=p3_p2 b=g1 q=p3_p2_g1
+.gate THmitll_AND2T a=p3_p2 b=p1 q=p3_p2_p1
+.gate THmitll_AND2T a=p3_p2_p1 b=g0 q=p3_p2_p1_g0
+.gate THmitll_AND2T a=p3_p2_p1 b=p0 q=p3_p2_p1_p0
+.gate THmitll_AND2T a=p3_p2_p1_p0 b=cin q=p3_p2_p1_p0_cin
+.gate THmitll_OR2T a=g3 b=p3_g2 q=c4_temp1
+.gate THmitll_OR2T a=c4_temp1 b=p3_p2_g1 q=c4_temp2
+.gate THmitll_OR2T a=c4_temp2 b=p3_p2_p1_g0 q=c4_temp3
+.gate THmitll_OR2T a=c4_temp3 b=p3_p2_p1_p0_cin q=c4
+
+# Sum outputs for block 0
+.gate THmitll_XORT a=p0 b=cin q=sum0
+.gate THmitll_XORT a=p1 b=c1 q=sum1
+.gate THmitll_XORT a=p2 b=c2 q=sum2
+.gate THmitll_XORT a=p3 b=c3 q=sum3
+
+# ========== Block 1: bits 7-4 ==========
+
+# Propagate and Generate for block 1
+.gate THmitll_XORT a=a4 b=b4 q=p4
+.gate THmitll_AND2T a=a4 b=b4 q=g4
+
+.gate THmitll_XORT a=a5 b=b5 q=p5
+.gate THmitll_AND2T a=a5 b=b5 q=g5
+
+.gate THmitll_XORT a=a6 b=b6 q=p6
+.gate THmitll_AND2T a=a6 b=b6 q=g6
+
+.gate THmitll_XORT a=a7 b=b7 q=p7
+.gate THmitll_AND2T a=a7 b=b7 q=g7
+
+# Carry logic for block 1 (using c4 as carry in)
+# c5 = g4 OR (p4 AND c4)
+.gate THmitll_AND2T a=p4 b=c4 q=p4_c4
+.gate THmitll_OR2T a=g4 b=p4_c4 q=c5
+
+# c6 = g5 OR (p5 AND g4) OR (p5 AND p4 AND c4)
+.gate THmitll_AND2T a=p5 b=g4 q=p5_g4
+.gate THmitll_AND2T a=p5 b=p4 q=p5_p4
+.gate THmitll_AND2T a=p5_p4 b=c4 q=p5_p4_c4
+.gate THmitll_OR2T a=g5 b=p5_g4 q=c6_temp1
+.gate THmitll_OR2T a=c6_temp1 b=p5_p4_c4 q=c6
+
+# c7 = g6 OR (p6 AND g5) OR (p6 AND p5 AND g4) OR (p6 AND p5 AND p4 AND c4)
+.gate THmitll_AND2T a=p6 b=g5 q=p6_g5
+.gate THmitll_AND2T a=p6 b=p5 q=p6_p5
+.gate THmitll_AND2T a=p6_p5 b=g4 q=p6_p5_g4
+.gate THmitll_AND2T a=p6_p5 b=p4 q=p6_p5_p4
+.gate THmitll_AND2T a=p6_p5_p4 b=c4 q=p6_p5_p4_c4
+.gate THmitll_OR2T a=g6 b=p6_g5 q=c7_temp1
+.gate THmitll_OR2T a=c7_temp1 b=p6_p5_g4 q=c7_temp2
+.gate THmitll_OR2T a=c7_temp2 b=p6_p5_p4_c4 q=c7
+
+# c8 = g7 OR (p7 AND g6) OR (p7 AND p6 AND g5) OR (p7 AND p6 AND p5 AND g4) OR (p7 AND p6 AND p5 AND p4 AND c4)
+.gate THmitll_AND2T a=p7 b=g6 q=p7_g6
+.gate THmitll_AND2T a=p7 b=p6 q=p7_p6
+.gate THmitll_AND2T a=p7_p6 b=g5 q=p7_p6_g5
+.gate THmitll_AND2T a=p7_p6 b=p5 q=p7_p6_p5
+.gate THmitll_AND2T a=p7_p6_p5 b=g4 q=p7_p6_p5_g4
+.gate THmitll_AND2T a=p7_p6_p5 b=p4 q=p7_p6_p5_p4
+.gate THmitll_AND2T a=p7_p6_p5_p4 b=c4 q=p7_p6_p5_p4_c4
+.gate THmitll_OR2T a=g7 b=p7_g6 q=c8_temp1
+.gate THmitll_OR2T a=c8_temp1 b=p7_p6_g5 q=c8_temp2
+.gate THmitll_OR2T a=c8_temp2 b=p7_p6_p5_g4 q=c8_temp3
+.gate THmitll_OR2T a=c8_temp3 b=p7_p6_p5_p4_c4 q=c8
+
+# Sum outputs for block 1
+.gate THmitll_XORT a=p4 b=c4 q=sum4
+.gate THmitll_XORT a=p5 b=c5 q=sum5
+.gate THmitll_XORT a=p6 b=c6 q=sum6
+.gate THmitll_XORT a=p7 b=c7 q=sum7
+
+# ========== Block 2: bits 11-8 ==========
+
+# Propagate and Generate for block 2
+.gate THmitll_XORT a=a8 b=b8 q=p8
+.gate THmitll_AND2T a=a8 b=b8 q=g8
+
+.gate THmitll_XORT a=a9 b=b9 q=p9
+.gate THmitll_AND2T a=a9 b=b9 q=g9
+
+.gate THmitll_XORT a=a10 b=b10 q=p10
+.gate THmitll_AND2T a=a10 b=b10 q=g10
+
+.gate THmitll_XORT a=a11 b=b11 q=p11
+.gate THmitll_AND2T a=a11 b=b11 q=g11
+
+# Carry logic for block 2 (using c8 as carry in)
+# c9 = g8 OR (p8 AND c8)
+.gate THmitll_AND2T a=p8 b=c8 q=p8_c8
+.gate THmitll_OR2T a=g8 b=p8_c8 q=c9
+
+# c10 = g9 OR (p9 AND g8) OR (p9 AND p8 AND c8)
+.gate THmitll_AND2T a=p9 b=g8 q=p9_g8
+.gate THmitll_AND2T a=p9 b=p8 q=p9_p8
+.gate THmitll_AND2T a=p9_p8 b=c8 q=p9_p8_c8
+.gate THmitll_OR2T a=g9 b=p9_g8 q=c10_temp1
+.gate THmitll_OR2T a=c10_temp1 b=p9_p8_c8 q=c10
+
+# c11 = g10 OR (p10 AND g9) OR (p10 AND p9 AND g8) OR (p10 AND p9 AND p8 AND c8)
+.gate THmitll_AND2T a=p10 b=g9 q=p10_g9
+.gate THmitll_AND2T a=p10 b=p9 q=p10_p9
+.gate THmitll_AND2T a=p10_p9 b=g8 q=p10_p9_g8
+.gate THmitll_AND2T a=p10_p9 b=p8 q=p10_p9_p8
+.gate THmitll_AND2T a=p10_p9_p8 b=c8 q=p10_p9_p8_c8
+.gate THmitll_OR2T a=g10 b=p10_g9 q=c11_temp1
+.gate THmitll_OR2T a=c11_temp1 b=p10_p9_g8 q=c11_temp2
+.gate THmitll_OR2T a=c11_temp2 b=p10_p9_p8_c8 q=c11
+
+# c12 = g11 OR (p11 AND g10) OR (p11 AND p10 AND g9) OR (p11 AND p10 AND p9 AND g8) OR (p11 AND p10 AND p9 AND p8 AND c8)
+.gate THmitll_AND2T a=p11 b=g10 q=p11_g10
+.gate THmitll_AND2T a=p11 b=p10 q=p11_p10
+.gate THmitll_AND2T a=p11_p10 b=g9 q=p11_p10_g9
+.gate THmitll_AND2T a=p11_p10 b=p9 q=p11_p10_p9
+.gate THmitll_AND2T a=p11_p10_p9 b=g8 q=p11_p10_p9_g8
+.gate THmitll_AND2T a=p11_p10_p9 b=p8 q=p11_p10_p9_p8
+.gate THmitll_AND2T a=p11_p10_p9_p8 b=c8 q=p11_p10_p9_p8_c8
+.gate THmitll_OR2T a=g11 b=p11_g10 q=c12_temp1
+.gate THmitll_OR2T a=c12_temp1 b=p11_p10_g9 q=c12_temp2
+.gate THmitll_OR2T a=c12_temp2 b=p11_p10_p9_g8 q=c12_temp3
+.gate THmitll_OR2T a=c12_temp3 b=p11_p10_p9_p8_c8 q=c12
+
+# Sum outputs for block 2
+.gate THmitll_XORT a=p8 b=c8 q=sum8
+.gate THmitll_XORT a=p9 b=c9 q=sum9
+.gate THmitll_XORT a=p10 b=c10 q=sum10
+.gate THmitll_XORT a=p11 b=c11 q=sum11
+
+# ========== Block 3: bits 15-12 ==========
+
+# Propagate and Generate for block 3
+.gate THmitll_XORT a=a12 b=b12 q=p12
+.gate THmitll_AND2T a=a12 b=b12 q=g12
+
+.gate THmitll_XORT a=a13 b=b13 q=p13
+.gate THmitll_AND2T a=a13 b=b13 q=g13
+
+.gate THmitll_XORT a=a14 b=b14 q=p14
+.gate THmitll_AND2T a=a14 b=b14 q=g14
+
+.gate THmitll_XORT a=a15 b=b15 q=p15
+.gate THmitll_AND2T a=a15 b=b15 q=g15
+
+# Carry logic for block 3 (using c12 as carry in)
+# c13 = g12 OR (p12 AND c12)
+.gate THmitll_AND2T a=p12 b=c12 q=p12_c12
+.gate THmitll_OR2T a=g12 b=p12_c12 q=c13
+
+# c14 = g13 OR (p13 AND g12) OR (p13 AND p12 AND c12)
+.gate THmitll_AND2T a=p13 b=g12 q=p13_g12
+.gate THmitll_AND2T a=p13 b=p12 q=p13_p12
+.gate THmitll_AND2T a=p13_p12 b=c12 q=p13_p12_c12
+.gate THmitll_OR2T a=g13 b=p13_g12 q=c14_temp1
+.gate THmitll_OR2T a=c14_temp1 b=p13_p12_c12 q=c14
+
+# c15 = g14 OR (p14 AND g13) OR (p14 AND p13 AND g12) OR (p14 AND p13 AND p12 AND c12)
+.gate THmitll_AND2T a=p14 b=g13 q=p14_g13
+.gate THmitll_AND2T a=p14 b=p13 q=p14_p13
+.gate THmitll_AND2T a=p14_p13 b=g12 q=p14_p13_g12
+.gate THmitll_AND2T a=p14_p13 b=p12 q=p14_p13_p12
+.gate THmitll_AND2T a=p14_p13_p12 b=c12 q=p14_p13_p12_c12
+.gate THmitll_OR2T a=g14 b=p14_g13 q=c15_temp1
+.gate THmitll_OR2T a=c15_temp1 b=p14_p13_g12 q=c15_temp2
+.gate THmitll_OR2T a=c15_temp2 b=p14_p13_p12_c12 q=c15
+
+# c16 = g15 OR (p15 AND g14) OR (p15 AND p14 AND g13) OR (p15 AND p14 AND p13 AND g12) OR (p15 AND p14 AND p13 AND p12 AND c12)
+.gate THmitll_AND2T a=p15 b=g14 q=p15_g14
+.gate THmitll_AND2T a=p15 b=p14 q=p15_p14
+.gate THmitll_AND2T a=p15_p14 b=g13 q=p15_p14_g13
+.gate THmitll_AND2T a=p15_p14 b=p13 q=p15_p14_p13
+.gate THmitll_AND2T a=p15_p14_p13 b=g12 q=p15_p14_p13_g12
+.gate THmitll_AND2T a=p15_p14_p13 b=p12 q=p15_p14_p13_p12
+.gate THmitll_AND2T a=p15_p14_p13_p12 b=c12 q=p15_p14_p13_p12_c12
+.gate THmitll_OR2T a=g15 b=p15_g14 q=c16_temp1
+.gate THmitll_OR2T a=c16_temp1 b=p15_p14_g13 q=c16_temp2
+.gate THmitll_OR2T a=c16_temp2 b=p15_p14_p13_g12 q=c16_temp3
+.gate THmitll_OR2T a=c16_temp3 b=p15_p14_p13_p12_c12 q=cout
+
+# Sum outputs for block 3
+.gate THmitll_XORT a=p12 b=c12 q=sum12
+.gate THmitll_XORT a=p13 b=c13 q=sum13
+.gate THmitll_XORT a=p14 b=c14 q=sum14
+.gate THmitll_XORT a=p15 b=c15 q=sum15
+
+.end

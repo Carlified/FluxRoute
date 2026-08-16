@@ -1,0 +1,734 @@
+unit MainWindow;
+
+interface
+
+uses
+  System.SysUtils, System.Types, System.UITypes, System.Classes, System.Variants,
+  FMX.Types, FMX.Controls, FMX.Forms, FMX.Graphics, FMX.Dialogs, FMX.StdCtrls,
+  FMX.Controls.Presentation, FMX.ListBox, FMX.Memo, FMX.Layouts, FMX.TabControl,
+  FMX.Objects,
+  System.IOUtils, System.JSON, System.Math, System.Math.Vectors,
+  System.Generics.Collections, System.StrUtils,
+  Winapi.Windows,
+  LefLibrary,
+  BlifLibrary,
+  CellViewer,
+  VerilogTiming,
+  SplitterInsert,
+  PipelineConfig,
+  PipelineAnalysis, FMX.Memo.Types, FMX.ScrollBox;
+
+type
+  TForm1 = class(TForm)
+    TabControl1: TTabControl;
+    TabItem1: TTabItem;
+    WelcomeLabel: TLabel;
+    Button1: TButton;
+    TabItem2: TTabItem;
+    Button3: TButton;
+    ListBox1: TListBox;
+    Label1: TLabel;
+    Button5: TButton;
+    Memo1: TMemo;
+    TabItem3: TTabItem;
+    Label2: TLabel;
+    Label3: TLabel;
+    ListBox2: TListBox;
+    Label4: TLabel;
+    ListBox3: TListBox;
+    ButtonSplit: TButton;
+    TabItem4: TTabItem;
+    Label5: TLabel;
+    Label6: TLabel;
+    ListBox4: TListBox;
+    Label7: TLabel;
+    ListBox5: TListBox;
+    TabItem5: TTabItem;
+    PaintBox1: TPaintBox;
+    ButtonBack: TButton;
+    ButtonNext: TButton;
+    OpenDialog1: TOpenDialog;
+    procedure FormCreate(Sender: TObject);
+    procedure FormDestroy(Sender: TObject);
+    procedure Button1Click(Sender: TObject);
+    procedure Button3Click(Sender: TObject);
+    procedure Button5Click(Sender: TObject);
+    procedure ListBox1DblClick(Sender: TObject);
+    procedure ListBox2DblClick(Sender: TObject);
+    procedure ListBox3DblClick(Sender: TObject);
+    procedure ListBox4DblClick(Sender: TObject);
+    procedure ListBox5DblClick(Sender: TObject);
+    procedure TabControl1Change(Sender: TObject);
+    procedure ButtonSplitClick(Sender: TObject);
+    procedure ButtonBackClick(Sender: TObject);
+    procedure ButtonNextClick(Sender: TObject);
+  private
+    FLefFile: string;
+    FCellFolder: string;
+    FBlifFile: string;
+    FLib: TLibrary;
+    FModel: TBlifModel;
+    FSplitterNames: TStringList;
+    FCandidateCells: TList<TCell>;
+    FCellDelays: TDictionary<string, Double>;
+    FFlipFlopNames: TStringList;
+    FFlipFlopCandidates: TList<TCell>;
+    FPipelineRows: TArray<TList<TGateInstance>>;
+    FSplittersInserted: Boolean;
+    procedure FreeLib;
+    procedure UpdateUI;
+    procedure RenderNetlist(Model: TBlifModel; Errors: TStrings);
+    function IsSplitterCandidate(const Cell: TCell; out NumOutputs: Integer): Boolean;
+    function CellDelayPs(const Cell: TCell): Double;
+    function DelayTextPs(const Delay: Double): string;
+    procedure PopulateSplitterList;
+    procedure RefreshSplitterList;
+    procedure PopulateFlipFlopList;
+    procedure RefreshFlipFlopList;
+    procedure FreePipelineRows;
+    procedure BuildPipelineRows;
+    procedure PaintPipeline(Sender: TObject; Canvas: TCanvas);
+  public
+    { Public declarations }
+  end;
+
+var
+  Form1: TForm1;
+
+implementation
+
+{$R *.fmx}
+
+procedure TForm1.FreeLib;
+begin
+  FModel.Free;
+  FModel := nil;
+  FLib.Free;
+  FLib := nil;
+end;
+
+procedure TForm1.UpdateUI;
+begin
+  Button3.Enabled := (FLib <> nil);
+  Button5.Enabled := (FLib <> nil);
+  ButtonSplit.Enabled := (FModel <> nil) and (FSplitterNames.Count > 0);
+  ButtonBack.Enabled := (TabControl1.TabIndex > 0);
+  ButtonNext.Enabled := (FLib <> nil) and
+    (TabControl1.TabIndex < TabControl1.TabCount - 1);
+  if TabControl1.TabIndex = 2 then
+    ButtonNext.Enabled := ButtonNext.Enabled and FSplittersInserted;
+end;
+
+procedure TForm1.FormCreate(Sender: TObject);
+begin
+  FSplitterNames := TStringList.Create;
+  FCandidateCells := TList<TCell>.Create;
+  FCellDelays := TDictionary<string, Double>.Create;
+  FFlipFlopNames := TStringList.Create;
+  FFlipFlopCandidates := TList<TCell>.Create;
+  ListBox1.OnDblClick := ListBox1DblClick;
+  ListBox2.OnDblClick := ListBox2DblClick;
+  ListBox3.OnDblClick := ListBox3DblClick;
+  ListBox4.OnDblClick := ListBox4DblClick;
+  ListBox5.OnDblClick := ListBox5DblClick;
+  PaintBox1.OnPaint := PaintPipeline;
+  TabControl1.OnChange := TabControl1Change;
+  UpdateUI;
+end;
+
+procedure TForm1.FormDestroy(Sender: TObject);
+begin
+  FSplitterNames.Free;
+  FCandidateCells.Free;
+  FCellDelays.Free;
+  FFlipFlopNames.Free;
+  FFlipFlopCandidates.Free;
+  FreePipelineRows;
+  FreeLib;
+end;
+
+procedure TForm1.Button1Click(Sender: TObject);
+var
+  Lib: TLibrary;
+  i: Integer;
+begin
+  OpenDialog1.Filter := 'LEF files (*.lef)|*.lef|All files (*.*)|*.*';
+  OpenDialog1.FilterIndex := 1;
+  if not OpenDialog1.Execute then
+    Exit;
+
+  FLefFile := OpenDialog1.FileName;
+  FreeLib; // a new LEF file invalidates the previously parsed library
+  FSplittersInserted := False;
+  FreePipelineRows;
+  ListBox1.Clear;
+  Memo1.Lines.Clear;
+  FSplitterNames.Clear;
+  FCandidateCells.Clear;
+  FCellDelays.Clear;
+  FFlipFlopNames.Clear;
+  FFlipFlopCandidates.Clear;
+  ListBox2.Clear;
+  ListBox3.Clear;
+  ListBox4.Clear;
+  ListBox5.Clear;
+  Label1.Text := 'Parsing: ' + ExtractFileName(FLefFile);
+
+  try
+    Lib := LoadLefLibrary(FLefFile);
+  except
+    on E: Exception do
+    begin
+      ShowMessage('Failed to parse LEF file:' + sLineBreak + sLineBreak + E.Message);
+      UpdateUI;
+      Exit;
+    end;
+  end;
+
+  FLib := Lib;
+  for i := 0 to FLib.Cells.Count - 1 do
+    ListBox1.Items.Add(FLib.Cells[i].Name);
+  Label1.Text := Format('Loaded %d cell(s) from %s',
+    [FLib.Cells.Count, ExtractFileName(FLefFile)]);
+  UpdateUI;
+end;
+
+procedure TForm1.Button3Click(Sender: TObject);
+var
+  Folder: string;
+  Cell: TCell;
+  CellsWithMatches, TotalFiles: Integer;
+begin
+  if FLib = nil then
+    Exit;
+
+  Folder := FCellFolder;
+  if not SelectDirectory('Select folder containing cell source files', '', Folder) then
+    Exit;
+  FCellFolder := Folder;
+
+  if not TDirectory.Exists(FCellFolder) then
+  begin
+    ShowMessage('Cell folder no longer exists.');
+    Exit;
+  end;
+
+  FLib.FindCellSourceFiles(FCellFolder);
+
+  CellsWithMatches := 0;
+  TotalFiles := 0;
+  for Cell in FLib.Cells do
+    if Cell.SourceFiles.Count > 0 then
+    begin
+      Inc(CellsWithMatches);
+      Inc(TotalFiles, Cell.SourceFiles.Count);
+    end;
+
+  Label1.Text := Format('Found %d linked file(s) for %d of %d cells. Double-click a cell to view it.',
+    [TotalFiles, CellsWithMatches, FLib.Cells.Count]);
+  UpdateUI;
+end;
+
+procedure TForm1.Button5Click(Sender: TObject);
+var
+  Errors: TStringList;
+begin
+  if FLib = nil then
+    Exit;
+
+  OpenDialog1.Filter := 'BLIF files (*.blif)|*.blif|All files (*.*)|*.*';
+  OpenDialog1.FilterIndex := 1;
+  if not OpenDialog1.Execute then
+    Exit;
+
+  FBlifFile := OpenDialog1.FileName;
+  FModel.Free; // a new BLIF file invalidates the previously parsed netlist
+  FModel := nil;
+  FSplittersInserted := False;
+  FreePipelineRows;
+  Memo1.Lines.Clear;
+  Label1.Text := 'Parsing: ' + ExtractFileName(FBlifFile);
+
+  Errors := TStringList.Create;
+  try
+    try
+      FModel := ParseBlif(FBlifFile, FLib, Errors);
+    except
+      on E: Exception do
+      begin
+        ShowMessage('Failed to parse BLIF file:' + sLineBreak + sLineBreak + E.Message);
+        Exit;
+      end;
+    end;
+
+    CheckNetConnectivity(FModel, Errors);
+
+    ComputeClockLevels(FModel, Errors);
+
+    RenderNetlist(FModel, Errors);
+    Label1.Text := Format('Loaded netlist "%s": %d gate(s), %d net(s), %d error(s)',
+      [FModel.Name, FModel.Gates.Count, FModel.Nets.Count, Errors.Count]);
+  finally
+    Errors.Free;
+  end;
+  UpdateUI;
+end;
+
+function TForm1.IsSplitterCandidate(const Cell: TCell; out NumOutputs: Integer): Boolean;
+var
+  Port: TPort;
+  NumInputs: Integer;
+begin
+  NumInputs := 0;
+  NumOutputs := 0;
+  for Port in Cell.Ports do
+    case Port.Direction of
+      pdInput: Inc(NumInputs);
+      pdOutput: Inc(NumOutputs);
+    end;
+  Result := (NumInputs = 1) and (NumOutputs >= 2);
+end;
+
+function TForm1.CellDelayPs(const Cell: TCell): Double;
+var
+  Timing: TCellTiming;
+  i: Integer;
+begin
+  if FCellDelays.TryGetValue(Cell.Name, Result) then
+    Exit;
+  Result := -1;
+  for i := 0 to Cell.SourceFiles.Count - 1 do
+    if SameText(ExtractFileExt(Cell.SourceFiles[i]), '.v') then
+    begin
+      Timing := ParseVerilogTiming(Cell.SourceFiles[i]);
+      if Timing <> nil then
+      begin
+        Result := Timing.OutputDelayPs;
+        Timing.Free;
+        Break;
+      end;
+    end;
+  FCellDelays.AddOrSetValue(Cell.Name, Result);
+end;
+
+function TForm1.DelayTextPs(const Delay: Double): string;
+begin
+  if Delay < 0 then
+    Result := 'no timing'
+  else
+    Result := Format('%.1f ps', [Delay]);
+end;
+
+procedure TForm1.RefreshSplitterList;
+var
+  i: Integer;
+  Cell: TCell;
+  NumOutputs: Integer;
+  Delay: Double;
+begin
+  ListBox3.Clear;
+  for i := 0 to FSplitterNames.Count - 1 do
+  begin
+    if FLib = nil then
+      Break;
+    Cell := FLib.FindCell(FSplitterNames[i]);
+    if (Cell = nil) or not IsSplitterCandidate(Cell, NumOutputs) then
+      Continue;
+    Delay := CellDelayPs(Cell);
+    ListBox3.Items.Add(Format('%s (%d-way, %s)',
+      [Cell.Name, NumOutputs, DelayTextPs(Delay)]));
+  end;
+end;
+
+procedure TForm1.PopulateSplitterList;
+var
+  i: Integer;
+  Cell: TCell;
+  NumOutputs: Integer;
+  Delay: Double;
+begin
+  ListBox2.Clear;
+  FCandidateCells.Clear;
+  RefreshSplitterList;
+  if FLib = nil then
+    Exit;
+  for i := 0 to FLib.Cells.Count - 1 do
+  begin
+    Cell := FLib.Cells[i];
+    if IsSplitterCandidate(Cell, NumOutputs) then
+    begin
+      Delay := CellDelayPs(Cell);
+      ListBox2.Items.Add(Format('%s (%d outputs, %s)',
+        [Cell.Name, NumOutputs, DelayTextPs(Delay)]));
+      FCandidateCells.Add(Cell);
+    end;
+  end;
+  if ListBox2.Items.Count = 0 then
+    ListBox2.Items.Add('(no splitter cells: need 1 input, 2+ outputs)');
+end;
+
+procedure TForm1.ListBox2DblClick(Sender: TObject);
+var
+  Cell: TCell;
+begin
+  if (ListBox2.ItemIndex < 0) or (ListBox2.ItemIndex >= FCandidateCells.Count) then
+    Exit;
+  Cell := FCandidateCells[ListBox2.ItemIndex];
+  if FSplitterNames.IndexOf(Cell.Name) < 0 then
+  begin
+    FSplitterNames.Add(Cell.Name);
+    RefreshSplitterList;
+    UpdateUI;
+  end;
+end;
+
+procedure TForm1.ListBox3DblClick(Sender: TObject);
+begin
+  if (ListBox3.ItemIndex < 0) or (ListBox3.ItemIndex >= FSplitterNames.Count) then
+    Exit;
+  FSplitterNames.Delete(ListBox3.ItemIndex);
+  RefreshSplitterList;
+  UpdateUI;
+end;
+
+procedure TForm1.RefreshFlipFlopList;
+var
+  i: Integer;
+  Cell: TCell;
+  ClockPin, DataPin, OutputPin: string;
+  Delay: Double;
+begin
+  ListBox5.Clear;
+  for i := 0 to FFlipFlopNames.Count - 1 do
+  begin
+    if FLib = nil then
+      Break;
+    Cell := FLib.FindCell(FFlipFlopNames[i]);
+    if (Cell = nil) or not IsFlipFlopCandidate(Cell, ClockPin, DataPin, OutputPin) then
+      Continue;
+    Delay := CellDelayPs(Cell);
+    ListBox5.Items.Add(Format('%s (%s, %s -> %s, %s)',
+      [Cell.Name, DataPin, ClockPin, OutputPin, DelayTextPs(Delay)]));
+  end;
+end;
+
+procedure TForm1.PopulateFlipFlopList;
+var
+  i: Integer;
+  Cell: TCell;
+  ClockPin, DataPin, OutputPin: string;
+  Delay: Double;
+begin
+  ListBox4.Clear;
+  FFlipFlopCandidates.Clear;
+  RefreshFlipFlopList;
+  if FLib = nil then
+    Exit;
+  for i := 0 to FLib.Cells.Count - 1 do
+  begin
+    Cell := FLib.Cells[i];
+    if IsFlipFlopCandidate(Cell, ClockPin, DataPin, OutputPin) then
+    begin
+      Delay := CellDelayPs(Cell);
+      ListBox4.Items.Add(Format('%s (%s, %s -> %s, %s)',
+        [Cell.Name, DataPin, ClockPin, OutputPin, DelayTextPs(Delay)]));
+      FFlipFlopCandidates.Add(Cell);
+    end;
+  end;
+  if ListBox4.Items.Count = 0 then
+    ListBox4.Items.Add(
+      '(no flip-flop cells: need 2 inputs, 1 output, one input named clk/clock)');
+end;
+
+procedure TForm1.FreePipelineRows;
+var
+  i: Integer;
+begin
+  for i := 0 to High(FPipelineRows) do
+    FPipelineRows[i].Free;
+  FPipelineRows := nil;
+end;
+
+procedure TForm1.BuildPipelineRows;
+var
+  Gate: TGateInstance;
+  i, MaxLevel: Integer;
+begin
+  FreePipelineRows;
+  if (FModel = nil) or (FModel.Gates.Count = 0) then
+    Exit;
+  MaxLevel := -1;
+  for Gate in FModel.Gates do
+    if (Gate.ClockLevel >= 0) and (Gate.ClockLevel > MaxLevel) then
+      MaxLevel := Gate.ClockLevel;
+  if MaxLevel < 0 then
+    Exit;
+  SetLength(FPipelineRows, MaxLevel + 1);
+  for i := 0 to MaxLevel do
+    FPipelineRows[i] := TList<TGateInstance>.Create;
+  for Gate in FModel.Gates do
+    if Gate.ClockLevel >= 0 then
+      FPipelineRows[Gate.ClockLevel].Add(Gate);
+end;
+
+procedure TForm1.PaintPipeline(Sender: TObject; Canvas: TCanvas);
+var
+  R: TRectF;
+  i, j: Integer;
+  Gate: TGateInstance;
+  NumOutputs: Integer;
+  ClockPin, DataPin, OutputPin: string;
+  MaxCells, MaxRows: Integer;
+  Square, HGap, VGap, Left, X, Y: Single;
+  Color: TAlphaColor;
+begin
+  R := TRectF.Create(0, 0, PaintBox1.Width, PaintBox1.Height);
+  Canvas.Fill.Color := TAlphaColorRec.White;
+  Canvas.FillRect(R, 0, 0, [], 1.0);
+
+  if FModel = nil then
+  begin
+    Canvas.Fill.Color := TAlphaColorRec.Dimgray;
+    Canvas.FillText(R, 'No netlist loaded.', False, 1.0, [],
+      TTextAlign.Center, TTextAlign.Center);
+    Exit;
+  end;
+  if Length(FPipelineRows) = 0 then
+  begin
+    Canvas.Fill.Color := TAlphaColorRec.Dimgray;
+    Canvas.FillText(R, 'No pipeline levels computed.', False, 1.0, [],
+      TTextAlign.Center, TTextAlign.Center);
+    Exit;
+  end;
+
+  MaxCells := 0;
+  for i := 0 to High(FPipelineRows) do
+    if FPipelineRows[i].Count > MaxCells then
+      MaxCells := FPipelineRows[i].Count;
+  MaxRows := Length(FPipelineRows);
+
+  HGap := 4;
+  VGap := 4;
+  Left := 40;
+  Square := Min(18, (PaintBox1.Width - Left - 8 - HGap * (MaxCells - 1)) / MaxCells);
+  Square := Min(Square, (PaintBox1.Height - 8 - VGap * (MaxRows - 1)) / MaxRows);
+  if Square < 4 then
+    Square := 4;
+
+  for i := 0 to High(FPipelineRows) do
+  begin
+    Y := 4 + i * (Square + VGap);
+    Canvas.Fill.Color := TAlphaColorRec.Dimgray;
+    Canvas.FillText(TRectF.Create(0, Y, Left - 6, Y + Square),
+      IntToStr(i), False, 1.0, [], TTextAlign.Trailing, TTextAlign.Center);
+    X := Left;
+    for j := 0 to FPipelineRows[i].Count - 1 do
+    begin
+      Gate := FPipelineRows[i][j];
+      if IsSplitterCandidate(Gate.Cell, NumOutputs) then
+        Color := $FF00C853
+      else if IsFlipFlopCandidate(Gate.Cell, ClockPin, DataPin, OutputPin) then
+        Color := $FFD50000
+      else
+        Color := $FF1565C0;
+      Canvas.Fill.Color := Color;
+      Canvas.FillRect(TRectF.Create(X, Y, X + Square, Y + Square), 0, 0, [], 1.0);
+      X := X + Square + HGap;
+    end;
+  end;
+end;
+
+procedure TForm1.ListBox4DblClick(Sender: TObject);
+var
+  Cell: TCell;
+begin
+  if (ListBox4.ItemIndex < 0) or (ListBox4.ItemIndex >= FFlipFlopCandidates.Count) then
+    Exit;
+  Cell := FFlipFlopCandidates[ListBox4.ItemIndex];
+  if FFlipFlopNames.IndexOf(Cell.Name) < 0 then
+  begin
+    FFlipFlopNames.Add(Cell.Name);
+    RefreshFlipFlopList;
+  end;
+end;
+
+procedure TForm1.ListBox5DblClick(Sender: TObject);
+begin
+  if (ListBox5.ItemIndex < 0) or (ListBox5.ItemIndex >= FFlipFlopNames.Count) then
+    Exit;
+  FFlipFlopNames.Delete(ListBox5.ItemIndex);
+  RefreshFlipFlopList;
+end;
+
+procedure TForm1.TabControl1Change(Sender: TObject);
+begin
+  if TabControl1.TabIndex = 2 then
+    PopulateSplitterList;
+  if TabControl1.TabIndex = 3 then
+    PopulateFlipFlopList;
+  if TabControl1.TabIndex = 4 then
+  begin
+    BuildPipelineRows;
+    PaintBox1.Repaint;
+  end;
+  UpdateUI;
+end;
+
+procedure TForm1.ButtonSplitClick(Sender: TObject);
+var
+  SplitterTypes: TArray<TSplitterType>;
+  i: Integer;
+  Cell: TCell;
+  NumOutputs: Integer;
+  Delay: Double;
+  Inserted: Integer;
+  Errors: TStringList;
+begin
+  if FModel = nil then
+  begin
+    ShowMessage('Parse a BLIF netlist first.');
+    Exit;
+  end;
+  if FSplitterNames.Count = 0 then
+  begin
+    ShowMessage('Select at least one splitter cell first.');
+    Exit;
+  end;
+
+  SetLength(SplitterTypes, FSplitterNames.Count);
+  for i := 0 to FSplitterNames.Count - 1 do
+  begin
+    Cell := FLib.FindCell(FSplitterNames[i]);
+    if Cell = nil then
+    begin
+      ShowMessage(Format('Splitter cell "%s" is no longer in the library.',
+        [FSplitterNames[i]]));
+      Exit;
+    end;
+    if not IsSplitterCandidate(Cell, NumOutputs) then
+    begin
+      ShowMessage(Format('Cell "%s" is not a valid splitter (need 1 input, 2+ outputs).',
+        [Cell.Name]));
+      Exit;
+    end;
+    Delay := CellDelayPs(Cell);
+    if Delay < 0 then
+    begin
+      ShowMessage(Format('No timing found for splitter cell "%s" - run "Load Library" first so its .v file is found.',
+        [Cell.Name]));
+      Exit;
+    end;
+    SplitterTypes[i].CellName := Cell.Name;
+    SplitterTypes[i].OutputCount := NumOutputs;
+    SplitterTypes[i].DelayPs := Delay;
+  end;
+
+  Inserted := InsertSplitters(FModel, FLib, SplitterTypes);
+  if Inserted > 0 then
+  begin
+    Label1.Text := Format('Inserted %d splitter(s) into the netlist.', [Inserted]);
+    FSplittersInserted := True;
+  end
+  else
+    Label1.Text := 'No splitters needed (no net has fanout > 1).';
+
+  Errors := TStringList.Create;
+  try
+    ComputeClockLevels(FModel, Errors);
+    RenderNetlist(FModel, Errors);
+  finally
+    Errors.Free;
+  end;
+  UpdateUI;
+end;
+
+procedure TForm1.RenderNetlist(Model: TBlifModel; Errors: TStrings);
+var
+  Dump: TStringList;
+  i: Integer;
+  Gate: TGateInstance;
+  Conn: TPinConnection;
+  Net: TNet;
+  NC: TNetConnection;
+  NetName: string;
+  Line: string;
+begin
+  Dump := TStringList.Create;
+  try
+    Dump.Add('Model: ' + Model.Name);
+    Dump.Add('');
+    Dump.Add('Primary inputs: ' + Model.Inputs.CommaText);
+    Dump.Add('Primary outputs: ' + Model.Outputs.CommaText);
+    Dump.Add('');
+
+    Dump.Add(Format('Gates (%d):', [Model.Gates.Count]));
+    for i := 0 to Model.Gates.Count - 1 do
+    begin
+      Gate := Model.Gates[i];
+      Line := Format('  %2d. %s', [i + 1, Gate.CellName]);
+      for Conn in Gate.Connections do
+        Line := Line + Format('  %s=%s', [Conn.PinName, Conn.NetName]);
+      Dump.Add(Line);
+    end;
+    Dump.Add('');
+
+    Dump.Add(Format('Nets (%d):', [Model.Nets.Count]));
+    for NetName in Model.Nets.Keys do
+    begin
+      Net := Model.Nets[NetName];
+      Line := '  ' + NetName + ':';
+      for NC in Net.Connections do
+      begin
+        if NC.IsDriver then
+          Line := Line + Format('  drive=%s.%s', [NC.Gate.CellName, NC.PinName])
+        else
+          Line := Line + Format('  load=%s.%s', [NC.Gate.CellName, NC.PinName]);
+      end;
+      Dump.Add(Line);
+    end;
+
+    Dump.Add('');
+    if Errors.Count > 0 then
+    begin
+      Dump.Add(Format('ERRORS (%d):', [Errors.Count]));
+      for i := 0 to Errors.Count - 1 do
+        Dump.Add('  ' + Errors[i]);
+    end
+    else
+      Dump.Add('No errors.');
+
+    Memo1.Lines.Assign(Dump);
+  finally
+    Dump.Free;
+  end;
+end;
+
+procedure TForm1.ListBox1DblClick(Sender: TObject);
+var
+  Cell: TCell;
+  Viewer: TCellViewerForm;
+begin
+  if FLib = nil then Exit;
+  if (ListBox1.ItemIndex < 0) or (ListBox1.ItemIndex >= FLib.Cells.Count) then
+    Exit;
+  Cell := FLib.Cells[ListBox1.ItemIndex];
+  Viewer := TCellViewerForm.Create(nil);
+  Viewer.SetCell(Cell);
+  Viewer.Show;
+end;
+
+procedure TForm1.ButtonBackClick(Sender: TObject);
+begin
+  if TabControl1.TabIndex > 0 then
+    TabControl1.TabIndex := TabControl1.TabIndex - 1;
+  UpdateUI;
+end;
+
+procedure TForm1.ButtonNextClick(Sender: TObject);
+begin
+  if TabControl1.TabIndex < TabControl1.TabCount - 1 then
+    TabControl1.TabIndex := TabControl1.TabIndex + 1;
+  UpdateUI;
+end;
+
+end.

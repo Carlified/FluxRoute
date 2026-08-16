@@ -1,0 +1,18 @@
+# Full adder built from THmitll_* RSFQ threshold-gate cells.
+# Clocking and fanout (SPLITT insertion) are intentionally omitted --
+# these are left for downstream placement/routing steps to solve.
+#
+# sum = a XOR b XOR cin
+# cout = (a AND b) OR (cin AND (a XOR b))
+
+.model full_adder
+.inputs a b cin
+.outputs sum cout
+
+.gate THmitll_XORT  a=a  b=b   q=s1
+.gate THmitll_AND2T a=a  b=b   q=p1
+.gate THmitll_XORT  a=s1 b=cin q=sum
+.gate THmitll_AND2T a=s1 b=cin q=p2
+.gate THmitll_OR2T  a=p1 b=p2  q=cout
+
+.end

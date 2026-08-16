@@ -1,0 +1,196 @@
+PnR PROJECT - PROGRESS SUMMARY (for agents getting up to speed)
+================================================================
+
+WHAT THIS IS
+  A Delphi (Embarcadero RAD Studio, dproj ProjectVersion 20.1 / Delphi 10.4+)
+  Place-and-Route toolchain for RSFQ (rapid single flux quantum) threshold-gate
+  digital circuits. Uses the THmitll_* cell library described in a LEF file.
+  Currently only the two front-end parsers exist; placement/routing/clocking/
+  fanout (SPLITT insertion) are explicitly deferred downstream.
+
+DIRECTORY & FILE LAYOUT (all under C:\Users\27005348\Documents\Embarcadero\Studio\Projects)
+  LefLibrary.pas     - LEF file parser -> TLibrary (cell library model).
+  LefParser.dpr      - standalone console test harness that dumps a parsed
+                       TLibrary. Loads 'lef_7_metals.lef' (TODO: take input path).
+  BlifLibrary.pas    - BLIF file parser + net-connectivity checker; uses LefLibrary.
+  BlifParser.dpr     - console test harness: loads LEF lib, parses a BLIF file,
+                       runs connectivity checks, prints gates and nets.
+  MainWindow.pas/fmx - FMX GUI (TForm1) for PnRGUI app.
+  gds_to_json.py    - Python 3 + gdstk converter: reads a GDS file, flattens
+                      the top-level cells (references resolved, transforms
+                      applied), writes {"file","cells":[{name, polygons:
+                      [{layer, points:[[x,y],...]}]}]} to a JSON file. Invoked
+                      by the GUI via CreateProcess (stderr captured to *.err).
+  gds test\         - sample .gds files (THmitll_AND2T/NOTT/XORT) for trying
+                      the per-cell GDS viewer without real cell data.
+  CellViewer.pas    - per-cell GDS popup (TCellViewerForm, built in code) +
+                      shared GDS helpers (FindPythonExe/FindScriptPath/
+                      RunProcess/LoadGdsShapes).
+  PnRGUI.dpr/dproj   - FMX GUI application (Win32\Debug output).
+  PnR.groupproj      - MSBuild group (console parsers only).
+  PnR+GUI.groupproj  - MSBuild group (PnRGUI + both console parsers).
+  lef_7_metals.lef   - the THmitll_* cell library (the "7 metals" tech).
+  blif files\        - three BLIF test circuits (see below).
+  Win32\Debug        - build output dir for PnRGUI; the console exes are
+                       emitted to project root.
+
+UNIT DEPENDENCY CHAIN
+  LefLibrary.pas  (no deps beyond System.*)  -> TLibrary model
+  BlifLibrary.pas (uses LefLibrary)          -> TBlifModel model
+  CellViewer.pas  (uses LefLibrary + FMX)    -> per-cell GDS popup (TCellViewerForm)
+                                              + shared GDS helpers
+  LefParser.dpr   (uses LefLibrary)
+  BlifParser.dpr  (uses LefLibrary + BlifLibrary)
+  MainWindow.pas  (uses LefLibrary + BlifLibrary + CellViewer) -> FMX GUI
+  PnRGUI.dpr      (uses MainWindow + CellViewer + BlifLibrary + LefLibrary)
+
+GUI (PnRGUI) - WHAT'S DONE
+  Wizard-style two-page form (FMX TTabControl, TabPosition=None, headers
+  hidden), navigated by ButtonNext/ButtonBack in the bottom right. Label1 at
+  the bottom is a shared status line; ListBox1 lists the parsed cell names
+  (double-click opens the per-cell viewer); Memo1 (read-only) prints the
+  netlist dump and its parse errors.
+
+  Page 1 "Library" (merged the old Start + Sources pages): WelcomeLabel +
+  Button1 ("Select LEF file") + Button2 ("Run LEF parser") + Button3 ("Select
+  library folder") + Button4 ("Find linked files") + ListBox1.
+  Button1 opens a *.lef-filtered dialog (stores FLefFile) and invalidates the
+  previously parsed library. Button2 calls LoadLefLibrary (exception-safe),
+  keeps the TLibrary in FLib (owned, freed in FreeLib), and prints ONLY the
+  cell names into ListBox1 (Button4 no longer rewrites that list). Button3
+  picks the library folder with SelectDirectory (stores FCellFolder). Button4
+  calls Lib.FindCellSourceFiles(FCellFolder), which fills each cell's
+  SourceFiles with the paths of every file under the folder (recursive) whose
+  name starts with the cell name (e.g. "AND2T" -> "AND2T_v3p0.v"); supported
+  extensions are the CellSourceExts constant (.v, .gds, .cir). Label1 then
+  shows the match totals. Double-clicking a cell in ListBox1 opens the
+  per-cell viewer (see CellViewer.pas below).
+
+  Note: A Windows-style path combo box with dropdown + "..." browse button
+  (VCL TFileNameEdit/TDirectoryEdit) does not exist in FMX, so the UI keeps
+  plain "Select LEF file" / "Select library folder" buttons (see GUI history).
+
+  Page 2 "Netlist": Button5 ("Select BLIF file") + Button6 ("Load netlist") +
+  Memo1. Button5 opens a *.blif-filtered dialog (stored in FBlifFile) and
+  invalidates any previously parsed netlist (FModel). Button6 calls
+  ParseBlif(FBlifFile, FLib, Errors) (exception-safe), then
+  CheckNetConnectivity, keeps the resulting TBlifModel in FModel (owned by the
+  form, freed in FreeLib / on re-parse), and RenderNetlist dumps into Memo1:
+  model name, primary inputs/outputs, per-gate pin=net assignments, per-net
+  driver/load connections, then the error list (or "No errors."). Label1 shows
+  a summary count. Requires a parsed LEF library (cell/pin validation) -- that
+  is why Button6 is gated on FLib too.
+
+  CELLVIEWER.PAS (per-cell popup)
+  TCellViewerForm is built entirely in code (no .fmx, no auto-creation; it is
+  created on demand from ListBox1's OnDblClick and frees itself via OnClose =
+  caFree). The left panel is a ListBox with that cell's SourceFiles; the right
+  side is a TPaintBox showing the cell's GDS. If the cell has a .gds among its
+  linked sources, LoadGdsShapes runs python gds_to_json.py on it (FindPythonExe
+  resolves the interpreter, FindScriptPath locates the script relative to the
+  exe/working dir, RunProcess uses CreateProcess + captured stderr), parses
+  the JSON with System.JSON, keeps the cell whose name matches the .gds file
+  stem, and renders borderless translucent polygons (auto-fit, Y-flipped,
+  per-layer colors). A status label reports progress/errors ("Run Find linked
+  files first...", "No .gds file found...", polygon count, or the failure).
+  These GDS helpers now live only in CellViewer.pas.
+
+  Enable/disable rules (UpdateUI, run after every action and on FormCreate):
+    Button1 (file), Button3 (folder), Button5 (file): always enabled.
+    Button2: disabled until a LEF file is picked.
+    Button4: disabled until a library is parsed AND a folder is chosen;
+      picking a new LEF file frees the old library and re-disables it.
+    Button6: disabled until a library is parsed AND a BLIF file is picked.
+    ButtonBack: enabled only past page 1 (TabIndex > 0).
+    ButtonNext: enabled only when a library is loaded AND not on the last page
+      (i.e. once parsed, lets you move Library -> Netlist).
+
+LEFLIBRARY.PAS - WHAT'S DONE
+  Object model:
+    TPinDirection enum: pdUnknown/pdInput/pdOutput/pdInOut.
+    TPortShape: Layer + bounding rect (x1,x2,y1,y2 as Double); assumes rects.
+    TPort: Name, Direction, Shapes list (TObjectList, owns children).
+    TCell: Name, Width, Height, Ports (TObjectList) + PortsByName dict for
+           fast lookup; FindPort() returns nil if pin missing. Also owns
+           SourceFiles: TStringList of linked source paths for this cell
+           (.v/.gds/.cir, filled by FindCellSourceFiles).
+    TLibrary: Cells (TObjectList) + CellsByName dict; FindCell() -> nil if
+           missing. FindCellSourceFiles(ABaseDir) populates every cell's
+           SourceFiles.
+  LoadLefLibrary(FileName): line-oriented parser handling MACRO, SIZE, PIN,
+    DIRECTION, LAYER, RECT, END. Keyword matching is case-insensitive
+    (StartsText/SameText). No numeric/bounds error handling yet
+    (StrToFloat will raise on malformed lines). Uses AddOrSetValue for dicts.
+  CollectCellSourceFiles(ACellName, ABaseDir, AResult): recursive
+    (soAllDirectories) scan for files whose stem starts with ACellName
+    (case-insensitive) AND whose extension is in CellSourceExts
+    ('.v', '.gds', '.cir'); no-op if ABaseDir doesn't exist.
+
+BLIFLIBRARY.PAS - WHAT'S DONE
+  Object model:
+    TPinConnection: PinName + NetName + resolved Port (pointer into TLibrary).
+    TGateInstance:  CellName + resolved Cell + Connections (owns the list).
+    TNetConnection: record { Gate, PinName, IsDriver } - one pin=net hookup.
+    TNet: Name + Connections (TList<TNetConnection>).
+    TBlifModel: Name, Inputs, Outputs (TStringList), Gates (owns), Nets
+      (TObjectDictionary, owns values); FindOrCreateNet() helper.
+  ParseBlif(FileName, Lib, Errors): validates each .gate cell name against the
+    LEF library and every pin assignment against the cell's ports; appends
+    human-readable errors to Errors and continues where possible (unknown cell
+    or pin skips that item only). Handles .model/.inputs/.outputs/.gate/.end;
+    stops at .end (single-model files only). Caller owns result + must check
+    Errors.Count before trusting it.
+  CheckNetConnectivity(Model, Errors): separate post-parse pass (needs full net
+    list). Flags: net with >1 driver (short); internal net with no driver or no
+    loader; primary output with no internal driver; primary input with no
+    internal loader. Primary I/O classification is case-insensitive
+    (Inputs/Outputs are created with CaseSensitive := False, so IndexOf
+    compares ignoring case).
+
+TEST DATA (blif files\)
+  full_adder.blif          - sum/cout from a,b,cin using XORT/AND2T/OR2T.
+  fanout_tree.blif         - 8-input masked OR reducer; exercises high fanout
+                             of the 'en' signal (splitters deliberately absent).
+  mixed_combinational.blif - 2:1 mux + XOR; exercises NOTT, JTLT (path-balance
+                             buffers) and every combinational cell.
+  All are combinational, clocking omitted, fanout/splitters omitted by design.
+
+HOW TO BUILD / RUN
+  Use PnR+GUI.groupproj to build everything (PnRGUI + both console parsers);
+  PnR.groupproj builds just the console parsers and is unaffected by the GUI.
+  Run PnRGUI to select a .lef file and parse it via the buttons. The console
+  apps hard-code the LEF path 'lef_7_metals.lef' and BlifParser hard-codes
+  'blif files\full_adder.blif' -- change those to test other files.
+  BlifParser prints: parse errors, connectivity problems, model name/IO, then
+  per-gate pins and per-net driver/load connections.
+
+KNOWN GAPS / PLANNED NEXT STEPS (per comments in code & test files)
+  1. Robust LEF parsing: error handling for bad numbers, full LEF statement
+     coverage beyond macros (sites, layers, etc. are currently ignored).
+  2. Generalize input: CLI args instead of hard-coded file paths (there are
+     explicit TODO comments in the .dpr files).
+  3. Multi-model / .subckt support in BLIF (parser stops at first .end).
+  4. Downstream PnR pipeline (NOT started): placement, routing, clocking,
+     and fanout/splitter (SPLITT) insertion -- called out in the BLIF tests
+     as the next major work items.
+  5. GUI expansion (in progress): LEF parsing + .v source discovery + BLIF
+     netlist loading/printing + per-cell GDS viewing are wired into the GUI
+     (2-page wizard: Library -> Netlist; double-click a cell in the Library
+     page to open its GDS viewer). No .lef file picker persistence yet; GUI
+     does not yet display cell geometry/ports from the LEF. The cell viewer
+     is still a flat polygon dump -- no pan/zoom, layer toggles/legend, or
+     linked-file open action yet.
+  6. Timing extraction (next major step, per latest work): parse each cell's
+     .v file (paths are stored in TCell.SourceFiles) for
+     propagation/setup/hold limits. Only .v supported for now, not .sdf.
+
+CONVENTIONS / GOTCHAS
+  - Case-insensitive everywhere for matching: file keywords via
+    StartsText/SameText, name lookups via TIStringComparer dictionaries and
+    TStringList IndexOf with CaseSensitive := False (default) -- no
+    case-sensitive string comparisons remain.
+  - Ownership is explicit: object lists use OwnsObjects=True; the ByName
+    dictionaries deliberately do NOT own their values (lists do).
+  - TNetConnection is a record (value type), stored in a TList, so never
+    reference-counted/owned.
+  - No test framework, no lint config, no AGENTS.md in the repo yet.

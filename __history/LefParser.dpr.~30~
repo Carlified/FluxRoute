@@ -1,0 +1,42 @@
+program LefParser;
+
+{$APPTYPE CONSOLE}
+{$R *.res}
+
+uses
+  System.SysUtils,
+  System.Classes,
+  System.Generics.Collections,
+  LefLibrary in 'LefLibrary.pas';
+
+var
+  Lib: TLibrary;
+  Cell: TCell;
+  Port: TPort;
+  Shape: TPortShape;
+
+const
+  DirectionNames: array [TPinDirection] of string = ('?', 'INPUT', 'OUTPUT', 'INOUT');
+
+begin
+  Lib := LoadLefLibrary('testlef.lef'); // TODO take general input
+  try
+    for Cell in Lib.Cells do
+    begin
+      Writeln(Cell.Name);
+      Writeln(Cell.Width:0:1, ', ', Cell.Height:0:1);
+
+      for Port in Cell.Ports do
+      begin
+        Writeln('   ', Port.Name, ' (', DirectionNames[Port.Direction], '):');
+        for Shape in Port.Shapes do
+          Writeln('      Layer ', Shape.Layer, ' ((', Shape.x1:0:1, ',',
+            Shape.y1:0:1, '), (', Shape.x2:0:1, ', ', Shape.y2:0:1, '))');
+      end;
+
+      Writeln(sLineBreak);
+    end;
+  finally
+    Lib.Free; //caller always owns the lib, must always free by end
+  end;
+end.

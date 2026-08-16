@@ -1,0 +1,60 @@
+﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <PropertyGroup>
+        <ProjectGuid>{98C11570-EF1E-439B-AB44-92657F0B5738}</ProjectGuid>
+    </PropertyGroup>
+    <ItemGroup>
+        <Projects Include="PnRGUI.dproj">
+            <Dependencies/>
+        </Projects>
+        <Projects Include="BlifParser.dproj">
+            <Dependencies/>
+        </Projects>
+        <Projects Include="LefParser.dproj">
+            <Dependencies/>
+        </Projects>
+    </ItemGroup>
+    <ProjectExtensions>
+        <Borland.Personality>Default.Personality.12</Borland.Personality>
+        <Borland.ProjectType/>
+        <BorlandProject>
+            <Default.Personality/>
+        </BorlandProject>
+    </ProjectExtensions>
+    <Target Name="PnRGUI">
+        <MSBuild Projects="PnRGUI.dproj"/>
+    </Target>
+    <Target Name="PnRGUI:Clean">
+        <MSBuild Projects="PnRGUI.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="PnRGUI:Make">
+        <MSBuild Projects="PnRGUI.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="BlifParser">
+        <MSBuild Projects="BlifParser.dproj"/>
+    </Target>
+    <Target Name="BlifParser:Clean">
+        <MSBuild Projects="BlifParser.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="BlifParser:Make">
+        <MSBuild Projects="BlifParser.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="LefParser">
+        <MSBuild Projects="LefParser.dproj"/>
+    </Target>
+    <Target Name="LefParser:Clean">
+        <MSBuild Projects="LefParser.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="LefParser:Make">
+        <MSBuild Projects="LefParser.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="Build">
+        <CallTarget Targets="PnRGUI;BlifParser;LefParser"/>
+    </Target>
+    <Target Name="Clean">
+        <CallTarget Targets="PnRGUI:Clean;BlifParser:Clean;LefParser:Clean"/>
+    </Target>
+    <Target Name="Make">
+        <CallTarget Targets="PnRGUI:Make;BlifParser:Make;LefParser:Make"/>
+    </Target>
+    <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
+</Project>
