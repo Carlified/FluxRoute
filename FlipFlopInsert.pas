@@ -4,12 +4,14 @@ interface
 
 uses
   System.SysUtils,
+  System.Classes,
   System.Math,
   System.Generics.Collections,
   LefLibrary,
   BlifLibrary,
   VerilogTiming,
-  PipelineConfig;
+  PipelineConfig,
+  PipelineAnalysis;
 
 // Two-phase flip-flop insertion:
 //
@@ -45,9 +47,12 @@ function PadOutputFFs(Model: TBlifModel; Lib: TLibrary;
   const FFCellName: string): Integer;
 
 // Delay-levelization flip-flop insertion for maximum-speed pipelining.
-// Computes a delay-based clock level for every gate (ceil of cumulative
-// path delay from PIs divided by ThresholdPs), then inserts flip-flop
-// chains so that every gate sees data at its assigned level.
+// Walks gates in topological order, computing the cumulative delay from
+// the nearest clocked boundary.  When a gate's cumulative delay exceeds
+// ThresholdPs, DFFs are inserted on every non-clocked data input of that
+// gate to break the long path.  Clocked gates are pipeline boundaries
+// (their output arrival is 0) but their inputs are still checked.
+// Caller should re-run ComputeClockLevels afterwards to refresh levels.
 function InsertDelayLevelizedFFs(Model: TBlifModel; Lib: TLibrary;
   const FFCellName: string; ThresholdPs: Double): Integer;
 
@@ -593,7 +598,8 @@ begin
       NC.Gate := Gate;
       NC.PinName := ClockPin;
       NC.IsDriver := False;
-      Model.Nets[ClockNetName].Connections.Add(NC);
+      if Model.Nets.ContainsKey(ClockNetName) then
+        Model.Nets[ClockNetName].Connections.Add(NC);
 
       // FF driver on OutNet.
       OutNet := Model.FindOrCreateNet(OutNetName);
@@ -614,35 +620,47 @@ var
   ClockPin, DataPin, OutputPin: string;
   ClockNetName: string;
   InsertedFFs: TDictionary<TGateInstance, Boolean>;
-  MaxInputDelays: TDictionary<TGateInstance, Double>;
   CellDelays: TDictionary<string, Double>;
-  Count, i, j, jj, N, LA, Expected, NetCounter: Integer;
-  B, Gate: TGateInstance;
+  Arrival: TDictionary<TGateInstance, Double>;
+  Resolved: TDictionary<TGateInstance, Boolean>;
+  Worklist: TList<TGateInstance>;
+  Visited: TDictionary<TGateInstance, Boolean>;
+  i, j, jj, NetCounter: Integer;
+  G, Gate, LoadGate: TGateInstance;
   Conn: TPinConnection;
-  Net, PrevNet, NewNet: TNet;
+  Net, NewNet, PrevNet: TNet;
   NC: TNetConnection;
   ChildName: string;
-  EmptyNets: TList<string>;
-  G: TGateInstance;
-  MaxArr, ArrTime, Dly: Double;
+  InputArrival, ArrTime, Dly, PathDelay: Double;
   k: Integer;
   C: TPinConnection;
   N2: TNet;
   NC2: TNetConnection;
-  MaxDriverLevel, MinLevel: Integer;
+  EmptyNets: TList<string>;
+  Count, LA, Expected, N: Integer;
+  B: TGateInstance;
+  Errors: TStringList;
+  Merged: Boolean;
+  S, FF_br: TGateInstance;
+  OutNet, OutNet2, Nin, Nin2: TNet;
+  FFLevel: Integer;
+  LoadPin: string;
+  PathMemo: TDictionary<string, Double>;
+  SplitterDelay, MaxPath, FfOutPath: Double;
+  FfOutNet: TNet;
 
-  function CellDelayOfLocal(Cell: TCell): Double;
+  function CellDelayOfLocal(ACell: TCell): Double;
   var
     Timing: TCellTiming;
     ii: Integer;
   begin
-    if CellDelays.TryGetValue(Cell.Name, Result) then
+    if CellDelays.TryGetValue(ACell.Name, Result) then
       Exit;
     Result := 0;
-    for ii := 0 to Cell.SourceFiles.Count - 1 do
-      if SameText(ExtractFileExt(Cell.SourceFiles[ii]), '.v') then
+    for ii := 0 to ACell.SourceFiles.Count - 1 do
+      if SameText(ExtractFileExt(ACell.SourceFiles[ii]), '.v') then
       begin
-        Timing := ParseVerilogTiming(Cell.SourceFiles[ii]);
+        Timing := ParseVerilogTiming(ACell.SourceFiles[ii]);
         if Timing <> nil then
         begin
           Result := Timing.OutputDelayPs;
@@ -652,7 +670,237 @@ var
           Break;
         end;
       end;
-    CellDelays.AddOrSetValue(Cell.Name, Result);
+    CellDelays.AddOrSetValue(ACell.Name, Result);
+  end;
+
+  // Check whether all non-clocked data-input drivers of G have been resolved.
+  function AllDriversReady(G: TGateInstance): Boolean;
+  var
+    ck: Integer;
+    CC: TPinConnection;
+    NN2: TNet;
+    NNC: TNetConnection;
+  begin
+    Result := True;
+    for ck := 0 to G.Connections.Count - 1 do
+    begin
+      CC := G.Connections[ck];
+      if CC.Port.Direction <> pdInput then
+        Continue;
+      if IsClockPinName(CC.Port.Name) then
+        Continue;
+      if not Model.Nets.TryGetValue(CC.NetName, NN2) then
+        Continue;
+      for NNC in NN2.Connections do
+        if NNC.IsDriver then
+        begin
+          // Clocked drivers are always ready (arrival = 0).
+          if CellHasClock(NNC.Gate.Cell) then
+            Continue;
+          // PI-driven nets have no gate driver — always ready.
+          if not Resolved.ContainsKey(NNC.Gate) then
+            Exit(False);
+        end;
+    end;
+  end;
+
+  // ---- Phase 4 helpers: delay-levelized splitter merge ----
+
+  function PathFromNetToNextClocked(const ANetName: string): Double;
+  var
+    LoadNC: TNetConnection;
+    LoadN: TNet;
+    ChildPath, MaxChild, GateDly: Double;
+    OutConn: TPinConnection;
+  begin
+    if PathMemo.TryGetValue(ANetName, Result) then
+      Exit;
+    Result := 0;
+    if not Model.Nets.TryGetValue(ANetName, LoadN) then
+      Exit;
+    for LoadNC in LoadN.Connections do
+    begin
+      if LoadNC.IsDriver then
+        Continue;
+      if CellHasClock(LoadNC.Gate.Cell) then
+        Continue;
+      GateDly := CellDelayOfLocal(LoadNC.Gate.Cell);
+      MaxChild := 0;
+      for OutConn in LoadNC.Gate.Connections do
+      begin
+        if OutConn.Port.Direction <> pdOutput then
+          Continue;
+        ChildPath := PathFromNetToNextClocked(OutConn.NetName);
+        if ChildPath > MaxChild then
+          MaxChild := ChildPath;
+      end;
+      GateDly := GateDly + MaxChild;
+      if GateDly > Result then
+        Result := GateDly;
+    end;
+    PathMemo.Add(ANetName, Result);
+  end;
+
+  function CanMergeDelay(S: TGateInstance): Boolean;
+  var
+    Conn2: TPinConnection;
+    Net2: TNet;
+    NC2: TNetConnection;
+    LoadCount, OutCount: Integer;
+    FF_Gate: TGateInstance;
+    OutConn: TPinConnection;
+  begin
+    Result := False;
+    OutCount := 0;
+    SplitterDelay := CellDelayOfLocal(S.Cell);
+    MaxPath := 0;
+    for Conn2 in S.Connections do
+      if Conn2.Port.Direction = pdOutput then
+      begin
+        Inc(OutCount);
+        if not Model.Nets.TryGetValue(Conn2.NetName, Net2) then
+          Exit(False);
+        LoadCount := 0;
+        FF_Gate := nil;
+        for NC2 in Net2.Connections do
+          if not NC2.IsDriver then
+          begin
+            Inc(LoadCount);
+            if NC2.Gate.Cell <> FFCell then
+              Exit(False);
+            if NC2.Gate.ClockLevel <> S.ClockLevel + 1 then
+              Exit(False);
+            FF_Gate := NC2.Gate;
+          end;
+        if LoadCount <> 1 then
+          Exit(False);
+        if FF_Gate = nil then
+          Exit(False);
+        FfOutNet := nil;
+        for OutConn in FF_Gate.Connections do
+          if OutConn.Port.Direction = pdOutput then
+          begin
+            if Model.Nets.TryGetValue(OutConn.NetName, FfOutNet) then
+              Break;
+          end;
+        if FfOutNet = nil then
+          Exit(False);
+        FfOutPath := PathFromNetToNextClocked(FfOutNet.Name);
+        if FfOutPath > MaxPath then
+          MaxPath := FfOutPath;
+      end;
+    Result := (OutCount >= 2) and (SplitterDelay + MaxPath <= ThresholdPs);
+  end;
+
+  procedure DoMergeDelay(S: TGateInstance);
+  var
+    Conn, CC: TPinConnection;
+    NC3: TNetConnection;
+    jj: Integer;
+  begin
+    FFLevel := S.ClockLevel + 1;
+
+    Nin := nil;
+    for Conn in S.Connections do
+      if Conn.Port.Direction in [pdInput, pdInOut] then
+      begin
+        Nin := Model.Nets[Conn.NetName];
+        Break;
+      end;
+    if Nin = nil then
+      Exit;
+
+    for Conn in S.Connections do
+      if Conn.Port.Direction = pdOutput then
+      begin
+        if not Model.Nets.TryGetValue(Conn.NetName, OutNet) then
+          Continue;
+        FF_br := nil;
+        for NC3 in OutNet.Connections do
+          if not NC3.IsDriver then
+            FF_br := NC3.Gate;
+        if FF_br = nil then
+          Continue;
+        OutNet2 := nil;
+        for CC in FF_br.Connections do
+          if CC.Port.Direction = pdOutput then
+          begin
+            if Model.Nets.TryGetValue(CC.NetName, OutNet2) then
+              Break;
+          end;
+        if OutNet2 = nil then
+          Continue;
+
+        for jj := OutNet2.Connections.Count - 1 downto 0 do
+          if not OutNet2.Connections[jj].IsDriver then
+          begin
+            LoadPin := OutNet2.Connections[jj].PinName;
+            for CC in OutNet2.Connections[jj].Gate.Connections do
+              if SameText(CC.NetName, OutNet2.Name) then
+                CC.NetName := OutNet.Name;
+            NC3.Gate := OutNet2.Connections[jj].Gate;
+            NC3.PinName := LoadPin;
+            NC3.IsDriver := False;
+            OutNet.Connections.Add(NC3);
+            OutNet2.Connections.Delete(jj);
+          end;
+        OutNet2.Connections.Clear;
+
+        for jj := OutNet.Connections.Count - 1 downto 0 do
+          if OutNet.Connections[jj].Gate = FF_br then
+            OutNet.Connections.Delete(jj);
+        if Model.Nets.ContainsKey(ClockNetName) then
+          for jj := Model.Nets[ClockNetName].Connections.Count - 1 downto 0 do
+            if Model.Nets[ClockNetName].Connections[jj].Gate = FF_br then
+              Model.Nets[ClockNetName].Connections.Delete(jj);
+        InsertedFFs.Remove(FF_br);
+        Model.Gates.Remove(FF_br);
+      end;
+
+    Inc(NetCounter);
+    ChildName := Format('%s__ff_%d', [Nin.Name, NetCounter]);
+    while Model.Nets.ContainsKey(ChildName) do
+    begin
+      Inc(NetCounter);
+      ChildName := Format('%s__ff_%d', [Nin.Name, NetCounter]);
+    end;
+    Nin2 := Model.FindOrCreateNet(ChildName);
+    Gate := CreateFF(FFCell, FFCellName, DataPin, OutputPin, ClockPin,
+      ClockNetName, Nin.Name, ChildName, FFLevel);
+    Model.Gates.Add(Gate);
+    InsertedFFs.Add(Gate, True);
+
+    for jj := Nin.Connections.Count - 1 downto 0 do
+      if Nin.Connections[jj].Gate = S then
+        Nin.Connections.Delete(jj);
+    NC3.Gate := Gate;
+    NC3.PinName := DataPin;
+    NC3.IsDriver := False;
+    Nin.Connections.Add(NC3);
+
+    NC3.Gate := Gate;
+    NC3.PinName := ClockPin;
+    NC3.IsDriver := False;
+    if Model.Nets.ContainsKey(ClockNetName) then
+      Model.Nets[ClockNetName].Connections.Add(NC3);
+
+    NC3.Gate := Gate;
+    NC3.PinName := OutputPin;
+    NC3.IsDriver := True;
+    Nin2.Connections.Add(NC3);
+
+    for Conn in S.Connections do
+      if Conn.Port.Direction in [pdInput, pdInOut] then
+      begin
+        Conn.NetName := ChildName;
+        NC3.Gate := S;
+        NC3.PinName := Conn.PinName;
+        NC3.IsDriver := False;
+        Nin2.Connections.Add(NC3);
+        Break;
+      end;
+
+    S.ClockLevel := FFLevel;
   end;
 
 begin
@@ -681,72 +929,206 @@ begin
   end;
 
   CellDelays := TDictionary<string, Double>.Create;
-  MaxInputDelays := TDictionary<TGateInstance, Double>.Create;
+  Arrival := TDictionary<TGateInstance, Double>.Create;
   InsertedFFs := TDictionary<TGateInstance, Boolean>.Create;
+  Resolved := TDictionary<TGateInstance, Boolean>.Create;
+  Worklist := TList<TGateInstance>.Create;
+  Visited := TDictionary<TGateInstance, Boolean>.Create;
   try
-    // Step 1: compute maxInputDelay for each gate in topological order.
-    for i := 0 to Model.Gates.Count - 1 do
-    begin
-      G := Model.Gates[i];
-      MaxArr := 0;
-      for k := 0 to G.Connections.Count - 1 do
-      begin
-        C := G.Connections[k];
-        if C.Port.Direction <> pdInput then
-          Continue;
-        if IsClockPinName(C.Port.Name) then
-          Continue;
-        if Model.Nets.TryGetValue(C.NetName, N2) then
-          for NC2 in N2.Connections do
-            if NC2.IsDriver then
-            begin
-              if MaxInputDelays.TryGetValue(NC2.Gate, ArrTime) then
-                Dly := ArrTime + CellDelayOfLocal(NC2.Gate.Cell)
-              else
-                Dly := CellDelayOfLocal(NC2.Gate.Cell);
-              if Dly > MaxArr then
-                MaxArr := Dly;
-            end;
-      end;
-      MaxInputDelays.Add(G, MaxArr);
-    end;
-
-    // Step 2: assign delay levels.
-    for i := 0 to Model.Gates.Count - 1 do
-      Model.Gates[i].ClockLevel := Ceil(MaxInputDelays[Model.Gates[i]] / ThresholdPs);
-
-    // Step 2b: enforce that every clocked gate sits strictly above all its
-    // data drivers (avoids same-level driver→receiver after FF insertion).
-    for i := 0 to Model.Gates.Count - 1 do
-    begin
-      G := Model.Gates[i];
-      if not CellHasClock(G.Cell) then
-        Continue;
-      MaxDriverLevel := -1;
-      for k := 0 to G.Connections.Count - 1 do
-      begin
-        C := G.Connections[k];
-        if C.Port.Direction <> pdInput then
-          Continue;
-        if IsClockPinName(C.Port.Name) then
-          Continue;
-        if Model.Nets.TryGetValue(C.NetName, N2) then
-          for NC2 in N2.Connections do
-            if NC2.IsDriver and (NC2.Gate.ClockLevel > MaxDriverLevel) then
-              MaxDriverLevel := NC2.Gate.ClockLevel;
-      end;
-      if MaxDriverLevel >= 0 then
-      begin
-        MinLevel := MaxDriverLevel + 1;
-        if G.ClockLevel < MinLevel then
-          G.ClockLevel := MinLevel;
-      end;
-    end;
-
-    // Phase 1: backwards pass — insert FF chains to fill level gaps.
-    // A clocked cell at level L expects data from level L-1;
-    // an unclocked cell at level L expects data from level L.
     NetCounter := 0;
+
+    // Seed worklist with gates whose drivers are all ready.
+    for i := 0 to Model.Gates.Count - 1 do
+    begin
+      G := Model.Gates[i];
+      if CellHasClock(G.Cell) or AllDriversReady(G) then
+        Worklist.Add(G);
+    end;
+
+    // Process gates in worklist order (topological).
+    i := 0;
+    while i < Worklist.Count do
+    begin
+      G := Worklist[i];
+      Inc(i);
+
+      if Visited.ContainsKey(G) then
+        Continue;
+      Visited.Add(G, True);
+
+      // Compute arrival from data-input drivers.
+      InputArrival := 0;
+      for k := 0 to G.Connections.Count - 1 do
+      begin
+        C := G.Connections[k];
+        if C.Port.Direction <> pdInput then
+          Continue;
+        if IsClockPinName(C.Port.Name) then
+          Continue;
+        if not Model.Nets.TryGetValue(C.NetName, N2) then
+          Continue;
+        for NC2 in N2.Connections do
+          if NC2.IsDriver then
+          begin
+            if CellHasClock(NC2.Gate.Cell) then
+              ArrTime := 0
+            else if not Arrival.TryGetValue(NC2.Gate, ArrTime) then
+              ArrTime := 0;
+            if ArrTime > InputArrival then
+              InputArrival := ArrTime;
+          end;
+      end;
+
+      Dly := CellDelayOfLocal(G.Cell);
+
+      // Path delay: from last clocked boundary through non-clocked children,
+      // ending at this gate's input (not inclusive of this gate's own delay).
+      if CellHasClock(G.Cell) then
+        PathDelay := InputArrival
+      else
+        PathDelay := InputArrival + Dly;
+
+      // Insert DFFs on every non-clocked data input when path is too long.
+      if PathDelay > ThresholdPs then
+      begin
+        for j := 0 to G.Connections.Count - 1 do
+        begin
+          Conn := G.Connections[j];
+          if not (Conn.Port.Direction in [pdInput, pdInOut]) then
+            Continue;
+          if IsClockPinName(Conn.Port.Name) then
+            Continue;
+
+          if not Model.Nets.TryGetValue(Conn.NetName, Net) then
+            Continue;
+
+          // Find the driver; skip if it is clocked or absent (PI).
+          NC2 := Default(TNetConnection);
+          for NC in Net.Connections do
+            if NC.IsDriver then
+            begin
+              NC2 := NC;
+              Break;
+            end;
+          if NC2.Gate = nil then
+            Continue;
+          if CellHasClock(NC2.Gate.Cell) then
+            Continue;
+
+          // Create DFF: original net -> DFF -> new net.
+          Inc(NetCounter);
+          ChildName := Format('%s__ff_%d', [Conn.NetName, NetCounter]);
+          while Model.Nets.ContainsKey(ChildName) do
+          begin
+            Inc(NetCounter);
+            ChildName := Format('%s__ff_%d', [Conn.NetName, NetCounter]);
+          end;
+          NewNet := Model.FindOrCreateNet(ChildName);
+
+          Gate := CreateFF(FFCell, FFCellName, DataPin, OutputPin, ClockPin,
+            ClockNetName, Conn.NetName, ChildName, 0);
+          Model.Gates.Add(Gate);
+          InsertedFFs.Add(Gate, True);
+
+          // DFF reads from original net.
+          NC.Gate := Gate;
+          NC.PinName := DataPin;
+          NC.IsDriver := False;
+          Net.Connections.Add(NC);
+
+          // DFF clock.
+          NC.Gate := Gate;
+          NC.PinName := ClockPin;
+          NC.IsDriver := False;
+          if Model.Nets.ContainsKey(ClockNetName) then
+            Model.Nets[ClockNetName].Connections.Add(NC);
+
+          // DFF drives new net.
+          NC.Gate := Gate;
+          NC.PinName := OutputPin;
+          NC.IsDriver := True;
+          NewNet.Connections.Add(NC);
+
+          // Retarget G's input to the new net.
+          Conn.NetName := ChildName;
+          NC.Gate := G;
+          NC.PinName := Conn.PinName;
+          NC.IsDriver := False;
+          NewNet.Connections.Add(NC);
+
+          // Remove G's old load entry from original net.
+          for jj := Net.Connections.Count - 1 downto 0 do
+            if (Net.Connections[jj].Gate = G) and
+               SameText(Net.Connections[jj].PinName, Conn.PinName) then
+            begin
+              Net.Connections.Delete(jj);
+              Break;
+            end;
+        end;
+
+        // After DFF insertion all inputs arrive from clocked DFFs.
+        InputArrival := 0;
+      end;
+
+      // Store arrival.
+      if CellHasClock(G.Cell) then
+        Arrival.Add(G, 0)
+      else
+        Arrival.Add(G, InputArrival + Dly);
+
+      Resolved.Add(G, True);
+
+      // Enqueue any load gates that are now fully resolved.
+      for k := 0 to G.Connections.Count - 1 do
+      begin
+        C := G.Connections[k];
+        if C.Port.Direction <> pdOutput then
+          Continue;
+        if not Model.Nets.TryGetValue(C.NetName, N2) then
+          Continue;
+        for NC2 in N2.Connections do
+          if not NC2.IsDriver then
+          begin
+            LoadGate := NC2.Gate;
+            if Visited.ContainsKey(LoadGate) then
+              Continue;
+            if Worklist.IndexOf(LoadGate) >= 0 then
+              Continue;
+            if CellHasClock(LoadGate.Cell) or AllDriversReady(LoadGate) then
+              Worklist.Add(LoadGate);
+          end;
+      end;
+    end;
+
+    // ---- Drop floating (empty) nets ----
+    EmptyNets := TList<string>.Create;
+    try
+      for ChildName in Model.Nets.Keys do
+        if Model.Nets[ChildName].Connections.Count = 0 then
+          EmptyNets.Add(ChildName);
+      for i := 0 to EmptyNets.Count - 1 do
+      begin
+        Model.Nets.Remove(EmptyNets[i]);
+        j := Model.Inputs.IndexOf(EmptyNets[i]);
+        if j >= 0 then
+          Model.Inputs.Delete(j);
+        j := Model.Outputs.IndexOf(EmptyNets[i]);
+        if j >= 0 then
+          Model.Outputs.Delete(j);
+      end;
+    finally
+      EmptyNets.Free;
+    end;
+
+    // ---- Compute clock levels after breakup ----
+    Errors := TStringList.Create;
+    try
+      ComputeClockLevels(Model, Errors);
+    finally
+      Errors.Free;
+    end;
+
+    // ---- Gap-fill: insert N DFFs in series to close clock level gaps ----
     Count := Model.Gates.Count;
     for i := Count - 1 downto 0 do
     begin
@@ -768,7 +1150,8 @@ begin
         if IsClockPinName(Conn.Port.Name) then
           Continue;
 
-        Net := Model.Nets[Conn.NetName];
+        if not Model.Nets.TryGetValue(Conn.NetName, Net) then
+          Continue;
         LA := 0;
         for NC in Net.Connections do
           if NC.IsDriver then
@@ -805,7 +1188,8 @@ begin
           NC.Gate := Gate;
           NC.PinName := ClockPin;
           NC.IsDriver := False;
-          Model.Nets[ClockNetName].Connections.Add(NC);
+          if Model.Nets.ContainsKey(ClockNetName) then
+            Model.Nets[ClockNetName].Connections.Add(NC);
 
           NC.Gate := Gate;
           NC.PinName := OutputPin;
@@ -815,6 +1199,7 @@ begin
           PrevNet := NewNet;
         end;
 
+        // Retarget B's input to the chain tail.
         Conn.NetName := PrevNet.Name;
         NC.Gate := B;
         NC.PinName := Conn.PinName;
@@ -823,35 +1208,51 @@ begin
         for jj := Net.Connections.Count - 1 downto 0 do
           if (Net.Connections[jj].Gate = B) and
              SameText(Net.Connections[jj].PinName, Conn.PinName) then
+          begin
             Net.Connections.Delete(jj);
+            Break;
+          end;
       end;
     end;
 
-    // Phase 2: drop floating (empty) nets.
-    EmptyNets := TList<string>.Create;
+    // ---- Recompute clock levels after gap-fill ----
+    Errors := TStringList.Create;
     try
-      for ChildName in Model.Nets.Keys do
-        if Model.Nets[ChildName].Connections.Count = 0 then
-          EmptyNets.Add(ChildName);
-      for i := 0 to EmptyNets.Count - 1 do
-      begin
-        Model.Nets.Remove(EmptyNets[i]);
-        j := Model.Inputs.IndexOf(EmptyNets[i]);
-        if j >= 0 then
-          Model.Inputs.Delete(j);
-        j := Model.Outputs.IndexOf(EmptyNets[i]);
-        if j >= 0 then
-          Model.Outputs.Delete(j);
-      end;
+      ComputeClockLevels(Model, Errors);
     finally
-      EmptyNets.Free;
+      Errors.Free;
+    end;
+
+    // ---- Phase 4: iterative splitter merge ----
+    PathMemo := TDictionary<string, Double>.Create;
+    try
+      repeat
+        Merged := False;
+        PathMemo.Clear;
+        i := 0;
+        while (i < Model.Gates.Count) and (not Merged) do
+        begin
+          S := Model.Gates[i];
+          if IsSplitterCell(S.Cell) and (S.ClockLevel >= 0) and CanMergeDelay(S) then
+          begin
+            DoMergeDelay(S);
+            Merged := True;
+          end;
+          Inc(i);
+        end;
+      until not Merged;
+    finally
+      PathMemo.Free;
     end;
 
     Result := InsertedFFs.Count;
   finally
     InsertedFFs.Free;
-    MaxInputDelays.Free;
+    Arrival.Free;
     CellDelays.Free;
+    Resolved.Free;
+    Worklist.Free;
+    Visited.Free;
   end;
 end;
 

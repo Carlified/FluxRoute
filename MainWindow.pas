@@ -87,6 +87,7 @@ type
     FPanX, FPanY: Single;
     FDragX, FDragY: Single;
     FDragging: Boolean;
+    FThresholds: TArray<Double>;
     procedure FreeLib;
     procedure UpdateUI;
     procedure RenderNetlist(Model: TBlifModel; Errors: TStrings);
@@ -267,6 +268,7 @@ begin
   FSplittersInserted := False;
   FreePipelineRows;
   FreePipelineModels;
+  FCellDelays.Clear;
   Memo1.Lines.Clear;
   Label1.Text := 'Parsing: ' + ExtractFileName(FBlifFile);
 
@@ -514,7 +516,7 @@ var
   OutputLevels: TList<Integer>;
   OutName: string;
   OutLevel, RowGateCount: Integer;
-  LevelDelay, MaxLevelDelay, TotalArea, GateArea, RecvDelay: Double;
+  LevelDelay, MaxLevelDelay, TotalArea, GateArea: Double;
   LevelIdx, TotalLevels, k: Integer;
   StatsText: string;
   StatsR: TRectF;
@@ -562,10 +564,8 @@ begin
   Canvas.FillRect(R, 0, 0, [], 1.0);
 
   ActiveModel := FModel;
-  if (FStrategyIndex = 0) and (Length(FPipelineModels) > 0) then
-    ActiveModel := FPipelineModels[0]
-  else if (FStrategyIndex >= 1) and (Length(FPipelineModels) > 1) then
-    ActiveModel := FPipelineModels[1];
+  if (FStrategyIndex >= 0) and (Length(FPipelineModels) > FStrategyIndex) then
+    ActiveModel := FPipelineModels[FStrategyIndex];
 
   Note := '';
   if (ActiveModel <> nil) and (FFlipFlopNames.Count = 0) then
@@ -765,6 +765,7 @@ begin
 
       // Per-level worst-case path delay: longest combinational path
       // from any register/PI at level L-1 to any register at level L.
+      // Path ends at the receiver input (not inclusive of receiver delay).
       for LevelIdx := 0 to MaxRows - 1 do
       begin
         LevelDelay := 0;
@@ -772,8 +773,6 @@ begin
           for j := 0 to FPipelineRows[LevelIdx].Count - 1 do
           begin
             Gate := FPipelineRows[LevelIdx][j];
-            RecvDelay := CellDelayPs(Gate.Cell);
-            if RecvDelay < 0 then RecvDelay := 0;
             for k := 0 to Gate.Connections.Count - 1 do
             begin
               Conn := Gate.Connections[k];
@@ -783,7 +782,7 @@ begin
                 for NC in Net.Connections do
                   if NC.IsDriver then
                   begin
-                    GateArea := DelayToOutput(NC.Gate) + RecvDelay;
+                    GateArea := DelayToOutput(NC.Gate);
                     if GateArea > LevelDelay then
                       LevelDelay := GateArea;
                   end;
@@ -797,12 +796,20 @@ begin
     end;
 
     if MaxLevelDelay > 0 then
-      StatsText := Format(
-        'Levels: %d  |  Worst path/level: %.1f ps  |  Fmax: %.1f GHz  |  Throughput: %.1f GLPS  |  Area: %.1f um2',
-        [TotalLevels, MaxLevelDelay,
-         1000.0 / MaxLevelDelay,
-         1000.0 / MaxLevelDelay * TotalLevels,
-         TotalArea])
+    begin
+      if FStrategyIndex = 0 then
+        StatsText := Format(
+          'Mode: compact  |  Levels: %d  |  Worst path/level: %.1f ps  |  Fmax: %.1f GHz  |  Area: %.1f um2',
+          [TotalLevels, MaxLevelDelay,
+           1000.0 / MaxLevelDelay,
+           TotalArea])
+      else if (FStrategyIndex <= High(FThresholds)) then
+        StatsText := Format(
+          'Mode: max delay <=%.1f ps  |  Levels: %d  |  Worst path/level: %.1f ps  |  Fmax: %.1f GHz  |  Area: %.1f um2',
+          [FThresholds[FStrategyIndex], TotalLevels, MaxLevelDelay,
+           1000.0 / MaxLevelDelay,
+           TotalArea]);
+    end
     else
       StatsText := Format(
         'Levels: %d  |  Worst path/level: (no timing)  |  Area: %.1f um2',
@@ -864,15 +871,64 @@ end;
 procedure TForm1.BuildPipelineModels;
 var
   Dummy: TStringList;
-  MaxDelay, Delay: Double;
+  MaxWorstPath, MinDelay, Delay, Threshold: Double;
   Gate: TGateInstance;
+  i, k: Integer;
+  Conn: TPinConnection;
+  Net: TNet;
+  NC: TNetConnection;
+  DelayMemo: TDictionary<TGateInstance, Double>;
+  FFCell: TCell;
+  LevelDelay, GateArea: Double;
+
+  function DelayToOutput(G: TGateInstance): Double;
+  var
+    MaxIn, Dly: Double;
+    m: Integer;
+    C: TPinConnection;
+    N: TNet;
+    NC2: TNetConnection;
+  begin
+    if DelayMemo.TryGetValue(G, Result) then
+      Exit;
+    if CellHasClock(G.Cell) then
+    begin
+      Result := 0;
+      DelayMemo.Add(G, Result);
+      Exit;
+    end;
+    MaxIn := 0;
+    for m := 0 to G.Connections.Count - 1 do
+    begin
+      C := G.Connections[m];
+      if C.Port.Direction <> pdInput then
+        Continue;
+      if IsClockPinName(C.Port.Name) then
+        Continue;
+      if FPipelineModels[1].Nets.TryGetValue(C.NetName, N) then
+        for NC2 in N.Connections do
+          if NC2.IsDriver then
+          begin
+            Dly := DelayToOutput(NC2.Gate);
+            if Dly > MaxIn then
+              MaxIn := Dly;
+          end;
+    end;
+    Dly := CellDelayPs(G.Cell);
+    if Dly < 0 then
+      Dly := 0;
+    Result := MaxIn + Dly;
+    DelayMemo.Add(G, Result);
+  end;
+
 begin
   FreePipelineModels;
   if FModel = nil then
     Exit;
-  SetLength(FPipelineModels, 2);
-  FPipelineModels[0] := FModel.Clone;
-  FPipelineModels[1] := FModel.Clone;
+  SetLength(FPipelineModels, 5);
+  SetLength(FThresholds, 5);
+  for i := 0 to 4 do
+    FPipelineModels[i] := FModel.Clone;
   if (FLib <> nil) and (FFlipFlopNames.Count > 0) then
   begin
     // [0] = compact: clock-level gap-filling with merge
@@ -885,17 +941,70 @@ begin
     finally
       Dummy.Free;
     end;
+    FThresholds[0] := -1;
 
-    // [1] = maximum speed: delay-levelization; threshold = max cell delay
-    MaxDelay := 1;
+    // Compute worst combinational path delay between clocked boundaries.
+    // Path = from clocked component output, through non-clocked children,
+    // ending at next clocked component input (not inclusive of endpoint delay).
+    DelayMemo := TDictionary<TGateInstance, Double>.Create;
+    try
+      MaxWorstPath := 1;
+      for i := 0 to FPipelineModels[1].Gates.Count - 1 do
+      begin
+        Gate := FPipelineModels[1].Gates[i];
+        LevelDelay := 0;
+        for k := 0 to Gate.Connections.Count - 1 do
+        begin
+          Conn := Gate.Connections[k];
+          if Conn.Port.Direction <> pdInput then
+            Continue;
+          if IsClockPinName(Conn.Port.Name) then
+            Continue;
+          if FPipelineModels[1].Nets.TryGetValue(Conn.NetName, Net) then
+            for NC in Net.Connections do
+              if NC.IsDriver then
+              begin
+                GateArea := DelayToOutput(NC.Gate);
+                if GateArea > LevelDelay then
+                  LevelDelay := GateArea;
+              end;
+        end;
+        if LevelDelay > MaxWorstPath then
+          MaxWorstPath := LevelDelay;
+      end;
+    finally
+      DelayMemo.Free;
+    end;
+
+    // Rightmost position: worst single unclocked cell delay.
+    MaxWorstPath := Max(1, MaxWorstPath);
+    MinDelay := 1;
     for Gate in FPipelineModels[1].Gates do
     begin
+      if CellHasClock(Gate.Cell) then
+        Continue;
       Delay := CellDelayPs(Gate.Cell);
-      if (Delay > 0) and (Delay > MaxDelay) then
-        MaxDelay := Delay;
+      if (Delay > 0) and (Delay > MinDelay) then
+        MinDelay := Delay;
     end;
-    InsertDelayLevelizedFFs(FPipelineModels[1], FLib, FFlipFlopNames[0], MaxDelay);
-    PadOutputFFs(FPipelineModels[1], FLib, FFlipFlopNames[0]);
+
+    // [1]..[4]: thresholds interpolate from MaxWorstPath down to MinDelay.
+    Dummy := TStringList.Create;
+    try
+      for i := 1 to 4 do
+      begin
+        if MaxWorstPath > MinDelay then
+          Threshold := MaxWorstPath - (MaxWorstPath - MinDelay) * (i - 1) / 3
+        else
+          Threshold := MinDelay;
+        FThresholds[i] := Threshold;
+        InsertDelayLevelizedFFs(FPipelineModels[i], FLib, FFlipFlopNames[0], Threshold);
+        PadOutputFFs(FPipelineModels[i], FLib, FFlipFlopNames[0]);
+        ComputeClockLevels(FPipelineModels[i], Dummy);
+      end;
+    finally
+      Dummy.Free;
+    end;
   end;
 end;
 
