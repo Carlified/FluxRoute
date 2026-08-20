@@ -501,7 +501,7 @@ end;
 procedure TForm1.PaintPipeline(Sender: TObject; Canvas: TCanvas);
 var
   R, NoteR: TRectF;
-  i, j: Integer;
+  i, j, k: Integer;
   Gate, Src: TGateInstance;
   MaxRows, MaxOutputLevel: Integer;
   Square, HGap, VGap, Left, X, Y: Single;
@@ -518,6 +518,7 @@ var
   InputNets: TStringList;
   OutputNets: TStringList;
   OutputLevels: TList<Integer>;
+  OutColCount: TDictionary<Integer, Integer>;
   OutName: string;
   OutLevel: Integer;
   LevelDelay, MaxLevelDelay, TotalArea, GateArea: Double;
@@ -526,6 +527,7 @@ var
   StatsR: TRectF;
   DelayMemo: TDictionary<TGateInstance, Double>;
   GateGridPos: TDictionary<TGateInstance, TPoint>;
+  InputCol: TDictionary<string, Integer>;
   LevelMaxDepth, LevelYOffset: TList<Integer>;
   Placed: TDictionary<TGateInstance, Boolean>;
   LevelCols: TList<Integer>;
@@ -574,19 +576,23 @@ var
     DelayMemo.Add(G, Result);
   end;
 
-  procedure DFSLayout(Gate: TGateInstance; Depth: Integer);
+  procedure DFSLayout(Gate: TGateInstance; Depth, BaseCol: Integer);
   var
     C: TPinConnection;
     N: TNet;
     NCC: TNetConnection;
+    ParentCol: Integer;
   begin
     if Placed.ContainsKey(Gate) then
       Exit;
     while LevelCols.Count <= Depth do
       LevelCols.Add(0);
-    GateGridPos.Add(Gate, TPoint.Create(LevelCols[Depth], Depth));
+    if LevelCols[Depth] < BaseCol then
+      LevelCols[Depth] := BaseCol;
+    ParentCol := LevelCols[Depth];
+    GateGridPos.Add(Gate, TPoint.Create(ParentCol, Depth));
     Placed.Add(Gate, True);
-    LevelCols[Depth] := LevelCols[Depth] + 1;
+    LevelCols[Depth] := ParentCol + 1;
     for C in Gate.Connections do
     begin
       if C.Port.Direction <> pdOutput then
@@ -595,11 +601,30 @@ var
         Continue;
       for NCC in N.Connections do
         if (not NCC.IsDriver) and (NCC.Gate.ClockLevel = Gate.ClockLevel) then
-          DFSLayout(NCC.Gate, Depth + 1);
+          DFSLayout(NCC.Gate, Depth + 1, ParentCol);
     end;
     if Depth + 1 < LevelCols.Count then
       if LevelCols[Depth] < LevelCols[Depth + 1] then
         LevelCols[Depth] := LevelCols[Depth + 1];
+  end;
+
+  // True if G has a non-clock data input on the given net.
+  function GateUsesNet(G: TGateInstance; const ANetName: string): Boolean;
+  var
+    kk: Integer;
+    CC: TPinConnection;
+  begin
+    Result := False;
+    for kk := 0 to G.Connections.Count - 1 do
+    begin
+      CC := G.Connections[kk];
+      if CC.Port.Direction <> pdInput then
+        Continue;
+      if IsClockPinName(CC.Port.Name) then
+        Continue;
+      if SameText(CC.NetName, ANetName) then
+        Exit(True);
+    end;
   end;
 
 begin
@@ -677,6 +702,7 @@ begin
       MaxRows := 1;
 
     GateGridPos := TDictionary<TGateInstance, TPoint>.Create;
+    InputCol := TDictionary<string, Integer>.Create;
     LevelMaxDepth := TList<Integer>.Create;
     LevelYOffset := TList<Integer>.Create;
     Placed := TDictionary<TGateInstance, Boolean>.Create;
@@ -690,40 +716,96 @@ begin
           LevelCols.Add(0);
           Placed.Clear;
 
-          // Find root gates (no parents within this level).
-          for j := 0 to FPipelineRows[i].Count - 1 do
+          // Level 0: primary inputs are the roots in the top row. Each input
+          // claims a column from the row-0 counter and its gates hang below;
+          // the counter then pushes the next input right, exactly like the
+          // general tree layout used by every other level.
+          if (i = 0) and (InputNets.Count > 0) then
           begin
-            Gate := FPipelineRows[i][j];
-            if Placed.ContainsKey(Gate) then
-              Continue;
-            HasParent := False;
-            for Conn in Gate.Connections do
+            for j := 0 to InputNets.Count - 1 do
             begin
-              if Conn.Port.Direction <> pdInput then
-                Continue;
-              if IsClockPinName(Conn.Port.Name) then
-                Continue;
-              if not ActiveModel.Nets.TryGetValue(Conn.NetName, Net) then
-                Continue;
-              for NC in Net.Connections do
-                if NC.IsDriver and (NC.Gate.ClockLevel = i) then
+              GridCol := LevelCols[0];
+              InputCol.AddOrSetValue(InputNets[j], GridCol);
+              LevelCols[0] := LevelCols[0] + 1;
+              for k := 0 to FPipelineRows[i].Count - 1 do
+              begin
+                Gate := FPipelineRows[i][k];
+                if Placed.ContainsKey(Gate) then
+                  Continue;
+                if not GateUsesNet(Gate, InputNets[j]) then
+                  Continue;
+                HasParent := False;
+                for Conn in Gate.Connections do
                 begin
-                  HasParent := True;
-                  Break;
+                  if Conn.Port.Direction <> pdInput then
+                    Continue;
+                  if IsClockPinName(Conn.Port.Name) then
+                    Continue;
+                  if not ActiveModel.Nets.TryGetValue(Conn.NetName, Net) then
+                    Continue;
+                  for NC in Net.Connections do
+                    if NC.IsDriver and (NC.Gate.ClockLevel = i) then
+                    begin
+                      HasParent := True;
+                      Break;
+                    end;
+                  if HasParent then
+                    Break;
                 end;
-              if HasParent then
-                Break;
+                if HasParent then
+                  Continue;
+                DFSLayout(Gate, 1, GridCol);
+              end;
+              // Push the input row right to cover the subtree just placed,
+              // mirroring the push-up the tree layout applies to its roots.
+              if LevelCols.Count > 1 then
+                if LevelCols[0] < LevelCols[1] then
+                  LevelCols[0] := LevelCols[1];
             end;
-            if not HasParent then
-              DFSLayout(Gate, 0);
-          end;
-
-          // Place any remaining gates (cycles or disconnected).
-          for j := 0 to FPipelineRows[i].Count - 1 do
+            // Remaining level-0 gates (cycles or disconnected).
+            for k := 0 to FPipelineRows[i].Count - 1 do
+            begin
+              Gate := FPipelineRows[i][k];
+              if not Placed.ContainsKey(Gate) then
+                DFSLayout(Gate, 1, LevelCols[0]);
+            end;
+          end
+          else
           begin
-            Gate := FPipelineRows[i][j];
-            if not Placed.ContainsKey(Gate) then
-              DFSLayout(Gate, 0);
+            // Other levels: ordinary roots at the level's top row.
+            for j := 0 to FPipelineRows[i].Count - 1 do
+            begin
+              Gate := FPipelineRows[i][j];
+              if Placed.ContainsKey(Gate) then
+                Continue;
+              HasParent := False;
+              for Conn in Gate.Connections do
+              begin
+                if Conn.Port.Direction <> pdInput then
+                  Continue;
+                if IsClockPinName(Conn.Port.Name) then
+                  Continue;
+                if not ActiveModel.Nets.TryGetValue(Conn.NetName, Net) then
+                  Continue;
+                for NC in Net.Connections do
+                  if NC.IsDriver and (NC.Gate.ClockLevel = i) then
+                  begin
+                    HasParent := True;
+                    Break;
+                  end;
+                if HasParent then
+                  Break;
+              end;
+              if not HasParent then
+                DFSLayout(Gate, 0, 0);
+            end;
+            // Remaining gates (cycles or disconnected).
+            for j := 0 to FPipelineRows[i].Count - 1 do
+            begin
+              Gate := FPipelineRows[i][j];
+              if not Placed.ContainsKey(Gate) then
+                DFSLayout(Gate, 0, 0);
+            end;
           end;
 
           // Find max depth for this level.
@@ -760,16 +842,19 @@ begin
             IntToStr(i), False, 1.0, [], TTextAlign.Trailing, TTextAlign.Center);
         end;
 
-        // Draw primary inputs at level 0, row 0.
-        X := FPanX + Left;
+        // Draw primary inputs at level 0, at the columns the layout assigned
+        // them (pushed right by their subtrees, like the other roots).
         Y := FPanY + 4 * FZoom;
         for j := 0 to InputNets.Count - 1 do
         begin
+          GridCol := 0;
+          if not InputCol.TryGetValue(InputNets[j], GridCol) then
+            GridCol := j;
+          X := FPanX + Left + GridCol * (Square + HGap);
           Canvas.Fill.Color := $FFFFEB3B;
           Canvas.FillRect(TRectF.Create(X, Y, X + Square, Y + Square), 0, 0, [], 1.0);
           InputPositions.AddOrSetValue(InputNets[j],
             TPointF.Create(X + Square * 0.5, Y + Square * 0.5));
-          X := X + Square + HGap;
         end;
 
         // Draw gates at their tree positions.
@@ -782,8 +867,6 @@ begin
             Continue;
           GridCol := GateGridPos[Gate].X;
           GridRow := GateGridPos[Gate].Y;
-          if (Gate.ClockLevel = 0) and (InputNets.Count > 0) then
-            Inc(GridCol, InputNets.Count);
           X := FPanX + Left + GridCol * (Square + HGap);
           if Gate.ClockLevel < LevelYOffset.Count then
             Y := FPanY + 4 * FZoom + (LevelYOffset[Gate.ClockLevel] + GridRow) * (Square + VGap)
@@ -803,26 +886,35 @@ begin
             TPointF.Create(X + Square * 0.5, Y + Square * 0.5));
         end;
 
-        // Draw primary outputs at their driver's level + 1.
-        for j := 0 to OutputLevels.Count - 1 do
-        begin
-          OutLevel := OutputLevels[j];
-          MaxCol := 0;
-          for GatePair in GateGridPos do
-            if GatePair.Key.ClockLevel = OutLevel then
-            begin
-              GridCol := GatePair.Value.X;
-              if (OutLevel = 0) and (InputNets.Count > 0) then
-                Inc(GridCol, InputNets.Count);
-              if GridCol + 1 > MaxCol then
-                MaxCol := GridCol + 1;
-            end;
-          X := FPanX + Left + MaxCol * (Square + HGap);
-          Y := FPanY + 4 * FZoom + LevelYOffset[OutLevel] * (Square + VGap);
-          Canvas.Fill.Color := $FF9C27B0;
-          Canvas.FillRect(TRectF.Create(X, Y, X + Square, Y + Square), 0, 0, [], 1.0);
-          OutputPositions.AddOrSetValue(OutputNets[j],
-            TPointF.Create(X + Square * 0.5, Y + Square * 0.5));
+        // Draw primary outputs at their driver's level + 1, each in its own
+        // column to the right of that level's gates.
+        OutColCount := TDictionary<Integer, Integer>.Create;
+        try
+          for j := 0 to OutputLevels.Count - 1 do
+          begin
+            OutLevel := OutputLevels[j];
+            MaxCol := 0;
+            for GatePair in GateGridPos do
+              if GatePair.Key.ClockLevel = OutLevel then
+              begin
+                GridCol := GatePair.Value.X;
+                if GridCol + 1 > MaxCol then
+                  MaxCol := GridCol + 1;
+              end;
+            if OutColCount.TryGetValue(OutLevel, i) then
+              GridCol := MaxCol + i
+            else
+              GridCol := MaxCol;
+            OutColCount.AddOrSetValue(OutLevel, GridCol - MaxCol + 1);
+            X := FPanX + Left + GridCol * (Square + HGap);
+            Y := FPanY + 4 * FZoom + LevelYOffset[OutLevel] * (Square + VGap);
+            Canvas.Fill.Color := $FF9C27B0;
+            Canvas.FillRect(TRectF.Create(X, Y, X + Square, Y + Square), 0, 0, [], 1.0);
+            OutputPositions.AddOrSetValue(OutputNets[j],
+              TPointF.Create(X + Square * 0.5, Y + Square * 0.5));
+          end;
+        finally
+          OutColCount.Free;
         end;
 
       finally
@@ -831,6 +923,7 @@ begin
 
     finally
       GateGridPos.Free;
+      InputCol.Free;
       LevelMaxDepth.Free;
       LevelYOffset.Free;
       Placed.Free;
@@ -1029,6 +1122,7 @@ procedure TForm1.BuildPipelineModels;
 var
   Dummy: TStringList;
   MaxWorstPath, MinDelay, Delay, Threshold: Double;
+  MaxClockedDelay, MaxUnclockedDelay, FFDelay: Double;
   Gate: TGateInstance;
   i, k: Integer;
   Conn: TPinConnection;
@@ -1138,17 +1232,40 @@ begin
       DelayMemo.Free;
     end;
 
-    // Rightmost position: worst single unclocked cell delay.
+    // Rightmost position: fastest possible circuit, i.e. a flip-flop after
+    // every component. A clocked component forms a level by itself (its own
+    // clock-to-output delay), while a level holding an unclocked component
+    // is that component plus a flip-flop. The slowest of either is the
+    // fastest delay the pipelined circuit can reach.
     MaxWorstPath := Max(1, MaxWorstPath);
-    MinDelay := 1;
+    MaxClockedDelay := 0;
+    MaxUnclockedDelay := 1;
     for Gate in FPipelineModels[1].Gates do
     begin
-      if CellHasClock(Gate.Cell) then
-        Continue;
       Delay := CellDelayPs(Gate.Cell);
-      if (Delay > 0) and (Delay > MinDelay) then
-        MinDelay := Delay;
+      if Delay <= 0 then
+        Continue;
+      if CellHasClock(Gate.Cell) then
+      begin
+        if Delay > MaxClockedDelay then
+          MaxClockedDelay := Delay;
+      end
+      else if Delay > MaxUnclockedDelay then
+        MaxUnclockedDelay := Delay;
     end;
+    FFCell := FLib.FindCell(FFlipFlopNames[0]);
+    FFDelay := 0;
+    if FFCell <> nil then
+    begin
+      FFDelay := CellDelayPs(FFCell);
+      if FFDelay < 0 then
+        FFDelay := 0;
+    end;
+    MinDelay := MaxClockedDelay;
+    if MaxUnclockedDelay + FFDelay > MinDelay then
+      MinDelay := MaxUnclockedDelay + FFDelay;
+    if MinDelay < 1 then
+      MinDelay := 1;
 
     // [1]..[4]: thresholds interpolate from MaxWorstPath down to MinDelay.
     Dummy := TStringList.Create;

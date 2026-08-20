@@ -48,10 +48,13 @@ function PadOutputFFs(Model: TBlifModel; Lib: TLibrary;
 
 // Delay-levelization flip-flop insertion for maximum-speed pipelining.
 // Walks gates in topological order, computing the cumulative delay from
-// the nearest clocked boundary.  When a gate's cumulative delay exceeds
-// ThresholdPs, DFFs are inserted on every non-clocked data input of that
-// gate to break the long path.  Clocked gates are pipeline boundaries
-// (their output arrival is 0) but their inputs are still checked.
+// the nearest clocked boundary.  The driving clocked gate's own
+// clock-to-output delay counts as the start of each path, so the counted
+// delay is (clocked gate delay) + (non-clocked chain).  When a gate's
+// cumulative delay exceeds ThresholdPs, DFFs are inserted on every
+// non-clocked data input of that gate to break the long path.  Clocked
+// gates are pipeline boundaries (their output arrival is their own delay)
+// but their inputs are still checked.
 // Caller should re-run ComputeClockLevels afterwards to refresh levels.
 function InsertDelayLevelizedFFs(Model: TBlifModel; Lib: TLibrary;
   const FFCellName: string; ThresholdPs: Double): Integer;
@@ -694,7 +697,7 @@ var
       for NNC in NN2.Connections do
         if NNC.IsDriver then
         begin
-          // Clocked drivers are always ready (arrival = 0).
+          // Clocked drivers are always ready.
           if CellHasClock(NNC.Gate.Cell) then
             Continue;
           // PI-driven nets have no gate driver — always ready.
@@ -789,7 +792,8 @@ var
         if FfOutPath > MaxPath then
           MaxPath := FfOutPath;
       end;
-    Result := (OutCount >= 2) and (SplitterDelay + MaxPath <= ThresholdPs);
+    Result := (OutCount >= 2) and
+      (CellDelayOfLocal(FFCell) + SplitterDelay + MaxPath <= ThresholdPs);
   end;
 
   procedure DoMergeDelay(S: TGateInstance);
@@ -971,7 +975,7 @@ begin
           if NC2.IsDriver then
           begin
             if CellHasClock(NC2.Gate.Cell) then
-              ArrTime := 0
+              ArrTime := CellDelayOfLocal(NC2.Gate.Cell)
             else if not Arrival.TryGetValue(NC2.Gate, ArrTime) then
               ArrTime := 0;
             if ArrTime > InputArrival then
@@ -981,8 +985,9 @@ begin
 
       Dly := CellDelayOfLocal(G.Cell);
 
-      // Path delay: from last clocked boundary through non-clocked children,
-      // ending at this gate's input (not inclusive of this gate's own delay).
+      // Path delay: from the last clocked boundary (counting that gate's own
+      // clock-to-output delay) through non-clocked children, ending at this
+      // gate's input (not inclusive of this gate's own delay).
       if CellHasClock(G.Cell) then
         PathDelay := InputArrival
       else
@@ -1002,7 +1007,7 @@ begin
           if not Model.Nets.TryGetValue(Conn.NetName, Net) then
             Continue;
 
-          // Find the driver; skip if it is clocked or absent (PI).
+          // Find the driver; skip only if absent (primary input).
           NC2 := Default(TNetConnection);
           for NC in Net.Connections do
             if NC.IsDriver then
@@ -1011,8 +1016,6 @@ begin
               Break;
             end;
           if NC2.Gate = nil then
-            Continue;
-          if CellHasClock(NC2.Gate.Cell) then
             Continue;
 
           // Create DFF: original net -> DFF -> new net.
@@ -1066,13 +1069,35 @@ begin
             end;
         end;
 
-        // After DFF insertion all inputs arrive from clocked DFFs.
+        // After DFF insertion the long paths restart at the new clocked
+        // DFFs, so recompute the arrival from the current inputs.
         InputArrival := 0;
+        for k := 0 to G.Connections.Count - 1 do
+        begin
+          C := G.Connections[k];
+          if C.Port.Direction <> pdInput then
+            Continue;
+          if IsClockPinName(C.Port.Name) then
+            Continue;
+          if not Model.Nets.TryGetValue(C.NetName, N2) then
+            Continue;
+          for NC2 in N2.Connections do
+            if NC2.IsDriver then
+            begin
+              if CellHasClock(NC2.Gate.Cell) then
+                ArrTime := CellDelayOfLocal(NC2.Gate.Cell)
+              else if not Arrival.TryGetValue(NC2.Gate, ArrTime) then
+                ArrTime := 0;
+              if ArrTime > InputArrival then
+                InputArrival := ArrTime;
+            end;
+        end;
       end;
 
-      // Store arrival.
+      // Store arrival. Clocked gates start the next path with their own
+      // clock-to-output delay.
       if CellHasClock(G.Cell) then
-        Arrival.Add(G, 0)
+        Arrival.Add(G, CellDelayOfLocal(G.Cell))
       else
         Arrival.Add(G, InputArrival + Dly);
 
