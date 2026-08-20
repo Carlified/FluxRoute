@@ -81,15 +81,18 @@ type
     FFlipFlopNames: TStringList;
     FFlipFlopCandidates: TList<TCell>;
     FPipelineRows: TArray<TList<TGateInstance>>;
-    FPipelineModels: TArray<TBlifModel>;
-    FStrategyIndex: Integer;
+    FPipelineModel: TBlifModel;
+    FSliderPos: Integer;
     FSliderUpdating: Boolean;
+    FSliderTimer: TTimer;
+    FMaxWorstPath: Double;
+    FMinDelay: Double;
+    FThreshold: Double;
     FSplittersInserted: Boolean;
     FPanX, FPanY: Single;
     FDragX, FDragY: Single;
     FDragging: Boolean;
     FZoom: Single;
-    FThresholds: TArray<Double>;
     procedure FreeLib;
     procedure UpdateUI;
     procedure RenderNetlist(Model: TBlifModel; Errors: TStrings);
@@ -103,8 +106,9 @@ type
     procedure FreePipelineRows;
     procedure BuildPipelineRows(const AModel: TBlifModel);
     procedure PaintPipeline(Sender: TObject; Canvas: TCanvas);
-    procedure FreePipelineModels;
-    procedure BuildPipelineModels;
+    procedure FreePipelineModel;
+    procedure BuildPipelineModel;
+    procedure SliderTimerTimer(Sender: TObject);
   public
     { Public declarations }
   end;
@@ -155,7 +159,11 @@ begin
   OnMouseWheel := FormMouseWheel;
   FZoom := 1.0;
   TabControl1.OnChange := TabControl1Change;
-  FStrategyIndex := 0;
+  FSliderPos := 0;
+  FSliderTimer := TTimer.Create(Self);
+  FSliderTimer.Interval := 200;
+  FSliderTimer.Enabled := False;
+  FSliderTimer.OnTimer := SliderTimerTimer;
   UpdateUI;
 end;
 
@@ -166,8 +174,9 @@ begin
   FCellDelays.Free;
   FFlipFlopNames.Free;
   FFlipFlopCandidates.Free;
+  FSliderTimer.Free;
   FreePipelineRows;
-  FreePipelineModels;
+  FreePipelineModel;
   FreeLib;
 end;
 
@@ -185,7 +194,7 @@ begin
   FreeLib; // a new LEF file invalidates the previously parsed library
   FSplittersInserted := False;
   FreePipelineRows;
-  FreePipelineModels;
+  FreePipelineModel;
   ListBox1.Clear;
   Memo1.Lines.Clear;
   FSplitterNames.Clear;
@@ -271,7 +280,7 @@ begin
   FModel := nil;
   FSplittersInserted := False;
   FreePipelineRows;
-  FreePipelineModels;
+  FreePipelineModel;
   FCellDelays.Clear;
   Memo1.Lines.Clear;
   Label1.Text := 'Parsing: ' + ExtractFileName(FBlifFile);
@@ -633,8 +642,8 @@ begin
   Canvas.FillRect(R, 0, 0, [], 1.0);
 
   ActiveModel := FModel;
-  if (FStrategyIndex >= 0) and (Length(FPipelineModels) > FStrategyIndex) then
-    ActiveModel := FPipelineModels[FStrategyIndex];
+  if FPipelineModel <> nil then
+    ActiveModel := FPipelineModel;
 
   Note := '';
   if (ActiveModel <> nil) and (FFlipFlopNames.Count = 0) then
@@ -1017,16 +1026,16 @@ begin
 
     if MaxLevelDelay > 0 then
     begin
-      if FStrategyIndex = 0 then
+      if FSliderPos = 0 then
         StatsText := Format(
           'Mode: compact  |  Levels: %d  |  Worst path/level: %.1f ps  |  Fmax: %.1f GHz  |  Area: %.1f um2',
           [TotalLevels, MaxLevelDelay,
            1000.0 / MaxLevelDelay,
            TotalArea])
-      else if (FStrategyIndex <= High(FThresholds)) then
+      else
         StatsText := Format(
           'Mode: max delay <=%.1f ps  |  Levels: %d  |  Worst path/level: %.1f ps  |  Fmax: %.1f GHz  |  Area: %.1f um2',
-          [FThresholds[FStrategyIndex], TotalLevels, MaxLevelDelay,
+          [FThreshold, TotalLevels, MaxLevelDelay,
            1000.0 / MaxLevelDelay,
            TotalArea]);
     end
@@ -1109,20 +1118,18 @@ begin
   PaintBox1.Repaint;
 end;
 
-procedure TForm1.FreePipelineModels;
-var
-  i: Integer;
+procedure TForm1.FreePipelineModel;
 begin
-  for i := 0 to High(FPipelineModels) do
-    FPipelineModels[i].Free;
-  FPipelineModels := nil;
+  FPipelineModel.Free;
+  FPipelineModel := nil;
 end;
 
-procedure TForm1.BuildPipelineModels;
+procedure TForm1.BuildPipelineModel;
 var
+  PM: TBlifModel;
   Dummy: TStringList;
-  MaxWorstPath, MinDelay, Delay, Threshold: Double;
   MaxClockedDelay, MaxUnclockedDelay, FFDelay: Double;
+  Delay: Double;
   Gate: TGateInstance;
   i, k: Integer;
   Conn: TPinConnection;
@@ -1156,11 +1163,9 @@ var
     for m := 0 to G.Connections.Count - 1 do
     begin
       C := G.Connections[m];
-      if C.Port.Direction <> pdInput then
-        Continue;
-      if IsClockPinName(C.Port.Name) then
-        Continue;
-      if FPipelineModels[1].Nets.TryGetValue(C.NetName, N) then
+      if C.Port.Direction <> pdInput then Continue;
+      if IsClockPinName(C.Port.Name) then Continue;
+      if PM.Nets.TryGetValue(C.NetName, N) then
         for NC2 in N.Connections do
           if NC2.IsDriver then
           begin
@@ -1170,120 +1175,125 @@ var
           end;
     end;
     Dly := CellDelayPs(G.Cell);
-    if Dly < 0 then
-      Dly := 0;
+    if Dly < 0 then Dly := 0;
     Result := MaxIn + Dly;
     DelayMemo.Add(G, Result);
   end;
 
 begin
-  FreePipelineModels;
+  FreePipelineModel;
+  FThreshold := 0;
   if FModel = nil then
     Exit;
-  SetLength(FPipelineModels, 5);
-  SetLength(FThresholds, 5);
-  for i := 0 to 4 do
-    FPipelineModels[i] := FModel.Clone;
-  if (FLib <> nil) and (FFlipFlopNames.Count > 0) then
-  begin
-    // [0] = compact: clock-level gap-filling with merge
-    InsertCompactFlipFlops(FPipelineModels[0], FLib, FFlipFlopNames[0]);
-    Dummy := TStringList.Create;
-    try
-      ComputeClockLevels(FPipelineModels[0], Dummy);
-      PadOutputFFs(FPipelineModels[0], FLib, FFlipFlopNames[0]);
-      ComputeClockLevels(FPipelineModels[0], Dummy);
-    finally
-      Dummy.Free;
-    end;
-    FThresholds[0] := -1;
-
-    // Compute worst combinational path delay between clocked boundaries.
-    // Path = from a clocked component (its clock-to-output delay counts),
-    // through non-clocked children, ending at the next clocked component
-    // input (the endpoint's delay is not counted).
-    DelayMemo := TDictionary<TGateInstance, Double>.Create;
-    try
-      MaxWorstPath := 1;
-      for i := 0 to FPipelineModels[1].Gates.Count - 1 do
-      begin
-        Gate := FPipelineModels[1].Gates[i];
-        LevelDelay := 0;
-        for k := 0 to Gate.Connections.Count - 1 do
+  PM := FModel.Clone;
+  try
+    if (FLib <> nil) and (FFlipFlopNames.Count > 0) then
+    begin
+      // Worst combinational path between clocked boundaries on the pristine
+      // clone (before any insertion).
+      DelayMemo := TDictionary<TGateInstance, Double>.Create;
+      try
+        FMaxWorstPath := 1;
+        for i := 0 to PM.Gates.Count - 1 do
         begin
-          Conn := Gate.Connections[k];
-          if Conn.Port.Direction <> pdInput then
-            Continue;
-          if IsClockPinName(Conn.Port.Name) then
-            Continue;
-          if FPipelineModels[1].Nets.TryGetValue(Conn.NetName, Net) then
-            for NC in Net.Connections do
-              if NC.IsDriver then
-              begin
-                GateArea := DelayToOutput(NC.Gate);
-                if GateArea > LevelDelay then
-                  LevelDelay := GateArea;
-              end;
+          Gate := PM.Gates[i];
+          LevelDelay := 0;
+          for k := 0 to Gate.Connections.Count - 1 do
+          begin
+            Conn := Gate.Connections[k];
+            if Conn.Port.Direction <> pdInput then Continue;
+            if IsClockPinName(Conn.Port.Name) then Continue;
+            if PM.Nets.TryGetValue(Conn.NetName, Net) then
+              for NC in Net.Connections do
+                if NC.IsDriver then
+                begin
+                  GateArea := DelayToOutput(NC.Gate);
+                  if GateArea > LevelDelay then
+                    LevelDelay := GateArea;
+                end;
+          end;
+          if LevelDelay > FMaxWorstPath then
+            FMaxWorstPath := LevelDelay;
         end;
-        if LevelDelay > MaxWorstPath then
-          MaxWorstPath := LevelDelay;
+      finally
+        DelayMemo.Free;
       end;
-    finally
-      DelayMemo.Free;
-    end;
 
-    // Rightmost position: fastest possible circuit, i.e. a flip-flop after
-    // every component. A clocked component forms a level by itself (its own
-    // clock-to-output delay), while a level holding an unclocked component
-    // is that component plus a flip-flop. The slowest of either is the
-    // fastest delay the pipelined circuit can reach.
-    MaxWorstPath := Max(1, MaxWorstPath);
-    MaxClockedDelay := 0;
-    MaxUnclockedDelay := 1;
-    for Gate in FPipelineModels[1].Gates do
-    begin
-      Delay := CellDelayPs(Gate.Cell);
-      if Delay <= 0 then
-        Continue;
-      if CellHasClock(Gate.Cell) then
+      // Fastest possible circuit: the slower of the slowest clocked
+      // component (its own level) or the slowest unclocked component plus
+      // a flip-flop.
+      FMaxWorstPath := Max(1, FMaxWorstPath);
+      MaxClockedDelay := 0;
+      MaxUnclockedDelay := 1;
+      for Gate in PM.Gates do
       begin
-        if Delay > MaxClockedDelay then
-          MaxClockedDelay := Delay;
-      end
-      else if Delay > MaxUnclockedDelay then
-        MaxUnclockedDelay := Delay;
-    end;
-    FFCell := FLib.FindCell(FFlipFlopNames[0]);
-    FFDelay := 0;
-    if FFCell <> nil then
-    begin
-      FFDelay := CellDelayPs(FFCell);
-      if FFDelay < 0 then
-        FFDelay := 0;
-    end;
-    MinDelay := MaxClockedDelay;
-    if MaxUnclockedDelay + FFDelay > MinDelay then
-      MinDelay := MaxUnclockedDelay + FFDelay;
-    if MinDelay < 1 then
-      MinDelay := 1;
+        Delay := CellDelayPs(Gate.Cell);
+        if Delay <= 0 then Continue;
+        if CellHasClock(Gate.Cell) then
+        begin
+          if Delay > MaxClockedDelay then
+            MaxClockedDelay := Delay;
+        end
+        else if Delay > MaxUnclockedDelay then
+          MaxUnclockedDelay := Delay;
+      end;
+      FFCell := FLib.FindCell(FFlipFlopNames[0]);
+      FFDelay := 0;
+      if FFCell <> nil then
+      begin
+        FFDelay := CellDelayPs(FFCell);
+        if FFDelay < 0 then
+          FFDelay := 0;
+      end;
+      FMinDelay := MaxClockedDelay;
+      if MaxUnclockedDelay + FFDelay > FMinDelay then
+        FMinDelay := MaxUnclockedDelay + FFDelay;
+      if FMinDelay < 1 then
+        FMinDelay := 1;
 
-    // [1]..[4]: thresholds interpolate from MaxWorstPath down to MinDelay.
-    Dummy := TStringList.Create;
-    try
-      for i := 1 to 4 do
-      begin
-        if MaxWorstPath > MinDelay then
-          Threshold := MaxWorstPath - (MaxWorstPath - MinDelay) * (i - 1) / 3
+      Dummy := TStringList.Create;
+      try
+        if FSliderPos = 0 then
+        begin
+          // Compact mode at the far-left slider position.
+          InsertCompactFlipFlops(PM, FLib, FFlipFlopNames[0]);
+          ComputeClockLevels(PM, Dummy);
+          PadOutputFFs(PM, FLib, FFlipFlopNames[0]);
+          ComputeClockLevels(PM, Dummy);
+        end
         else
-          Threshold := MinDelay;
-        FThresholds[i] := Threshold;
-        InsertDelayLevelizedFFs(FPipelineModels[i], FLib, FFlipFlopNames[0], Threshold);
-        PadOutputFFs(FPipelineModels[i], FLib, FFlipFlopNames[0]);
-        ComputeClockLevels(FPipelineModels[i], Dummy);
+        begin
+          // Delay-levelized: the threshold interpolates from the worst path
+          // down to the fastest possible single level as the slider moves
+          // right.
+          if FMaxWorstPath > FMinDelay then
+            FThreshold := FMaxWorstPath - (FMaxWorstPath - FMinDelay) * (FSliderPos / 100)
+          else
+            FThreshold := FMinDelay;
+          InsertDelayLevelizedFFs(PM, FLib, FFlipFlopNames[0], FThreshold);
+          PadOutputFFs(PM, FLib, FFlipFlopNames[0]);
+          ComputeClockLevels(PM, Dummy);
+        end;
+      finally
+        Dummy.Free;
       end;
-    finally
-      Dummy.Free;
+    end
+    else
+    begin
+      // No flip-flop selected: keep the plain clone, just label the levels.
+      FMaxWorstPath := 1;
+      FMinDelay := 1;
+      Dummy := TStringList.Create;
+      try
+        ComputeClockLevels(PM, Dummy);
+      finally
+        Dummy.Free;
+      end;
     end;
+    FPipelineModel := PM;
+    PM := nil;
+  finally
+    PM.Free;
   end;
 end;
 
@@ -1293,15 +1303,31 @@ begin
     Exit;
   FSliderUpdating := True;
   try
-    TrackBar1.Value := Round(TrackBar1.Value);
+    FSliderPos := Round(TrackBar1.Value);
+    if FSliderPos < 0 then FSliderPos := 0;
+    if FSliderPos > 100 then FSliderPos := 100;
   finally
     FSliderUpdating := False;
   end;
-  if FStrategyIndex <> Trunc(TrackBar1.Value) then
-  begin
-    FStrategyIndex := Trunc(TrackBar1.Value);
+  // Update the constraint shown live in the heuristics label without
+  // rebuilding the circuit; the build happens once the slider is released.
+  if FMaxWorstPath > FMinDelay then
+    FThreshold := FMaxWorstPath - (FMaxWorstPath - FMinDelay) * (FSliderPos / 100)
+  else
+    FThreshold := FMinDelay;
+  if TabControl1.TabIndex = 4 then
     PaintBox1.Repaint;
-  end;
+  FSliderTimer.Enabled := False;
+  FSliderTimer.Enabled := True;
+end;
+
+procedure TForm1.SliderTimerTimer(Sender: TObject);
+begin
+  FSliderTimer.Enabled := False;
+  if TabControl1.TabIndex <> 4 then
+    Exit;
+  BuildPipelineModel;
+  PaintBox1.Repaint;
 end;
 
 procedure TForm1.ListBox4DblClick(Sender: TObject);
@@ -1310,12 +1336,13 @@ var
 begin
   if (ListBox4.ItemIndex < 0) or (ListBox4.ItemIndex >= FFlipFlopCandidates.Count) then
     Exit;
+  // Insertion supports a single flip-flop type, so only the first selection
+  // is accepted; further double-clicks are ignored.
+  if FFlipFlopNames.Count >= 1 then
+    Exit;
   Cell := FFlipFlopCandidates[ListBox4.ItemIndex];
-  if FFlipFlopNames.IndexOf(Cell.Name) < 0 then
-  begin
-    FFlipFlopNames.Add(Cell.Name);
-    RefreshFlipFlopList;
-  end;
+  FFlipFlopNames.Add(Cell.Name);
+  RefreshFlipFlopList;
 end;
 
 procedure TForm1.ListBox5DblClick(Sender: TObject);
@@ -1339,7 +1366,7 @@ begin
     FPanX := 0;
     FPanY := 0;
     FZoom := 1.0;
-    BuildPipelineModels;
+    BuildPipelineModel;
     PaintBox1.Repaint;
     Dummy := TStringList.Create;
     try
@@ -1432,11 +1459,9 @@ var
   Line: string;
 begin
   DumpModel := Model;
-  if (TabControl1.TabIndex = 4) and (FStrategyIndex >= 0) and
-    (Length(FPipelineModels) > FStrategyIndex) and
-    (FPipelineModels[FStrategyIndex] <> nil) and
-    (FPipelineModels[FStrategyIndex] <> Model) then
-    DumpModel := FPipelineModels[FStrategyIndex];
+  if (TabControl1.TabIndex = 4) and (FPipelineModel <> nil) and
+    (FPipelineModel <> Model) then
+    DumpModel := FPipelineModel;
   Dump := TStringList.Create;
   try
     Dump.Add('Model: ' + DumpModel.Name);

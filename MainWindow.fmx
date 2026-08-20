@@ -136,8 +136,8 @@ object Form1: TForm1
         Size.Height = 328.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 3
-        Viewport.Width = 592.000000000000000000
-        Viewport.Height = 328.000000000000000000
+        Viewport.Width = 588.000000000000000000
+        Viewport.Height = 324.000000000000000000
       end
     end
     object TabItem3: TTabItem
@@ -339,8 +339,8 @@ object Form1: TForm1
       object TrackBar1: TTrackBar
         Align = Top
         CanParentFocus = True
-        Frequency = 1.000000000000000000
-        Max = 4.000000000000000000
+        Frequency = 0.000000000000000000
+        Max = 100.000000000000000000
         Orientation = Horizontal
         Position.Y = 20.000000000000000000
         Size.Width = 640.000000000000000000
