@@ -59,6 +59,20 @@ function PadOutputFFs(Model: TBlifModel; Lib: TLibrary;
 function InsertDelayLevelizedFFs(Model: TBlifModel; Lib: TLibrary;
   const FFCellName: string; ThresholdPs: Double): Integer;
 
+// Output alignment pre-step shared by both insertion modes. If any gate on
+// the highest clock level is not already the selected flip-flop, a FF is
+// interposed directly after each of its outputs so that all output signals
+// are clocked out on the same clock edge. Gates that are already flip-flops
+// are left untouched; returns the number of flip-flops inserted. The model's
+// ClockLevel values must be up to date on entry; the caller should re-run
+// ComputeClockLevels afterwards.
+function InsertTopLevelFFs(Model: TBlifModel; Lib: TLibrary;
+  const FFCellName: string): Integer;
+
+// Returns the name of the model's clock net (the primary input that clocked
+// cells' clock pins attach to), or '' if none can be identified.
+function ClockNetFor(Model: TBlifModel): string;
+
 implementation
 
 function IsSplitterCell(const Cell: TCell): Boolean;
@@ -612,6 +626,113 @@ begin
       OutNet.Connections.Add(NC);
 
       PrevNet := OutNet;
+    end;
+  end;
+end;
+
+function InsertTopLevelFFs(Model: TBlifModel; Lib: TLibrary;
+  const FFCellName: string): Integer;
+var
+  FFCell: TCell;
+  ClockPin, DataPin, OutputPin: string;
+  ClockNetName: string;
+  MaxTopLevel, i, j, jj, NetCounter: Integer;
+  G, Gate: TGateInstance;
+  Conn: TPinConnection;
+  Net, NewNet: TNet;
+  NC: TNetConnection;
+  ChildName: string;
+begin
+  Result := 0;
+  if (Model = nil) or (Lib = nil) or (FFCellName = '') then
+    Exit;
+  FFCell := Lib.FindCell(FFCellName);
+  if FFCell = nil then
+    Exit;
+  if not IsFlipFlopCandidate(FFCell, ClockPin, DataPin, OutputPin) then
+    Exit;
+  if (ClockPin = '') or (DataPin = '') or (OutputPin = '') then
+    Exit;
+
+  ClockNetName := ClockNetFor(Model);
+  if ClockNetName = '' then
+  begin
+    ClockNetName := 'clk';
+    if not Model.Nets.ContainsKey(ClockNetName) then
+    begin
+      Model.FindOrCreateNet(ClockNetName);
+      Model.Inputs.Add(ClockNetName);
+    end;
+  end;
+
+  // Highest clock level in the circuit.
+  MaxTopLevel := 0;
+  for i := 0 to Model.Gates.Count - 1 do
+    if Model.Gates[i].ClockLevel > MaxTopLevel then
+      MaxTopLevel := Model.Gates[i].ClockLevel;
+
+  NetCounter := 0;
+  for i := 0 to Model.Gates.Count - 1 do
+  begin
+    G := Model.Gates[i];
+    if G.ClockLevel <> MaxTopLevel then
+      Continue;
+    // Only an actual flip-flop counts as clocking the signal out;
+    // ordinary clocked logic gates (e.g. NOTT/XORT) still need one.
+    if G.Cell = FFCell then
+      Continue;
+    for j := 0 to G.Connections.Count - 1 do
+    begin
+      Conn := G.Connections[j];
+      if Conn.Port.Direction <> pdOutput then
+        Continue;
+      if not Model.Nets.TryGetValue(Conn.NetName, Net) then
+        Continue;
+
+      Inc(NetCounter);
+      ChildName := Format('%s__top_ff_%d', [Net.Name, NetCounter]);
+      while Model.Nets.ContainsKey(ChildName) do
+      begin
+        Inc(NetCounter);
+        ChildName := Format('%s__top_ff_%d', [Net.Name, NetCounter]);
+      end;
+      NewNet := Model.FindOrCreateNet(ChildName);
+
+      // Retarget the gate's driver onto the entry net.
+      for jj := Net.Connections.Count - 1 downto 0 do
+        if (Net.Connections[jj].Gate = G) and Net.Connections[jj].IsDriver then
+        begin
+          Net.Connections.Delete(jj);
+          Break;
+        end;
+      Conn.NetName := ChildName;
+      NC.Gate := G;
+      NC.PinName := Conn.PinName;
+      NC.IsDriver := True;
+      NewNet.Connections.Add(NC);
+
+      // Flip-flop from the entry net back onto the original net, on the
+      // same highest level so all outputs stay aligned.
+      Gate := CreateFF(FFCell, FFCellName, DataPin, OutputPin, ClockPin,
+        ClockNetName, NewNet.Name, Net.Name, MaxTopLevel);
+      Model.Gates.Add(Gate);
+      Inc(Result);
+
+      NC.Gate := Gate;
+      NC.PinName := DataPin;
+      NC.IsDriver := False;
+      NewNet.Connections.Add(NC);
+
+      NC.Gate := Gate;
+      NC.PinName := ClockPin;
+      NC.IsDriver := False;
+      if Model.Nets.ContainsKey(ClockNetName) then
+        Model.Nets[ClockNetName].Connections.Add(NC);
+
+      NC.Gate := Gate;
+      NC.PinName := OutputPin;
+      NC.IsDriver := True;
+      Net.Connections.Add(NC);
     end;
   end;
 end;

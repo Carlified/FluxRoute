@@ -36,6 +36,8 @@ object Form1: TForm1
       640s
       408s
       640s
+      408s
+      640s
       408s)
     object TabItem1: TTabItem
       CustomIcon = <
@@ -136,8 +138,8 @@ object Form1: TForm1
         Size.Height = 328.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 3
-        Viewport.Width = 588.000000000000000000
-        Viewport.Height = 324.000000000000000000
+        Viewport.Width = 592.000000000000000000
+        Viewport.Height = 328.000000000000000000
       end
     end
     object TabItem3: TTabItem
@@ -262,7 +264,7 @@ object Form1: TForm1
         Position.X = 24.000000000000000000
         Position.Y = 52.000000000000000000
         Size.Width = 280.000000000000000000
-        Size.Height = 292.000000000000000000
+        Size.Height = 340.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 3
         DisableFocusEffect = True
@@ -270,7 +272,7 @@ object Form1: TForm1
         DefaultItemStyles.GroupHeaderStyle = ''
         DefaultItemStyles.GroupFooterStyle = ''
         Viewport.Width = 276.000000000000000000
-        Viewport.Height = 288.000000000000000000
+        Viewport.Height = 336.000000000000000000
       end
       object Label7: TLabel
         Position.X = 320.000000000000000000
@@ -285,7 +287,7 @@ object Form1: TForm1
         Position.X = 320.000000000000000000
         Position.Y = 52.000000000000000000
         Size.Width = 296.000000000000000000
-        Size.Height = 292.000000000000000000
+        Size.Height = 340.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 5
         DisableFocusEffect = True
@@ -293,7 +295,7 @@ object Form1: TForm1
         DefaultItemStyles.GroupHeaderStyle = ''
         DefaultItemStyles.GroupFooterStyle = ''
         Viewport.Width = 292.000000000000000000
-        Viewport.Height = 288.000000000000000000
+        Viewport.Height = 336.000000000000000000
       end
     end
     object TabItem5: TTabItem
@@ -312,47 +314,122 @@ object Form1: TForm1
       ExplicitSize.cy = 408.000000000000000000
       object LayoutLabels: TLayout
         Align = Top
+        Margins.Bottom = 6.000000000000000000
         Size.Width = 640.000000000000000000
-        Size.Height = 20.000000000000000000
+        Size.Height = 22.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 0
         object LabelCompact: TLabel
           Align = Left
-          Size.Width = 320.000000000000000000
-          Size.Height = 20.000000000000000000
+          Size.Width = 150.000000000000000000
+          Size.Height = 22.000000000000000000
           Size.PlatformDefault = False
           TextSettings.HorzAlign = Center
           Text = 'Most compact'
           TabOrder = 0
         end
         object LabelMaxSpeed: TLabel
-          Align = Left
-          Position.X = 320.000000000000000000
-          Size.Width = 320.000000000000000000
-          Size.Height = 20.000000000000000000
+          Align = Right
+          Position.X = 490.000000000000000000
+          Size.Width = 150.000000000000000000
+          Size.Height = 22.000000000000000000
           Size.PlatformDefault = False
           TextSettings.HorzAlign = Center
           Text = 'Highest frequency'
           TabOrder = 2
         end
+        object LabelMode: TLabel
+          Align = Client
+          Size.Width = 340.000000000000000000
+          Size.Height = 22.000000000000000000
+          Size.PlatformDefault = False
+          TextSettings.HorzAlign = Center
+          Text = 'Mode: compact'
+          TabOrder = 1
+        end
       end
-      object TrackBar1: TTrackBar
+      object LayoutSlider: TLayout
         Align = Top
-        CanParentFocus = True
-        Frequency = 0.000000000000000000
-        Max = 100.000000000000000000
-        Orientation = Horizontal
-        Position.Y = 20.000000000000000000
-        Size.Width = 640.000000000000000000
-        Size.Height = 19.000000000000000000
+        Margins.Left = 8.000000000000000000
+        Margins.Top = 2.000000000000000000
+        Margins.Right = 8.000000000000000000
+        Margins.Bottom = 4.000000000000000000
+        Position.X = 8.000000000000000000
+        Position.Y = 30.000000000000000000
+        Size.Width = 624.000000000000000000
+        Size.Height = 32.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 1
-        OnChange = TrackBar1Change
+        object LabelFreqLeft: TLabel
+          Align = Left
+          Size.Width = 90.000000000000000000
+          Size.Height = 32.000000000000000000
+          Size.PlatformDefault = False
+          TextSettings.HorzAlign = Trailing
+          Text = '-'
+          TabOrder = 0
+        end
+        object TrackBar1: TTrackBar
+          Align = Client
+          CanParentFocus = True
+          Orientation = Horizontal
+          Size.Width = 444.000000000000000000
+          Size.Height = 32.000000000000000000
+          Size.PlatformDefault = False
+          TabOrder = 1
+          OnChange = TrackBar1Change
+        end
+        object LabelFreqRight: TLabel
+          Align = Right
+          Position.X = 534.000000000000000000
+          Size.Width = 90.000000000000000000
+          Size.Height = 32.000000000000000000
+          Size.PlatformDefault = False
+          Text = '-'
+          TabOrder = 2
+        end
       end
-      object PaintBox1: TPaintBox
+      object LayoutCanvas: TLayout
         Align = Client
         Size.Width = 640.000000000000000000
-        Size.Height = 369.000000000000000000
+        Size.Height = 342.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 2
+        object PaintBox1: TPaintBox
+          Align = Client
+          Size.Width = 640.000000000000000000
+          Size.Height = 342.000000000000000000
+          Size.PlatformDefault = False
+        end
+      end
+    end
+    object TabItem6: TTabItem
+      CustomIcon = <
+        item
+        end>
+      TextSettings.Trimming = None
+      IsSelected = False
+      Size.Width = 8.000000000000000000
+      Size.Height = 8.000000000000000000
+      Size.PlatformDefault = False
+      StyleLookup = ''
+      TabOrder = 0
+      Text = 'Clock network'
+      ExplicitSize.cx = 640.000000000000000000
+      ExplicitSize.cy = 408.000000000000000000
+      object Label8: TLabel
+        Position.X = 24.000000000000000000
+        Position.Y = 12.000000000000000000
+        Size.Width = 592.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = 'Clock network'
+        TabOrder = 1
+      end
+      object PaintBox2: TPaintBox
+        Align = Client
+        Size.Width = 640.000000000000000000
+        Size.Height = 408.000000000000000000
         Size.PlatformDefault = False
       end
     end

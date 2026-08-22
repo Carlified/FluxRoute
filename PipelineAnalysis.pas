@@ -51,6 +51,10 @@ var
       Conn := Gate.Connections[i];
       if not (Conn.Port.Direction in [pdInput, pdInOut]) then
         Continue;
+      // Clock-pin predecessors are not data ancestry: a gate fed by the
+      // clock network must not inherit levels from it.
+      if IsClockPinName(Conn.Port.Name) then
+        Continue;
       if Model.Nets.TryGetValue(Conn.NetName, Net) then
         for NC in Net.Connections do
           if NC.IsDriver then

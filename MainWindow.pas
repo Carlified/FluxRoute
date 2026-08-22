@@ -9,7 +9,6 @@ uses
   FMX.Objects,
   System.IOUtils, System.JSON, System.Math, System.Math.Vectors,
   System.Generics.Collections, System.StrUtils,
-  Winapi.Windows,
   LefLibrary,
   BlifLibrary,
   CellViewer,
@@ -17,7 +16,8 @@ uses
   SplitterInsert,
   PipelineConfig,
   PipelineAnalysis,
-  FlipFlopInsert, FMX.Memo.Types, FMX.ScrollBox;
+  FlipFlopInsert, ClockNetwork,
+  FMX.Memo.Types, FMX.ScrollBox;
 
 type
   TForm1 = class(TForm)
@@ -47,6 +47,12 @@ type
     TabItem5: TTabItem;
     PaintBox1: TPaintBox;
     TrackBar1: TTrackBar;
+    LabelMode: TLabel;
+    LabelFreqLeft: TLabel;
+    LabelFreqRight: TLabel;
+    TabItem6: TTabItem;
+    Label8: TLabel;
+    PaintBox2: TPaintBox;
     ButtonBack: TButton;
     ButtonNext: TButton;
     OpenDialog1: TOpenDialog;
@@ -88,11 +94,18 @@ type
     FMaxWorstPath: Double;
     FMinDelay: Double;
     FThreshold: Double;
+    FCompactWorstDelay: Double;
+    FClockModel: TBlifModel;      // deep copy of the DFF-inserted netlist
+    FClockNet: TClockNetworkInfo; // clock stage registry (top-down)
     FSplittersInserted: Boolean;
     FPanX, FPanY: Single;
     FDragX, FDragY: Single;
     FDragging: Boolean;
     FZoom: Single;
+    FClockPanX, FClockPanY: Single;
+    FClkDragX, FClkDragY: Single;
+    FClkDragging: Boolean;
+    FClockZoom: Single;
     procedure FreeLib;
     procedure UpdateUI;
     procedure RenderNetlist(Model: TBlifModel; Errors: TStrings);
@@ -109,6 +122,18 @@ type
     procedure FreePipelineModel;
     procedure BuildPipelineModel;
     procedure SliderTimerTimer(Sender: TObject);
+    procedure UpdateModeLabel;
+    procedure UpdateLimitLabels;
+    procedure RepaintPipelinePage;
+    procedure FreeClockModel;
+    procedure BuildClockModel;
+    procedure PaintClockNetwork(Sender: TObject; Canvas: TCanvas);
+    procedure RepaintClockPage;
+    procedure PaintBox2MouseDown(Sender: TObject; Button: TMouseButton;
+      Shift: TShiftState; X, Y: Single);
+    procedure PaintBox2MouseMove(Sender: TObject; Shift: TShiftState; X, Y: Single);
+    procedure PaintBox2MouseUp(Sender: TObject; Button: TMouseButton;
+      Shift: TShiftState; X, Y: Single);
   public
     { Public declarations }
   end;
@@ -156,14 +181,21 @@ begin
   PaintBox1.OnMouseDown := PaintBox1MouseDown;
   PaintBox1.OnMouseMove := PaintBox1MouseMove;
   PaintBox1.OnMouseUp := PaintBox1MouseUp;
+  PaintBox2.OnPaint := PaintClockNetwork;
+  PaintBox2.OnMouseDown := PaintBox2MouseDown;
+  PaintBox2.OnMouseMove := PaintBox2MouseMove;
+  PaintBox2.OnMouseUp := PaintBox2MouseUp;
   OnMouseWheel := FormMouseWheel;
   FZoom := 1.0;
+  FClockZoom := 1.0;
   TabControl1.OnChange := TabControl1Change;
   FSliderPos := 0;
   FSliderTimer := TTimer.Create(Self);
   FSliderTimer.Interval := 200;
   FSliderTimer.Enabled := False;
   FSliderTimer.OnTimer := SliderTimerTimer;
+  UpdateModeLabel;
+  UpdateLimitLabels;
   UpdateUI;
 end;
 
@@ -177,6 +209,7 @@ begin
   FSliderTimer.Free;
   FreePipelineRows;
   FreePipelineModel;
+  FreeClockModel;
   FreeLib;
 end;
 
@@ -195,6 +228,8 @@ begin
   FSplittersInserted := False;
   FreePipelineRows;
   FreePipelineModel;
+  FreeClockModel;
+  UpdateLimitLabels;
   ListBox1.Clear;
   Memo1.Lines.Clear;
   FSplitterNames.Clear;
@@ -281,6 +316,8 @@ begin
   FSplittersInserted := False;
   FreePipelineRows;
   FreePipelineModel;
+  FreeClockModel;
+  UpdateLimitLabels;
   FCellDelays.Clear;
   Memo1.Lines.Clear;
   Label1.Text := 'Parsing: ' + ExtractFileName(FBlifFile);
@@ -511,6 +548,7 @@ procedure TForm1.PaintPipeline(Sender: TObject; Canvas: TCanvas);
 var
   R, NoteR: TRectF;
   i, j, k: Integer;
+  ClipState: TCanvasSaveState;
   Gate, Src: TGateInstance;
   MaxRows, MaxOutputLevel: Integer;
   Square, HGap, VGap, Left, X, Y: Single;
@@ -649,22 +687,30 @@ begin
   if (ActiveModel <> nil) and (FFlipFlopNames.Count = 0) then
     Note := 'No flip-flop cells selected on the Flip-flops page.';
 
-  if ActiveModel = nil then
-  begin
-    Canvas.Fill.Color := TAlphaColorRec.Dimgray;
-    Canvas.FillText(R, 'No netlist loaded.', False, 1.0, [],
-      TTextAlign.Center, TTextAlign.Center);
-    Exit;
-  end;
+  // Mask everything outside the paint box so nothing bleeds over the
+  // slider above or the tab edges. The D2D canvas only honors
+  // IntersectClipRect while a save state is active, so bracket all
+  // drawing with SaveState/RestoreState.
+  ClipState := Canvas.SaveState;
+  try
+    Canvas.IntersectClipRect(R);
 
-  BuildPipelineRows(ActiveModel);
+    if ActiveModel = nil then
+    begin
+      Canvas.Fill.Color := TAlphaColorRec.Dimgray;
+      Canvas.FillText(R, 'No netlist loaded.', False, 1.0, [],
+        TTextAlign.Center, TTextAlign.Center);
+      Exit;
+    end;
 
-  if Note <> '' then
-  begin
-    Canvas.Fill.Color := TAlphaColorRec.Dimgray;
-    NoteR := TRectF.Create(4, 4, PaintBox1.Width - 4, 24);
-    Canvas.FillText(NoteR, Note, False, 1.0, [], TTextAlign.Leading, TTextAlign.Center);
-  end;
+    BuildPipelineRows(ActiveModel);
+
+    if Note <> '' then
+    begin
+      Canvas.Fill.Color := TAlphaColorRec.Dimgray;
+      NoteR := TRectF.Create(4, 4, PaintBox1.Width - 4, 24);
+      Canvas.FillText(NoteR, Note, False, 1.0, [], TTextAlign.Leading, TTextAlign.Center);
+    end;
 
   InputNets := TStringList.Create;
   OutputNets := TStringList.Create;
@@ -1026,26 +1072,24 @@ begin
 
     if MaxLevelDelay > 0 then
     begin
-      if FSliderPos = 0 then
-        StatsText := Format(
-          'Mode: compact  |  Levels: %d  |  Worst path/level: %.1f ps  |  Fmax: %.1f GHz  |  Area: %.1f um2',
-          [TotalLevels, MaxLevelDelay,
-           1000.0 / MaxLevelDelay,
-           TotalArea])
-      else
-        StatsText := Format(
-          'Mode: max delay <=%.1f ps  |  Levels: %d  |  Worst path/level: %.1f ps  |  Fmax: %.1f GHz  |  Area: %.1f um2',
-          [FThreshold, TotalLevels, MaxLevelDelay,
-           1000.0 / MaxLevelDelay,
-           TotalArea]);
+      StatsText := Format(
+        'Levels: %d  |  Worst path/level: %.1f ps  |  Fmax: %.1f GHz  |  Area: %.1f um2',
+        [TotalLevels, MaxLevelDelay,
+         1000.0 / MaxLevelDelay,
+         TotalArea]);
     end
     else
       StatsText := Format(
         'Levels: %d  |  Worst path/level: (no timing)  |  Area: %.1f um2',
         [TotalLevels, TotalArea]);
 
-    Canvas.Fill.Color := TAlphaColorRec.Dimgray;
     StatsR := TRectF.Create(4, PaintBox1.Height - 22, PaintBox1.Width - 4, PaintBox1.Height - 2);
+    // White shelf along the bottom so the text stays readable over gate
+    // squares.
+    Canvas.Fill.Color := TAlphaColorRec.White;
+    Canvas.FillRect(TRectF.Create(0, PaintBox1.Height - 26, PaintBox1.Width,
+      PaintBox1.Height), 0, 0, [], 0.8);
+    Canvas.Fill.Color := TAlphaColorRec.Dimgray;
     Canvas.FillText(StatsR, StatsText, False, 1.0, [], TTextAlign.Leading, TTextAlign.Center);
 
   finally
@@ -1055,6 +1099,9 @@ begin
     InputPositions.Free;
     OutputPositions.Free;
     GateCenters.Free;
+  end;
+  finally
+    Canvas.RestoreState(ClipState);
   end;
 end;
 
@@ -1078,7 +1125,7 @@ begin
     FPanY := FPanY + (Y - FDragY);
     FDragX := X;
     FDragY := Y;
-    PaintBox1.Repaint;
+    RepaintPipelinePage;
   end;
 end;
 
@@ -1088,34 +1135,87 @@ begin
   FDragging := False;
 end;
 
+procedure TForm1.PaintBox2MouseDown(Sender: TObject; Button: TMouseButton;
+  Shift: TShiftState; X, Y: Single);
+begin
+  if Button = TMouseButton.mbLeft then
+  begin
+    FClkDragging := True;
+    FClkDragX := X;
+    FClkDragY := Y;
+  end;
+end;
+
+procedure TForm1.PaintBox2MouseMove(Sender: TObject; Shift: TShiftState;
+  X, Y: Single);
+begin
+  if FClkDragging then
+  begin
+    FClockPanX := FClockPanX + (X - FClkDragX);
+    FClockPanY := FClockPanY + (Y - FClkDragY);
+    FClkDragX := X;
+    FClkDragY := Y;
+    RepaintClockPage;
+  end;
+end;
+
+procedure TForm1.PaintBox2MouseUp(Sender: TObject; Button: TMouseButton;
+  Shift: TShiftState; X, Y: Single);
+begin
+  FClkDragging := False;
+end;
+
 procedure TForm1.FormMouseWheel(Sender: TObject; Shift: TShiftState;
   WheelDelta: Integer; var Handled: Boolean);
 const
   MinZoom = 0.2;
   MaxZoom = 5.0;
-var
-  NewZoom: Single;
-  LocalPos, WorldPos: TPointF;
-  R: TRectF;
+
+  // Zoom around the cursor position; returns True if the zoom changed.
+  function ZoomAt(ABox: TControl; var APanX, APanY, AZoom: Single): Boolean;
+  var
+    LocalPos, WorldPos: TPointF;
+    R: TRectF;
+    NewZoom: Single;
+  begin
+    Result := False;
+    LocalPos := ABox.ScreenToLocal(Screen.MousePos);
+    R := TRectF.Create(0, 0, ABox.Width, ABox.Height);
+    if not R.Contains(LocalPos) then
+      Exit;
+    NewZoom := AZoom * Power(1.1, WheelDelta / 120.0);
+    if NewZoom < MinZoom then
+      NewZoom := MinZoom;
+    if NewZoom > MaxZoom then
+      NewZoom := MaxZoom;
+    if NewZoom = AZoom then
+      Exit;
+    WorldPos.X := (LocalPos.X - APanX) / AZoom;
+    WorldPos.Y := (LocalPos.Y - APanY) / AZoom;
+    APanX := LocalPos.X - WorldPos.X * NewZoom;
+    APanY := LocalPos.Y - WorldPos.Y * NewZoom;
+    AZoom := NewZoom;
+    Result := True;
+  end;
+
 begin
-  if TabControl1.TabIndex <> 4 then
-    Exit;
-  LocalPos := PaintBox1.ScreenToLocal(Screen.MousePos);
-  R := TRectF.Create(0, 0, PaintBox1.Width, PaintBox1.Height);
-  if not R.Contains(LocalPos) then
-    Exit;
-  NewZoom := FZoom * Power(1.1, WheelDelta / 120.0);
-  if NewZoom < MinZoom then NewZoom := MinZoom;
-  if NewZoom > MaxZoom then NewZoom := MaxZoom;
-  if NewZoom = FZoom then
-    Exit;
-  WorldPos.X := (LocalPos.X - FPanX) / FZoom;
-  WorldPos.Y := (LocalPos.Y - FPanY) / FZoom;
-  FPanX := LocalPos.X - WorldPos.X * NewZoom;
-  FPanY := LocalPos.Y - WorldPos.Y * NewZoom;
-  FZoom := NewZoom;
-  Handled := True;
-  PaintBox1.Repaint;
+  Handled := False;
+  if TabControl1.TabIndex = 4 then
+  begin
+    if ZoomAt(PaintBox1, FPanX, FPanY, FZoom) then
+    begin
+      Handled := True;
+      RepaintPipelinePage;
+    end;
+  end
+  else if TabControl1.TabIndex = 5 then
+  begin
+    if ZoomAt(PaintBox2, FClockPanX, FClockPanY, FClockZoom) then
+    begin
+      Handled := True;
+      RepaintClockPage;
+    end;
+  end;
 end;
 
 procedure TForm1.FreePipelineModel;
@@ -1138,6 +1238,8 @@ var
   DelayMemo: TDictionary<TGateInstance, Double>;
   FFCell: TCell;
   LevelDelay, GateArea: Double;
+  Cmp: TBlifModel;
+  CDummy: TStringList;
 
   function DelayToOutput(G: TGateInstance): Double;
   var
@@ -1178,6 +1280,63 @@ var
     if Dly < 0 then Dly := 0;
     Result := MaxIn + Dly;
     DelayMemo.Add(G, Result);
+  end;
+
+  // Same measure the stats bar shows: worst DelayToOutput over all gates
+  // of an already-built model (clocked gates count their clk-to-q only).
+  function WorstLevelDelayOf(AModel: TBlifModel): Double;
+  var
+    Memo: TDictionary<TGateInstance, Double>;
+    AG: TGateInstance;
+
+    function DlyToOut(G: TGateInstance): Double;
+    var
+      MaxIn, Dly: Double;
+      m: Integer;
+      C: TPinConnection;
+      N: TNet;
+      NC2: TNetConnection;
+    begin
+      if Memo.TryGetValue(G, Result) then
+        Exit;
+      if CellHasClock(G.Cell) then
+        Dly := CellDelayPs(G.Cell)
+      else
+      begin
+        MaxIn := 0;
+        for m := 0 to G.Connections.Count - 1 do
+        begin
+          C := G.Connections[m];
+          if C.Port.Direction <> pdInput then Continue;
+          if IsClockPinName(C.Port.Name) then Continue;
+          if AModel.Nets.TryGetValue(C.NetName, N) then
+            for NC2 in N.Connections do
+              if NC2.IsDriver then
+              begin
+                Dly := DlyToOut(NC2.Gate);
+                if Dly > MaxIn then MaxIn := Dly;
+              end;
+        end;
+        Dly := MaxIn + CellDelayPs(G.Cell);
+      end;
+      if Dly < 0 then Dly := 0;
+      Result := Dly;
+      Memo.Add(G, Result);
+    end;
+
+  begin
+    Memo := TDictionary<TGateInstance, Double>.Create;
+    try
+      Result := 0;
+      for AG in AModel.Gates do
+      begin
+        GateArea := DlyToOut(AG);
+        if GateArea > Result then
+          Result := GateArea;
+      end;
+    finally
+      Memo.Free;
+    end;
   end;
 
 begin
@@ -1253,6 +1412,10 @@ begin
 
       Dummy := TStringList.Create;
       try
+        // Output alignment for both modes: every gate on the highest clock
+        // level feeds its loads through a flip-flop, so all output signals
+        // are clocked out on the same clock edge.
+        InsertTopLevelFFs(PM, FLib, FFlipFlopNames[0]);
         if FSliderPos = 0 then
         begin
           // Compact mode at the far-left slider position.
@@ -1273,6 +1436,30 @@ begin
           InsertDelayLevelizedFFs(PM, FLib, FFlipFlopNames[0], FThreshold);
           PadOutputFFs(PM, FLib, FFlipFlopNames[0]);
           ComputeClockLevels(PM, Dummy);
+        end;
+
+        // Left slider endpoint: measure compact mode's worst path/level so
+        // the label matches what the stats bar shows in compact mode.
+        if FSliderPos = 0 then
+          FCompactWorstDelay := WorstLevelDelayOf(PM)
+        else
+        begin
+          Cmp := FModel.Clone;
+          try
+            CDummy := TStringList.Create;
+            try
+              InsertTopLevelFFs(Cmp, FLib, FFlipFlopNames[0]);
+              InsertCompactFlipFlops(Cmp, FLib, FFlipFlopNames[0]);
+              ComputeClockLevels(Cmp, CDummy);
+              PadOutputFFs(Cmp, FLib, FFlipFlopNames[0]);
+              ComputeClockLevels(Cmp, CDummy);
+            finally
+              CDummy.Free;
+            end;
+            FCompactWorstDelay := WorstLevelDelayOf(Cmp);
+          finally
+            Cmp.Free;
+          end;
         end;
       finally
         Dummy.Free;
@@ -1315,8 +1502,8 @@ begin
     FThreshold := FMaxWorstPath - (FMaxWorstPath - FMinDelay) * (FSliderPos / 100)
   else
     FThreshold := FMinDelay;
-  if TabControl1.TabIndex = 4 then
-    PaintBox1.Repaint;
+  UpdateModeLabel;
+  RepaintPipelinePage;
   FSliderTimer.Enabled := False;
   FSliderTimer.Enabled := True;
 end;
@@ -1327,7 +1514,442 @@ begin
   if TabControl1.TabIndex <> 4 then
     Exit;
   BuildPipelineModel;
-  PaintBox1.Repaint;
+  UpdateModeLabel;
+  RepaintPipelinePage;
+end;
+
+procedure TForm1.UpdateModeLabel;
+begin
+  if FSliderPos = 0 then
+    LabelMode.Text := 'Mode: compact'
+  else
+    LabelMode.Text := Format('Mode: max delay <=%.1f ps', [FThreshold]);
+end;
+
+procedure TForm1.UpdateLimitLabels;
+begin
+  // Slider end frequencies: the compact mode worst path (left) and the
+  // fastest possible level (right). Delays are in ps, so invert for GHz.
+  if (FModel <> nil) and (FFlipFlopNames.Count > 0) then
+  begin
+    // Left end: compact mode's real worst path/level, matching the stats
+    // bar; falls back to the pristine worst path before the first build.
+    if FCompactWorstDelay > 0 then
+      LabelFreqLeft.Text := Format('%.2f GHz', [1000.0 / FCompactWorstDelay])
+    else
+      LabelFreqLeft.Text := Format('%.2f GHz', [1000.0 / FMaxWorstPath]);
+    LabelFreqRight.Text := Format('%.2f GHz', [1000.0 / FMinDelay]);
+  end
+  else
+  begin
+    LabelFreqLeft.Text := '-';
+    LabelFreqRight.Text := '-';
+  end;
+end;
+
+procedure TForm1.RepaintPipelinePage;
+var
+  i: Integer;
+begin
+  // Partial redraws around the clipped canvas corrupt neighbouring
+  // controls (labels, slider, buttons) until those are included in the
+  // redraw pass. The form itself has no Repaint (it is not a TControl),
+  // so invalidate every direct child of the form.
+  if TabControl1.TabIndex <> 4 then
+    Exit;
+  for i := 0 to Children.Count - 1 do
+    if Children[i] is TControl then
+      TControl(Children[i]).Repaint;
+end;
+
+procedure TForm1.RepaintClockPage;
+var
+  i: Integer;
+begin
+  if TabControl1.TabIndex <> 5 then
+    Exit;
+  for i := 0 to Children.Count - 1 do
+    if Children[i] is TControl then
+      TControl(Children[i]).Repaint;
+end;
+
+procedure TForm1.FreeClockModel;
+begin
+  FClockNet.Free;
+  FClockNet := nil;
+  FClockModel.Free;
+  FClockModel := nil;
+end;
+
+procedure TForm1.BuildClockModel;
+var
+  Types: TArray<TSplitterType>;
+  Errors: TStringList;
+  i, n: Integer;
+  Cell: TCell;
+  Delay: Double;
+  NumOutputs: Integer;
+begin
+  FreeClockModel;
+  if (FPipelineModel = nil) or (FLib = nil) or (FFlipFlopNames.Count = 0) then
+    Exit;
+
+  // Work on a deep copy: the pipeline view keeps showing the pure DFF view.
+  FClockModel := FPipelineModel.Clone;
+
+  // Every splitter candidate in the library (generic sizes), with timing.
+  n := 0;
+  SetLength(Types, FLib.Cells.Count);
+  for i := 0 to FLib.Cells.Count - 1 do
+  begin
+    Cell := FLib.Cells[i];
+    if not IsSplitterCandidate(Cell, NumOutputs) then
+      Continue;
+    Delay := CellDelayPs(Cell);
+    if Delay < 0 then
+      Continue;
+    Types[n].CellName := Cell.Name;
+    Types[n].OutputCount := NumOutputs;
+    Types[n].DelayPs := Delay;
+    Inc(n);
+  end;
+  SetLength(Types, n);
+
+  Errors := TStringList.Create;
+  try
+    FClockNet := BuildClockNetwork(FClockModel, FLib, Types, Errors);
+    Memo1.Lines.AddStrings(Errors); // diagnostics incl. per-stage seeds
+  finally
+    Errors.Free;
+  end;
+end;
+
+// One node of a row's clock distribution tree: either a splitter (interior)
+// or a terminating clocked component (leaf). Built fresh per paint.
+type
+  TClockTreeNode = class
+  public
+    Gate: TGateInstance;
+    IsLeaf: Boolean;
+    Depth: Integer;
+    X, Y: Single;
+    Children: TObjectList<TClockTreeNode>;
+    constructor Create(AGate: TGateInstance; AIsLeaf: Boolean; ADepth: Integer);
+    destructor Destroy; override;
+  end;
+
+constructor TClockTreeNode.Create(AGate: TGateInstance; AIsLeaf: Boolean;
+  ADepth: Integer);
+begin
+  Gate := AGate;
+  IsLeaf := AIsLeaf;
+  Depth := ADepth;
+  Children := TObjectList<TClockTreeNode>.Create(True);
+end;
+
+destructor TClockTreeNode.Destroy;
+begin
+  Children.Free;
+  inherited;
+end;
+
+procedure TForm1.PaintClockNetwork(Sender: TObject; Canvas: TCanvas);
+var
+  Visited: TDictionary<TGateInstance, Boolean>;
+
+  // Builds one row's distribution tree from its tap net. Interior nodes are
+  // splitters; leaves are terminating clocked components (drawn without any
+  // of their own children).
+  procedure BuildTree(const ANetName: string; Depth: Integer;
+    Parent: TClockTreeNode; var MaxDepth: Integer);
+  var
+    Net: TNet;
+    NC: TNetConnection;
+    OutConn: TPinConnection;
+    Node: TClockTreeNode;
+  begin
+    if not FClockModel.Nets.TryGetValue(ANetName, Net) then
+      Exit;
+    for NC in Net.Connections do
+    begin
+      if NC.IsDriver then
+        Continue;
+      if Visited.ContainsKey(NC.Gate) then
+        Continue;
+      Visited.Add(NC.Gate, True);
+      if IsClockDelayGate(NC.Gate) then
+        Continue; // spine element, not part of this row's tree
+      Node := TClockTreeNode.Create(NC.Gate, CellHasClock(NC.Gate.Cell),
+        Depth);
+      if Node.Depth > MaxDepth then
+        MaxDepth := Node.Depth;
+      Parent.Children.Add(Node);
+      if not Node.IsLeaf then
+        for OutConn in NC.Gate.Connections do
+          if OutConn.Port.Direction = pdOutput then
+            BuildTree(OutConn.NetName, Depth + 1, Node, MaxDepth);
+    end;
+  end;
+
+  function CountLeaves(Node: TClockTreeNode): Integer;
+  var
+    i: Integer;
+  begin
+    if Node.Children.Count = 0 then
+      Result := 1
+    else
+    begin
+      Result := 0;
+      for i := 0 to Node.Children.Count - 1 do
+        Result := Result + CountLeaves(Node.Children[i]);
+    end;
+  end;
+
+var
+  R: TRectF;
+  rIdx, MaxDepth, GlobalMaxDepth, TotalLeaves, TotalAllLeaves, Level: Integer;
+  BandH, BandTop, BandBot, ColW, Sq, RootX, StemX, YMid, CursorY: Single;
+  TapNetName: string;
+  Roots: TObjectList<TClockTreeNode>;
+  RootChild: TArray<TClockTreeNode>;
+  RootYs: TArray<Single>;
+  LeafCounts: TArray<Integer>;
+  SlotCounter: Integer;
+  StageDelay: Double;
+  DelayTxt, LevelTxt: string;
+  Node: TClockTreeNode;
+
+  // World -> screen transforms (pan + zoom), mirroring PaintPipeline.
+  // Declared before the draw helpers so they can reference them.
+  function WX(AValue: Single): Single;
+  begin
+    Result := FClockPanX + AValue * FClockZoom;
+  end;
+
+  function WY(AValue: Single): Single;
+  begin
+    Result := FClockPanY + AValue * FClockZoom;
+  end;
+
+  function WLen(AValue: Single): Single;
+  begin
+    Result := AValue * FClockZoom;
+  end;
+
+  // Assign X/Y within this band; leaves get even slots, interiors average.
+  procedure PlaceNode(Node: TClockTreeNode; Top, Bottom: Single);
+  var
+    i: Integer;
+    Sum: Single;
+  begin
+    Node.X := RootX + Node.Depth * ColW;
+    if Node.Children.Count = 0 then
+    begin
+      Node.Y := Top + (Bottom - Top) * (SlotCounter + 0.5) / TotalLeaves;
+      Inc(SlotCounter);
+    end
+    else
+    begin
+      Sum := 0;
+      for i := 0 to Node.Children.Count - 1 do
+      begin
+        PlaceNode(Node.Children[i], Top, Bottom);
+        Sum := Sum + Node.Children[i].Y;
+      end;
+      Node.Y := Sum / Node.Children.Count;
+    end;
+  end;
+
+  // Edges first (boxes painted over them afterwards).
+  procedure DrawEdges(Node: TClockTreeNode);
+  var
+    i: Integer;
+  begin
+    for i := 0 to Node.Children.Count - 1 do
+    begin
+      Canvas.DrawLine(TPointF.Create(WX(Node.X) + WLen(Sq) / 2, WY(Node.Y)),
+        TPointF.Create(WX(Node.Children[i].X) - WLen(Sq) / 2,
+        WY(Node.Children[i].Y)), 1.0);
+      DrawEdges(Node.Children[i]);
+    end;
+  end;
+
+  procedure DrawNodes(Node: TClockTreeNode);
+  var
+    i: Integer;
+    Clr: TAlphaColor;
+    NameR: TRectF;
+  begin
+    for i := 0 to Node.Children.Count - 1 do
+    begin
+      if Node.Children[i].IsLeaf then
+      begin
+        if FSplitterNames.IndexOf(Node.Children[i].Gate.Cell.Name) >= 0 then
+          Clr := $FF00C853
+        else if FFlipFlopNames.IndexOf(Node.Children[i].Gate.Cell.Name) >= 0 then
+          Clr := $FFD50000
+        else
+          Clr := $FF1565C0;
+        Canvas.Fill.Color := Clr;
+        Canvas.FillRect(TRectF.Create(
+          WX(Node.Children[i].X) - WLen(Sq) / 2,
+          WY(Node.Children[i].Y) - WLen(Sq) / 2,
+          WX(Node.Children[i].X) + WLen(Sq) / 2,
+          WY(Node.Children[i].Y) + WLen(Sq) / 2), 0, 0, [], 1.0);
+        NameR := TRectF.Create(WX(Node.Children[i].X) - WLen(ColW) / 2,
+          WY(Node.Children[i].Y) + WLen(Sq) / 2,
+          WX(Node.Children[i].X) + WLen(ColW) / 2,
+          WY(Node.Children[i].Y) + WLen(Sq) / 2 + WLen(14));
+        Canvas.Fill.Color := TAlphaColorRec.Dimgray;
+        Canvas.FillText(NameR, Node.Children[i].Gate.CellName, False, 1.0,
+          [], TTextAlign.Center, TTextAlign.Leading);
+      end
+      else
+      begin
+        // Interior splitter node.
+        Canvas.Fill.Color := $FF00C853;
+        Canvas.FillRect(TRectF.Create(
+          WX(Node.Children[i].X) - WLen(Sq) / 2,
+          WY(Node.Children[i].Y) - WLen(Sq) / 2,
+          WX(Node.Children[i].X) + WLen(Sq) / 2,
+          WY(Node.Children[i].Y) + WLen(Sq) / 2), 0, 0, [], 1.0);
+      end;
+      DrawNodes(Node.Children[i]);
+    end;
+  end;
+
+begin
+  R := TRectF.Create(0, 0, PaintBox2.Width, PaintBox2.Height);
+  Canvas.Fill.Color := TAlphaColorRec.White;
+  Canvas.FillRect(R, 0, 0, [], 1.0);
+  Canvas.IntersectClipRect(R);
+
+  if (FClockModel = nil) or (FClockNet = nil) then
+  begin
+    Canvas.Fill.Color := TAlphaColorRec.Dimgray;
+    Canvas.FillText(R, 'No clock network built - complete the previous steps.',
+      False, 1.0, [], TTextAlign.Center, TTextAlign.Center);
+    Exit;
+  end;
+
+  Roots := TObjectList<TClockTreeNode>.Create(True);
+  Visited := TDictionary<TGateInstance, Boolean>.Create;
+  try
+    // One tree per row, lowest row first (bands stack bottom-up).
+    GlobalMaxDepth := 0;
+    SetLength(RootChild, FClockNet.Rows.Count);
+    SetLength(RootYs, FClockNet.Rows.Count);
+    SetLength(LeafCounts, FClockNet.Rows.Count);
+    TotalAllLeaves := 0;
+    for rIdx := 0 to FClockNet.Rows.Count - 1 do
+    begin
+      if rIdx = 0 then
+        TapNetName := ClockNetFor(FClockModel)
+      else
+        TapNetName := Format('clk_spine_%d', [rIdx]);
+      Node := TClockTreeNode.Create(nil, False, 0); // virtual root
+      Roots.Add(Node);
+      MaxDepth := 0;
+      BuildTree(TapNetName, 0, Node, MaxDepth);
+      LeafCounts[rIdx] := CountLeaves(Node);
+      Inc(TotalAllLeaves, LeafCounts[rIdx]);
+      if MaxDepth > GlobalMaxDepth then
+        GlobalMaxDepth := MaxDepth;
+      if Node.Children.Count > 0 then
+      begin
+        RootChild[rIdx] := Node.Children[0];
+        RootYs[rIdx] := Node.Children[0].Y;
+      end
+      else
+      begin
+        RootChild[rIdx] := nil;
+        RootYs[rIdx] := -1;
+      end;
+    end;
+
+    Canvas.Stroke.Color := $60000000;
+
+    Sq := 24;
+    StemX := 90;
+    RootX := 190;
+    ColW := (PaintBox2.Width - RootX - 60) / (GlobalMaxDepth + 2);
+    if ColW < 70 then
+      ColW := 70;
+
+    // Layout + subtree drawing, bottom-up. Band height is proportional to
+    // the row's leaf count so dense rows get the space they need.
+    CursorY := PaintBox2.Height;
+    for rIdx := 0 to Roots.Count - 1 do
+    begin
+      if TotalAllLeaves > 0 then
+        BandH := (PaintBox2.Height - 8) * LeafCounts[rIdx] / TotalAllLeaves
+      else
+        BandH := PaintBox2.Height / FClockNet.Rows.Count;
+      if BandH < Sq + 12 then
+        BandH := Sq + 12;
+      BandBot := CursorY - 4;
+      BandTop := CursorY - BandH + 4;
+      CursorY := CursorY - BandH;
+      TotalLeaves := LeafCounts[rIdx];
+      SlotCounter := 0;
+      PlaceNode(Roots[rIdx], BandTop, BandBot);
+      Canvas.Stroke.Color := $60000000;
+      DrawEdges(Roots[rIdx]);
+      DrawNodes(Roots[rIdx]);
+      // remember real root-child Y after placement
+      if RootChild[rIdx] <> nil then
+        RootYs[rIdx] := RootChild[rIdx].Y;
+    end;
+
+    Canvas.Stroke.Color := $60000000;
+
+    // Stem: horizontal stub into each root splitter...
+    for rIdx := 0 to Roots.Count - 1 do
+      if (RootChild[rIdx] <> nil) then
+        Canvas.DrawLine(TPointF.Create(WX(StemX), WY(RootYs[rIdx])),
+          TPointF.Create(WX(RootChild[rIdx].X) - WLen(Sq) / 2,
+          WY(RootYs[rIdx])), 1.0);
+
+    // ...and one black delay block per non-zero layer, labelled 'L<k>'.
+    for rIdx := 0 to Roots.Count - 2 do
+    begin
+      if (RootYs[rIdx] < 0) or (RootYs[rIdx + 1] < 0) then
+        Continue;
+      YMid := PaintBox2.Height - (rIdx + 1) * BandH; // boundary between bands
+      // vertical stem segments into and out of the delay block
+      Canvas.DrawLine(TPointF.Create(WX(StemX), WY(RootYs[rIdx])),
+        TPointF.Create(WX(StemX), WY(YMid) - WLen(13)), 1.0);
+      Canvas.DrawLine(TPointF.Create(WX(StemX), WY(YMid) + WLen(13)),
+        TPointF.Create(WX(StemX), WY(RootYs[rIdx + 1])), 1.0);
+
+      StageDelay := FClockNet.Stages[FClockNet.Stages.Count - 1 - rIdx].DelayPs;
+      Level := FClockNet.Rows[FClockNet.Rows.Count - 2 - rIdx];
+      DelayTxt := Format('%.1f ps', [StageDelay]);
+      LevelTxt := Format('L%d', [Level]);
+
+      Canvas.Fill.Color := TAlphaColorRec.Black;
+      Canvas.FillRect(TRectF.Create(WX(StemX) - WLen(46), WY(YMid) - WLen(13),
+        WX(StemX) + WLen(46), WY(YMid) + WLen(13)), 0, 0, [], 1.0);
+      Canvas.Fill.Color := TAlphaColorRec.White;
+      Canvas.FillText(TRectF.Create(WX(StemX) - WLen(46), WY(YMid) - WLen(13),
+        WX(StemX) + Wlen(46), WY(YMid) + WLen(13)), DelayTxt, False, 1.0,
+        [], TTextAlign.Center, TTextAlign.Center);
+      Canvas.Fill.Color := TAlphaColorRec.Dimgray;
+      Canvas.FillText(TRectF.Create(WX(StemX) + WLen(50), WY(YMid) - WLen(12),
+        WX(StemX) + WLen(110), WY(YMid) + WLen(12)), LevelTxt, False, 1.0,
+        [], TTextAlign.Leading, TTextAlign.Center);
+    end;
+
+    // Clock source label at the very bottom of the stem.
+    Canvas.Fill.Color := TAlphaColorRec.Dimgray;
+    Canvas.FillText(TRectF.Create(WX(StemX) - WLen(30),
+      PaintBox2.Height - WLen(18), WX(StemX) + WLen(30),
+      PaintBox2.Height), 'clk', False, 1.0, [],
+      TTextAlign.Center, TTextAlign.Center);
+  finally
+    Roots.Free;
+    Visited.Free;
+  end;
 end;
 
 procedure TForm1.ListBox4DblClick(Sender: TObject);
@@ -1367,10 +1989,30 @@ begin
     FPanY := 0;
     FZoom := 1.0;
     BuildPipelineModel;
-    PaintBox1.Repaint;
+    UpdateModeLabel;
+    UpdateLimitLabels;
+    RepaintPipelinePage;
     Dummy := TStringList.Create;
     try
       RenderNetlist(FModel, Dummy);
+    finally
+      Dummy.Free;
+    end;
+  end;
+  if TabControl1.TabIndex = 5 then
+  begin
+    // Clock stage: always rebuild from the current DFF-inserted netlist.
+    FClockPanX := 0;
+    FClockPanY := 0;
+    FClockZoom := 1.0;
+    BuildClockModel;
+    RepaintClockPage;
+    Dummy := TStringList.Create;
+    try
+      if FClockModel <> nil then
+        RenderNetlist(FClockModel, Dummy)
+      else
+        RenderNetlist(FModel, Dummy);
     finally
       Dummy.Free;
     end;
@@ -1429,12 +2071,12 @@ begin
 
   Inserted := InsertSplitters(FModel, FLib, SplitterTypes);
   if Inserted > 0 then
-  begin
-    Label1.Text := Format('Inserted %d splitter(s) into the netlist.', [Inserted]);
-    FSplittersInserted := True;
-  end
+    Label1.Text := Format('Inserted %d splitter(s) into the netlist.', [Inserted])
   else
     Label1.Text := 'No splitters needed (no net has fanout > 1).';
+  // Zero inserted is still a valid outcome - nothing required splitting -
+  // so allow moving on just as if splitters had been added.
+  FSplittersInserted := True;
 
   Errors := TStringList.Create;
   try

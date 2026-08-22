@@ -1,0 +1,34 @@
+# 8-way AND gate (parallel tree)
+# Inputs: in0-in7 (8 input signals)
+# Output: out (AND of all 8 inputs)
+#
+# Implementation: 3-stage tree with parallel evaluation
+#   Stage 1 (4 gates in parallel):
+#     in0 AND in1 -> and_01
+#     in2 AND in3 -> and_23
+#     in4 AND in5 -> and_45
+#     in6 AND in7 -> and_67
+#   Stage 2 (2 gates in parallel):
+#     and_01 AND and_23 -> and_0123
+#     and_45 AND and_67 -> and_4567
+#   Stage 3 (1 gate):
+#     and_0123 AND and_4567 -> out
+
+.model and_8way_parallel
+.inputs in0 in1 in2 in3 in4 in5 in6 in7
+.outputs out
+
+# ========== Stage 1: 4 parallel AND gates ==========
+.gate THmitll_AND2T a=in0 b=in1 q=and_01
+.gate THmitll_AND2T a=in2 b=in3 q=and_23
+.gate THmitll_AND2T a=in4 b=in5 q=and_45
+.gate THmitll_AND2T a=in6 b=in7 q=and_67
+
+# ========== Stage 2: 2 parallel AND gates ==========
+.gate THmitll_AND2T a=and_01 b=and_23 q=and_0123
+.gate THmitll_AND2T a=and_45 b=and_67 q=and_4567
+
+# ========== Stage 3: 1 final AND gate ==========
+.gate THmitll_AND2T a=and_0123 b=and_4567 q=out
+
+.end

@@ -8,7 +8,12 @@ uses
   FMX.Layouts, FMX.ListBox, FMX.Objects,
   System.IOUtils, System.JSON, System.Math, System.Math.Vectors,
   System.Generics.Collections, System.StrUtils,
+  {$IF DEFINED(MSWINDOWS)}
   Winapi.Windows,
+  {$ELSE}
+  Posix.Unistd,
+  Posix.SysWait,
+  {$ENDIF}
   LefLibrary,
   VerilogTiming;
 
@@ -73,11 +78,15 @@ implementation
 
 function FindPythonExe: string;
 var
-  Local, Cand, PathStr: string;
+  Cand, PathStr: string;
   Dirs: TArray<string>;
   D: string;
+{$IF DEFINED(MSWINDOWS)}
+  Local: string;
+{$ENDIF}
 begin
   Result := '';
+  {$IF DEFINED(MSWINDOWS)}
   Local := GetEnvironmentVariable('LOCALAPPDATA');
 
   Cand := Local + '\Python\pythoncore-3.14-64\python.exe';
@@ -98,6 +107,23 @@ begin
     Cand := TPath.Combine(D, 'python.exe');
     if FileExists(Cand) then Exit(Cand);
   end;
+  {$ELSE}
+  // macOS/Linux: common interpreter locations, then PATH.
+  Cand := '/opt/homebrew/bin/python3';
+  if FileExists(Cand) then Exit(Cand);
+  Cand := '/usr/local/bin/python3';
+  if FileExists(Cand) then Exit(Cand);
+  Cand := '/usr/bin/python3';
+  if FileExists(Cand) then Exit(Cand);
+
+  PathStr := GetEnvironmentVariable('PATH');
+  Dirs := PathStr.Split([':'], TStringSplitOptions.ExcludeEmpty);
+  for D in Dirs do
+  begin
+    Cand := TPath.Combine(D, 'python3');
+    if FileExists(Cand) then Exit(Cand);
+  end;
+  {$ENDIF}
 end;
 
 function FindScriptPath: string;
@@ -125,6 +151,7 @@ end;
 
 function RunProcess(const Exe, Args, StdErrFile: string;
   out ErrMsg: string): Integer;
+{$IF DEFINED(MSWINDOWS)}
 var
   CmdLine: string;
   SA: TSecurityAttributes;
@@ -180,6 +207,49 @@ begin
       ErrMsg := Format('Python exited with code %d.', [Result]);
   end;
 end;
+{$ELSE}
+var
+  CmdLine: string;
+  PID, Status: Integer;
+begin
+  Result := -1;
+  ErrMsg := '';
+
+  // /bin/sh performs the stderr redirection for us; the caller already
+  // wraps every path argument in double quotes.
+  CmdLine := Format('%s %s 2>"%s"', [Exe, Args, StdErrFile]);
+
+  PID := fork;
+  if PID < 0 then
+  begin
+    ErrMsg := 'fork failed.';
+    Exit;
+  end;
+  if PID = 0 then
+  begin
+    execl(PAnsiChar(UTF8String('/bin/sh')),
+          PAnsiChar(UTF8String('sh')),
+          PAnsiChar(UTF8String('-c')),
+          PAnsiChar(UTF8String(CmdLine)),
+          nil);
+    _exit(127); // exec never returns on success
+  end;
+
+  waitpid(PID, @Status, 0);
+  if (Status and $7F) = 0 then
+    Result := (Status shr 8) and $FF // WEXITSTATUS
+  else
+    Result := -1;
+
+  if Result <> 0 then
+  begin
+    if FileExists(StdErrFile) then
+      ErrMsg := Trim(TFile.ReadAllText(StdErrFile))
+    else
+      ErrMsg := Format('Python exited with code %d.', [Result]);
+  end;
+end;
+{$ENDIF}
 
 function LoadGdsShapes(const GdsFile: string;
   out Shapes: TArray<TPolygonShape>; out Bounds: TRectF): string;
@@ -209,7 +279,7 @@ begin
     Exit('gds_to_json.py was not found next to the application.');
 
   JsonPath := TPath.Combine(TPath.GetTempPath,
-    'pnr_cell_' + IntToStr(GetTickCount) + '.json');
+    'pnr_cell_' + IntToStr(TThread.GetTickCount) + '.json');
 
   ExitCode := RunProcess(PyExe,
     Format('"%s" "%s" "%s"', [Script, GdsFile, JsonPath]),

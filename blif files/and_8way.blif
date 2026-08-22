@@ -1,0 +1,26 @@
+# 8-way AND gate
+# Inputs: in0-in7 (8 input signals)
+# Output: out (AND of all 8 inputs)
+#
+# Implementation: 7 cascaded 2-input AND gates
+#   in0 AND in1 -> and_01
+#   and_01 AND in2 -> and_012
+#   and_012 AND in3 -> and_0123
+#   and_0123 AND in4 -> and_01234
+#   and_01234 AND in5 -> and_012345
+#   and_012345 AND in6 -> and_0123456
+#   and_0123456 AND in7 -> out
+
+.model and_8way
+.inputs in0 in1 in2 in3 in4 in5 in6 in7
+.outputs out
+
+.gate THmitll_AND2T a=in0 b=in1 q=and_01
+.gate THmitll_AND2T a=and_01 b=in2 q=and_012
+.gate THmitll_AND2T a=and_012 b=in3 q=and_0123
+.gate THmitll_AND2T a=and_0123 b=in4 q=and_01234
+.gate THmitll_AND2T a=and_01234 b=in5 q=and_012345
+.gate THmitll_AND2T a=and_012345 b=in6 q=and_0123456
+.gate THmitll_AND2T a=and_0123456 b=in7 q=out
+
+.end

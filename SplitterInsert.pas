@@ -27,6 +27,13 @@ type
   function InsertSplitters(Model: TBlifModel; Lib: TLibrary;
     const SplitterTypes: TArray<TSplitterType>): Integer;
 
+  // Same tree construction as InsertSplitters, but for a single named net of
+  // Model (e.g. a clock distribution net): the net's loads are re-hung under
+  // a delay-optimal splitter tree rooted at the net itself. The net keeps its
+  // existing driver(s). Returns the number of splitter instances created.
+  function InsertSplitterTreeForNet(Model: TBlifModel; Lib: TLibrary;
+    const NetName: string; const SplitterTypes: TArray<TSplitterType>): Integer;
+
 implementation
 
 type
@@ -295,6 +302,59 @@ begin
     Result := SplitterCount;
   finally
     NetsToFix.Free;
+  end;
+end;
+
+function InsertSplitterTreeForNet(Model: TBlifModel; Lib: TLibrary;
+  const NetName: string; const SplitterTypes: TArray<TSplitterType>): Integer;
+var
+  MaxS, NetCounter, SplitterCount, j, t: Integer;
+  DP: TArray<TSplitterDP>;
+  Net: TNet;
+  NC: TNetConnection;
+  Loads: TList<TNetLoad>;
+  Load: TNetLoad;
+begin
+  Result := 0;
+  if (Model = nil) or (Length(SplitterTypes) = 0) then
+    Exit;
+  if not Model.Nets.TryGetValue(NetName, Net) then
+    Exit;
+
+  for t := 0 to Length(SplitterTypes) - 1 do
+    if Lib.FindCell(SplitterTypes[t].CellName) = nil then
+      Exit;
+
+  MaxS := CountLoads(Net);
+  if MaxS < 2 then
+    Exit; // single load: connect directly, no tree needed
+
+  ComputeDP(SplitterTypes, MaxS, DP);
+  if DP[MaxS].Choice < 0 then
+    Exit;
+
+  Loads := TList<TNetLoad>.Create;
+  try
+    for NC in Net.Connections do
+      if not NC.IsDriver then
+      begin
+        Load.Gate := NC.Gate;
+        Load.PinName := NC.PinName;
+        Load.Conn := FindGateConn(Load.Gate, Load.PinName, Net.Name);
+        Loads.Add(Load);
+      end;
+
+    for j := Net.Connections.Count - 1 downto 0 do
+      if not Net.Connections[j].IsDriver then
+        Net.Connections.Delete(j);
+
+    NetCounter := 0;
+    SplitterCount := 0;
+    BuildSubtree(Model, Lib, Net.Name, Loads, SplitterTypes, DP, Net.Name,
+      NetCounter, SplitterCount);
+    Result := SplitterCount;
+  finally
+    Loads.Free;
   end;
 end;
 

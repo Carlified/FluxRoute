@@ -24,6 +24,8 @@ type
     CellName: string;
     Cell: TCell; // resolved pointer into the LEF library; never nil once built
     ClockLevel: Integer; // pipeline depth: -1 = not computed (see PipelineAnalysis)
+    DelayPs: Double; // continuous delay parameter; only used by synthetic
+                     // cells (e.g. CLOCK_DELAY). Discretized at export.
     Connections: TObjectList<TPinConnection>;
     constructor Create;
     destructor Destroy; override;
@@ -85,6 +87,7 @@ implementation
 constructor TGateInstance.Create;
 begin
   ClockLevel := -1;
+  DelayPs := 0;
   Connections := TObjectList<TPinConnection>.Create(True);
 end;
 
@@ -159,6 +162,7 @@ begin
       NewGate.CellName := OldGate.CellName;
       NewGate.Cell := OldGate.Cell;
       NewGate.ClockLevel := OldGate.ClockLevel;
+      NewGate.DelayPs := OldGate.DelayPs;
       for OldConn in OldGate.Connections do
       begin
         NewConn := TPinConnection.Create;

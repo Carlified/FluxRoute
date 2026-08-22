@@ -11,7 +11,8 @@ uses
   SplitterInsert in 'SplitterInsert.pas',
   PipelineConfig in 'PipelineConfig.pas',
   PipelineAnalysis in 'PipelineAnalysis.pas',
-  FlipFlopInsert in 'FlipFlopInsert.pas';
+  FlipFlopInsert in 'FlipFlopInsert.pas',
+  ClockNetwork in 'ClockNetwork.pas';
 
 {$R *.res}
 

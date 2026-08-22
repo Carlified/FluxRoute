@@ -190,8 +190,12 @@ var
   CurrentPort: TPort;
   Shape: TPortShape;
   CurrentLayer: string;
+  Inv: TFormatSettings;
 begin
   Result := TLibrary.Create;
+  // LEF files always use '.' as the decimal separator; parse invariantly so
+  // a locale with ',' (e.g. German) does not break the numbers.
+  Inv := TFormatSettings.Invariant;
   Lines := TStringList.Create;
   try
     Lines.LoadFromFile(FileName);
@@ -215,8 +219,8 @@ begin
       else if (CurrentCell <> nil) and StartsText('SIZE', Line) then
       begin
         Parts := Line.Split([' '], TStringSplitOptions.ExcludeEmpty);
-        CurrentCell.Width := StrToFloat(Parts[1]);
-        CurrentCell.Height := StrToFloat(Parts[3]);
+        CurrentCell.Width := StrToFloat(Parts[1], Inv);
+        CurrentCell.Height := StrToFloat(Parts[3], Inv);
       end
 
       else if (CurrentCell <> nil) and StartsText('PIN', Line) then
@@ -249,10 +253,10 @@ begin
         Parts := Line.Split([' '], TStringSplitOptions.ExcludeEmpty);
         Shape := TPortShape.Create;
         Shape.Layer := CurrentLayer;
-        Shape.x1 := StrToFloat(Parts[1]);
-        Shape.y1 := StrToFloat(Parts[2]);
-        Shape.x2 := StrToFloat(Parts[3]);
-        Shape.y2 := StrToFloat(Parts[4]);
+        Shape.x1 := StrToFloat(Parts[1], Inv);
+        Shape.y1 := StrToFloat(Parts[2], Inv);
+        Shape.x2 := StrToFloat(Parts[3], Inv);
+        Shape.y2 := StrToFloat(Parts[4], Inv);
         CurrentPort.Shapes.Add(Shape);
       end
 
