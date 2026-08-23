@@ -1563,14 +1563,13 @@ begin
 end;
 
 procedure TForm1.RepaintClockPage;
-var
-  i: Integer;
 begin
   if TabControl1.TabIndex <> 5 then
     Exit;
-  for i := 0 to Children.Count - 1 do
-    if Children[i] is TControl then
-      TControl(Children[i]).Repaint;
+  // Repaint the tab control and buttons to ensure everything is refreshed
+  TabControl1.Repaint;
+  ButtonBack.Repaint;
+  ButtonNext.Repaint;
 end;
 
 procedure TForm1.FreeClockModel;
@@ -1707,17 +1706,18 @@ var
 
 var
   R: TRectF;
-  rIdx, MaxDepth, GlobalMaxDepth, TotalLeaves, TotalAllLeaves, Level: Integer;
-  BandH, BandTop, BandBot, ColW, Sq, RootX, StemX, YMid, CursorY: Single;
-  TapNetName: string;
+  rIdx, MaxDepth, i: Integer;
+  TrunkX, TreeX0, ColGap, LayerStep, Sq, RootY, YMid, StageDelay, XCur: Single;
+  TapNetName, DelayTxt, LevelTxt: string;
   Roots: TObjectList<TClockTreeNode>;
-  RootChild: TArray<TClockTreeNode>;
   RootYs: TArray<Single>;
-  LeafCounts: TArray<Integer>;
-  SlotCounter: Integer;
-  StageDelay: Double;
-  DelayTxt, LevelTxt: string;
-  Node: TClockTreeNode;
+  RowHeights: TArray<Single>;
+  MaxDepths: TArray<Integer>;
+  Node, RootSplitter: TClockTreeNode;
+  ClipState: TCanvasSaveState;
+  LevelCols: TList<Integer>;
+  ClkY: Single;
+  ClkLbl: string;
 
   // World -> screen transforms (pan + zoom), mirroring PaintPipeline.
   // Declared before the draw helpers so they can reference them.
@@ -1736,40 +1736,103 @@ var
     Result := AValue * FClockZoom;
   end;
 
-  // Assign X/Y within this band; leaves get even slots, interiors average.
-  procedure PlaceNode(Node: TClockTreeNode; Top, Bottom: Single);
+  // Left-aligned tree layout matching PaintPipeline's DFSLayout:
+  // - A child sits directly above its parent, or up-and-to-the-right -
+  //   never left of it (BaseCol floors the column at the parent's).
+  // - Subsequent siblings claim the next free columns to the right.
+  procedure LayoutSubtree(Node: TClockTreeNode; Depth: Integer;
+    BaseCol: Integer; BaseY: Single);
   var
     i: Integer;
-    Sum: Single;
+    ParentCol: Integer;
   begin
-    Node.X := RootX + Node.Depth * ColW;
-    if Node.Children.Count = 0 then
-    begin
-      Node.Y := Top + (Bottom - Top) * (SlotCounter + 0.5) / TotalLeaves;
-      Inc(SlotCounter);
-    end
+    Node.Y := BaseY - Node.Depth * LayerStep;
+
+    // Ensure we have a column counter for this depth
+    while LevelCols.Count <= Depth do
+      LevelCols.Add(0);
+
+    // Never left of the parent, never left of an earlier sibling subtree.
+    if LevelCols[Depth] < BaseCol then
+      LevelCols[Depth] := BaseCol;
+    ParentCol := LevelCols[Depth];
+
+    // Position this node
+    Node.X := TreeX0 + ParentCol * ColGap;
+
+    // Reserve next column for this depth
+    LevelCols[Depth] := ParentCol + 1;
+
+    // Lay out children recursively, floored at this node's column
+    for i := 0 to Node.Children.Count - 1 do
+      LayoutSubtree(Node.Children[i], Depth + 1, ParentCol, BaseY);
+
+    // After laying out children, ensure the next node at this depth is at
+    // least as far right as the rightmost child
+    if Depth + 1 < LevelCols.Count then
+      if LevelCols[Depth] < LevelCols[Depth + 1] then
+        LevelCols[Depth] := LevelCols[Depth + 1];
+  end;
+
+  // Filled-segment connector: bypasses stroke rendering entirely (fills
+  // demonstrably render in this view). Handles vertical, horizontal and
+  // diagonal hops.
+  procedure DrawSeg(X1, Y1, X2, Y2: Single);
+  const
+    THICK = 1.6;
+  var
+    Steps, i: Integer;
+    t, X, Y: Single;
+  begin
+    Canvas.Fill.Color := $FF555555;
+    if Abs(X2 - X1) < 0.5 then
+      Canvas.FillRect(TRectF.Create(
+        WX(X1) - WLen(THICK) / 2, WY(Min(Y1, Y2)),
+        WX(X1) + WLen(THICK) / 2, WY(Max(Y1, Y2))), 0, 0, [], 1.0)
+    else if Abs(Y2 - Y1) < 0.5 then
+      Canvas.FillRect(TRectF.Create(
+        WX(Min(X1, X2)) - WLen(THICK) / 2, WY(Y1) - WLen(THICK) / 2,
+        WX(Max(X1, X2)) + WLen(THICK) / 2, WY(Y1) + WLen(THICK) / 2), 0, 0, [], 1.0)
     else
     begin
-      Sum := 0;
-      for i := 0 to Node.Children.Count - 1 do
+      Steps := Ceil(Max(Abs(X2 - X1), Abs(Y2 - Y1)) / 2);
+      if Steps < 1 then
+        Steps := 1;
+      for i := 0 to Steps do
       begin
-        PlaceNode(Node.Children[i], Top, Bottom);
-        Sum := Sum + Node.Children[i].Y;
+        t := i / Steps;
+        X := X1 + (X2 - X1) * t;
+        Y := Y1 + (Y2 - Y1) * t;
+        Canvas.FillRect(TRectF.Create(WX(X) - WLen(THICK) / 2,
+          WY(Y) - WLen(THICK) / 2, WX(X) + WLen(THICK) / 2,
+          WY(Y) + WLen(THICK) / 2), 0, 0, [], 1.0);
       end;
-      Node.Y := Sum / Node.Children.Count;
     end;
   end;
 
-  // Edges first (boxes painted over them afterwards).
+  // Returns this gate's clock input pin name using the configured clock
+  // prefixes (same generic resolution the DFF insertion relies on).
+  function ClockPinNameOf(Gate: TGateInstance): string;
+  var
+    P: TPort;
+  begin
+    Result := 'clk';
+    if Gate = nil then
+      Exit;
+    for P in Gate.Cell.Ports do
+      if (P.Direction = pdInput) and IsClockPinName(P.Name) then
+        Exit(P.Name);
+  end;
+
+  // Thin connector lines: parent centre -> child centre.
   procedure DrawEdges(Node: TClockTreeNode);
   var
     i: Integer;
   begin
     for i := 0 to Node.Children.Count - 1 do
     begin
-      Canvas.DrawLine(TPointF.Create(WX(Node.X) + WLen(Sq) / 2, WY(Node.Y)),
-        TPointF.Create(WX(Node.Children[i].X) - WLen(Sq) / 2,
-        WY(Node.Children[i].Y)), 1.0);
+      DrawSeg(Node.X, Node.Y,
+        Node.Children[i].X, Node.Children[i].Y);
       DrawEdges(Node.Children[i]);
     end;
   end;
@@ -1778,177 +1841,197 @@ var
   var
     i: Integer;
     Clr: TAlphaColor;
-    NameR: TRectF;
   begin
-    for i := 0 to Node.Children.Count - 1 do
+    if Node.IsLeaf then
     begin
-      if Node.Children[i].IsLeaf then
-      begin
-        if FSplitterNames.IndexOf(Node.Children[i].Gate.Cell.Name) >= 0 then
-          Clr := $FF00C853
-        else if FFlipFlopNames.IndexOf(Node.Children[i].Gate.Cell.Name) >= 0 then
-          Clr := $FFD50000
-        else
-          Clr := $FF1565C0;
-        Canvas.Fill.Color := Clr;
-        Canvas.FillRect(TRectF.Create(
-          WX(Node.Children[i].X) - WLen(Sq) / 2,
-          WY(Node.Children[i].Y) - WLen(Sq) / 2,
-          WX(Node.Children[i].X) + WLen(Sq) / 2,
-          WY(Node.Children[i].Y) + WLen(Sq) / 2), 0, 0, [], 1.0);
-        NameR := TRectF.Create(WX(Node.Children[i].X) - WLen(ColW) / 2,
-          WY(Node.Children[i].Y) + WLen(Sq) / 2,
-          WX(Node.Children[i].X) + WLen(ColW) / 2,
-          WY(Node.Children[i].Y) + WLen(Sq) / 2 + WLen(14));
-        Canvas.Fill.Color := TAlphaColorRec.Dimgray;
-        Canvas.FillText(NameR, Node.Children[i].Gate.CellName, False, 1.0,
-          [], TTextAlign.Center, TTextAlign.Leading);
-      end
+      if FSplitterNames.IndexOf(Node.Gate.Cell.Name) >= 0 then
+        Clr := $FF00C853
+      else if FFlipFlopNames.IndexOf(Node.Gate.Cell.Name) >= 0 then
+        Clr := $FFD50000
       else
-      begin
-        // Interior splitter node.
-        Canvas.Fill.Color := $FF00C853;
-        Canvas.FillRect(TRectF.Create(
-          WX(Node.Children[i].X) - WLen(Sq) / 2,
-          WY(Node.Children[i].Y) - WLen(Sq) / 2,
-          WX(Node.Children[i].X) + WLen(Sq) / 2,
-          WY(Node.Children[i].Y) + WLen(Sq) / 2), 0, 0, [], 1.0);
-      end;
-      DrawNodes(Node.Children[i]);
+        Clr := $FF1565C0;
+      Canvas.Fill.Color := Clr;
+      Canvas.FillRect(TRectF.Create(
+        WX(Node.X) - WLen(Sq) / 2, WY(Node.Y) - WLen(Sq) / 2,
+        WX(Node.X) + WLen(Sq) / 2, WY(Node.Y) + WLen(Sq) / 2), 0, 0, [], 1.0);
+    end
+    else
+    begin
+      // Interior splitter node.
+      Canvas.Fill.Color := $FF00C853;
+      Canvas.FillRect(TRectF.Create(
+        WX(Node.X) - WLen(Sq) / 2, WY(Node.Y) - WLen(Sq) / 2,
+        WX(Node.X) + WLen(Sq) / 2, WY(Node.Y) + WLen(Sq) / 2), 0, 0, [], 1.0);
     end;
+    for i := 0 to Node.Children.Count - 1 do
+      DrawNodes(Node.Children[i]);
   end;
 
 begin
   R := TRectF.Create(0, 0, PaintBox2.Width, PaintBox2.Height);
   Canvas.Fill.Color := TAlphaColorRec.White;
   Canvas.FillRect(R, 0, 0, [], 1.0);
-  Canvas.IntersectClipRect(R);
 
-  if (FClockModel = nil) or (FClockNet = nil) then
-  begin
-    Canvas.Fill.Color := TAlphaColorRec.Dimgray;
-    Canvas.FillText(R, 'No clock network built - complete the previous steps.',
-      False, 1.0, [], TTextAlign.Center, TTextAlign.Center);
-    Exit;
-  end;
-
-  Roots := TObjectList<TClockTreeNode>.Create(True);
-  Visited := TDictionary<TGateInstance, Boolean>.Create;
+  // Mask everything outside the paint box. The D2D canvas only honors
+  // IntersectClipRect while a save state is active - without this the
+  // drawing bleeds over the Back/Next buttons.
+  ClipState := Canvas.SaveState;
   try
-    // One tree per row, lowest row first (bands stack bottom-up).
-    GlobalMaxDepth := 0;
-    SetLength(RootChild, FClockNet.Rows.Count);
+    Canvas.IntersectClipRect(R);
+
+    if (FClockModel = nil) or (FClockNet = nil) then
+    begin
+      Canvas.Fill.Color := TAlphaColorRec.Dimgray;
+      Canvas.FillText(R, 'No clock network built - complete the previous steps.',
+        False, 1.0, [], TTextAlign.Center, TTextAlign.Center);
+      Exit;
+    end;
+
+    Roots := TObjectList<TClockTreeNode>.Create(True);
+    Visited := TDictionary<TGateInstance, Boolean>.Create;
+    try
+    // Build one tree per row; row 0 is the highest clock level (the clock
+    // source end of the counter-flow spine, drawn at the bottom).
     SetLength(RootYs, FClockNet.Rows.Count);
-    SetLength(LeafCounts, FClockNet.Rows.Count);
-    TotalAllLeaves := 0;
+    SetLength(RowHeights, FClockNet.Rows.Count);
+    SetLength(MaxDepths, FClockNet.Rows.Count);
     for rIdx := 0 to FClockNet.Rows.Count - 1 do
     begin
       if rIdx = 0 then
-        TapNetName := ClockNetFor(FClockModel)
+        TapNetName := FClockNet.SourceNet // spine_0 == clk: source junction
+      else if rIdx <= FClockNet.Rows.Count - 2 then
+        TapNetName := Format('clk_spine_%d', [rIdx]) // feeds junction S<rIdx>
       else
-        TapNetName := Format('clk_spine_%d', [rIdx]);
+        // Topmost band (level 1): fed directly by the final delay - no
+        // junction exists here, so walk the row net itself.
+        TapNetName := Format('clk_row_%d', [FClockNet.Rows[rIdx]]);
       Node := TClockTreeNode.Create(nil, False, 0); // virtual root
       Roots.Add(Node);
       MaxDepth := 0;
       BuildTree(TapNetName, 0, Node, MaxDepth);
-      LeafCounts[rIdx] := CountLeaves(Node);
-      Inc(TotalAllLeaves, LeafCounts[rIdx]);
-      if MaxDepth > GlobalMaxDepth then
-        GlobalMaxDepth := MaxDepth;
-      if Node.Children.Count > 0 then
-      begin
-        RootChild[rIdx] := Node.Children[0];
-        RootYs[rIdx] := Node.Children[0].Y;
-      end
-      else
-      begin
-        RootChild[rIdx] := nil;
-        RootYs[rIdx] := -1;
-      end;
+      MaxDepths[rIdx] := MaxDepth;
+      RootYs[rIdx] := -1;
     end;
 
-    Canvas.Stroke.Color := $60000000;
+    Canvas.Stroke.Color := $FF9E9E9E;
+    Canvas.Stroke.Thickness := 1;
 
-    Sq := 24;
-    StemX := 90;
-    RootX := 190;
-    ColW := (PaintBox2.Width - RootX - 60) / (GlobalMaxDepth + 2);
-    if ColW < 70 then
-      ColW := 70;
+    TrunkX := 110;
+    TreeX0 := 210;
+    Sq := 26;
+    ColGap := 64;
+    LayerStep := 44;
 
-    // Layout + subtree drawing, bottom-up. Band height is proportional to
-    // the row's leaf count so dense rows get the space they need.
-    CursorY := PaintBox2.Height;
+    // Assign trunk Y positions, bottom (row 0) upward. Each row claims
+    // vertical space for its deepest tree level plus a gap for the delay
+    // block between rows. Leave room at the very bottom for the clk input.
+    RootY := PaintBox2.Height - 110;
     for rIdx := 0 to Roots.Count - 1 do
     begin
-      if TotalAllLeaves > 0 then
-        BandH := (PaintBox2.Height - 8) * LeafCounts[rIdx] / TotalAllLeaves
-      else
-        BandH := PaintBox2.Height / FClockNet.Rows.Count;
-      if BandH < Sq + 12 then
-        BandH := Sq + 12;
-      BandBot := CursorY - 4;
-      BandTop := CursorY - BandH + 4;
-      CursorY := CursorY - BandH;
-      TotalLeaves := LeafCounts[rIdx];
-      SlotCounter := 0;
-      PlaceNode(Roots[rIdx], BandTop, BandBot);
-      Canvas.Stroke.Color := $60000000;
-      DrawEdges(Roots[rIdx]);
-      DrawNodes(Roots[rIdx]);
-      // remember real root-child Y after placement
-      if RootChild[rIdx] <> nil then
-        RootYs[rIdx] := RootChild[rIdx].Y;
+      RootYs[rIdx] := RootY;
+      RowHeights[rIdx] := (MaxDepths[rIdx] + 1) * LayerStep + 34;
+      RootY := RootY - RowHeights[rIdx];
     end;
 
-    Canvas.Stroke.Color := $60000000;
+    // Layout + draw each row's tree: the root splitter is pinned to the
+    // trunk; its children fan upward, siblings branching right.
+    LevelCols := TList<Integer>.Create;
+    try
+      for rIdx := 0 to Roots.Count - 1 do
+      begin
+        Node := Roots[rIdx];
+        if Node.Children.Count > 0 then
+        begin
+          // The tree root must be the row's root SPLITTER, not whichever
+          // gate happens to sit first on the tap net.
+          RootSplitter := nil;
+          for i := 0 to Node.Children.Count - 1 do
+            if Node.Children[i].Children.Count > 0 then
+            begin
+              RootSplitter := Node.Children[i];
+              Break;
+            end;
+          if RootSplitter = nil then
+            RootSplitter := Node.Children[0];
 
-    // Stem: horizontal stub into each root splitter...
-    for rIdx := 0 to Roots.Count - 1 do
-      if (RootChild[rIdx] <> nil) then
-        Canvas.DrawLine(TPointF.Create(WX(StemX), WY(RootYs[rIdx])),
-          TPointF.Create(WX(RootChild[rIdx].X) - WLen(Sq) / 2,
-          WY(RootYs[rIdx])), 1.0);
+          RootSplitter.X := TrunkX;
+          RootSplitter.Y := RootYs[rIdx];
+          RootSplitter.Depth := 0;
+          LevelCols.Clear;
+          // Junction's outA child (the row tree root / lone gate) grows
+          // right of the trunk; LayoutSubtree floors it at the junction's
+          // own column via the BaseCol=0 start.
+          for i := 0 to RootSplitter.Children.Count - 1 do
+            LayoutSubtree(RootSplitter.Children[i], 1, 0, RootYs[rIdx]);
+          DrawEdges(RootSplitter);
+          DrawNodes(RootSplitter);
+        end;
+      end;
+    finally
+      LevelCols.Free;
+    end;
 
-    // ...and one black delay block per non-zero layer, labelled 'L<k>'.
+    Canvas.Stroke.Color := $FF9E9E9E;
+
+    // Trunk: splitter -> delay -> splitter ... straight up the left edge.
     for rIdx := 0 to Roots.Count - 2 do
     begin
-      if (RootYs[rIdx] < 0) or (RootYs[rIdx + 1] < 0) then
+      if (Roots[rIdx].Children.Count = 0) or
+         (Roots[rIdx + 1].Children.Count = 0) then
         Continue;
-      YMid := PaintBox2.Height - (rIdx + 1) * BandH; // boundary between bands
-      // vertical stem segments into and out of the delay block
-      Canvas.DrawLine(TPointF.Create(WX(StemX), WY(RootYs[rIdx])),
-        TPointF.Create(WX(StemX), WY(YMid) - WLen(13)), 1.0);
-      Canvas.DrawLine(TPointF.Create(WX(StemX), WY(YMid) + WLen(13)),
-        TPointF.Create(WX(StemX), WY(RootYs[rIdx + 1])), 1.0);
+      YMid := (RootYs[rIdx] + RootYs[rIdx + 1]) / 2;
+      // vertical trunk segments into and out of the delay block
+      DrawSeg(TrunkX, RootYs[rIdx], TrunkX, YMid - 15);
+      DrawSeg(TrunkX, YMid + 15, TrunkX, RootYs[rIdx + 1]);
 
-      StageDelay := FClockNet.Stages[FClockNet.Stages.Count - 1 - rIdx].DelayPs;
-      Level := FClockNet.Rows[FClockNet.Rows.Count - 2 - rIdx];
+      StageDelay := FClockNet.Stages[rIdx].DelayPs;
       DelayTxt := Format('%.1f ps', [StageDelay]);
-      LevelTxt := Format('L%d', [Level]);
 
       Canvas.Fill.Color := TAlphaColorRec.Black;
-      Canvas.FillRect(TRectF.Create(WX(StemX) - WLen(46), WY(YMid) - WLen(13),
-        WX(StemX) + WLen(46), WY(YMid) + WLen(13)), 0, 0, [], 1.0);
+      Canvas.FillRect(TRectF.Create(WX(TrunkX) - WLen(46), WY(YMid) - WLen(15),
+        WX(TrunkX) + WLen(46), WY(YMid) + WLen(15)), 0, 0, [], 1.0);
       Canvas.Fill.Color := TAlphaColorRec.White;
-      Canvas.FillText(TRectF.Create(WX(StemX) - WLen(46), WY(YMid) - WLen(13),
-        WX(StemX) + Wlen(46), WY(YMid) + WLen(13)), DelayTxt, False, 1.0,
+      Canvas.FillText(TRectF.Create(WX(TrunkX) - WLen(46), WY(YMid) - WLen(15),
+        WX(TrunkX) + WLen(46), WY(YMid) + WLen(15)), DelayTxt, False, 1.0,
         [], TTextAlign.Center, TTextAlign.Center);
-      Canvas.Fill.Color := TAlphaColorRec.Dimgray;
-      Canvas.FillText(TRectF.Create(WX(StemX) + WLen(50), WY(YMid) - WLen(12),
-        WX(StemX) + WLen(110), WY(YMid) + WLen(12)), LevelTxt, False, 1.0,
-        [], TTextAlign.Leading, TTextAlign.Center);
     end;
 
-    // Clock source label at the very bottom of the stem.
+    // Layer labels: to the LEFT of each row's junction splitter.
+    for rIdx := 0 to Roots.Count - 1 do
+    begin
+      LevelTxt := Format('L%d', [FClockNet.Rows[rIdx]]);
+      Canvas.Fill.Color := TAlphaColorRec.Dimgray;
+      Canvas.FillText(TRectF.Create(
+        WX(TrunkX) - WLen(Sq) / 2 - WLen(56), WY(RootYs[rIdx]) - WLen(11),
+        WX(TrunkX) - WLen(Sq) / 2 - WLen(4), WY(RootYs[rIdx]) + WLen(11)),
+        LevelTxt, False, 1.0, [], TTextAlign.Trailing, TTextAlign.Center);
+    end;
+
+    // Clock input: a primary-input square (same yellow as other inputs)
+    // feeding the first splitter from below. Labelled with the clock pin
+    // name resolved via the configured clock prefixes.
+    ClkY := PaintBox2.Height - 45;
+    DrawSeg(TrunkX, ClkY - Sq / 2, TrunkX, RootYs[0] + Sq / 2);
+    Canvas.Fill.Color := $FFFFEB3B;
+    Canvas.FillRect(TRectF.Create(WX(TrunkX) - WLen(Sq) / 2,
+      WY(ClkY) - WLen(Sq) / 2, WX(TrunkX) + WLen(Sq) / 2,
+      WY(ClkY) + WLen(Sq) / 2), 0, 0, [], 1.0);
+
+    ClkLbl := ClockNetFor(FClockModel);
+    if (Roots[0].Children.Count > 0) and
+       (Roots[0].Children[0].Gate <> nil) then
+      ClkLbl := ClockPinNameOf(Roots[0].Children[0].Gate);
     Canvas.Fill.Color := TAlphaColorRec.Dimgray;
-    Canvas.FillText(TRectF.Create(WX(StemX) - WLen(30),
-      PaintBox2.Height - WLen(18), WX(StemX) + WLen(30),
-      PaintBox2.Height), 'clk', False, 1.0, [],
+    Canvas.FillText(TRectF.Create(WX(TrunkX) - WLen(40),
+      WY(ClkY) + WLen(Sq) / 2, WX(TrunkX) + WLen(40),
+      WY(ClkY) + WLen(Sq) / 2 + WLen(16)), ClkLbl, False, 1.0, [],
       TTextAlign.Center, TTextAlign.Center);
   finally
     Roots.Free;
     Visited.Free;
+  end;
+  finally
+    Canvas.RestoreState(ClipState);
   end;
 end;
 

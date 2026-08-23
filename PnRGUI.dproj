@@ -5,11 +5,10 @@
         <FrameworkType>FMX</FrameworkType>
         <Base>True</Base>
         <Config Condition="'$(Config)'==''">Debug</Config>
-        <Platform Condition="'$(Platform)'==''">Win64</Platform>
+        <Platform Condition="'$(Platform)'==''">OSXARM64</Platform>
         <TargetedPlatforms>135171</TargetedPlatforms>
         <AppType>Application</AppType>
         <MainSource>PnRGUI.dpr</MainSource>
-        <ProjectName Condition="'$(ProjectName)'==''">PnRGUI</ProjectName>
     </PropertyGroup>
     <PropertyGroup Condition="'$(Config)'=='Base' or '$(Base)'!=''">
         <Base>true</Base>
@@ -160,6 +159,7 @@
         <DCCReference Include="PipelineConfig.pas"/>
         <DCCReference Include="PipelineAnalysis.pas"/>
         <DCCReference Include="FlipFlopInsert.pas"/>
+        <DCCReference Include="ClockNetwork.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>
