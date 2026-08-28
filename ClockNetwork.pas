@@ -40,6 +40,14 @@ const
   CLOCK_DELAY_CELL_NAME = 'CLOCK_DELAY';
 
 type
+  // One buffer cell usable for balancing clock-tree branch delays.
+  TBufferType = record
+    CellName: string;
+    DelayPs: Double;
+    InputPin: string;
+    OutputPin: string;
+  end;
+
   // One tunable spine element. Ordered from the highest row downwards.
   TClockStage = class
   public
@@ -61,11 +69,14 @@ type
 function IsClockDelayGate(const Gate: TGateInstance): Boolean;
 
 // Builds the clock network into AModel in place. SplitterTypes must contain
-// at least one splitter cell present in Lib. Diagnostics (rows found, tree
-// depths, stage seeds) are appended to Errors. Returns the registry object
-// describing the built network; nil if there was nothing to build.
+// at least one splitter cell present in Lib. BufferTypes (may be empty) lists
+// the buffer cells used to balance arrival times along each row's tree.
+// Diagnostics (rows found, tree depths, stage seeds) are appended to Errors.
+// Returns the registry object describing the built network; nil if there was
+// nothing to build.
 function BuildClockNetwork(AModel: TBlifModel; Lib: TLibrary;
   const SplitterTypes: TArray<TSplitterType>;
+  const BufferTypes: TArray<TBufferType>;
   Errors: TStrings): TClockNetworkInfo;
 
 implementation
@@ -304,8 +315,243 @@ begin
   end;
 end;
 
+// Interposes Count buffer cells in series on the net feeding Leaf's clock
+// pin (the private branch between the last splitter and the leaf), padding
+// that leaf's arrival without touching any other branch.
+procedure InsertBufferChain(AModel: TBlifModel; Lib: TLibrary;
+  const Buffer: TBufferType; Count: Integer; Leaf: TGateInstance;
+  var NetCounter: Integer);
+var
+  BCell: TCell;
+  ClkConn: TPinConnection;
+  Net: TNet;
+  NC: TNetConnection;
+  Conn: TPinConnection;
+  Gate: TGateInstance;
+  PrevNet, ChildName: string;
+  k: Integer;
+begin
+  if Count <= 0 then
+    Exit;
+  BCell := Lib.FindCell(Buffer.CellName);
+  if BCell = nil then
+    Exit;
+
+  ClkConn := nil;
+  for Conn in Leaf.Connections do
+    if IsClockPinName(Conn.Port.Name) then
+    begin
+      ClkConn := Conn;
+      Break;
+    end;
+  if ClkConn = nil then
+    Exit;
+  if not AModel.Nets.TryGetValue(ClkConn.NetName, Net) then
+    Exit;
+
+  // Detach the leaf from its old net.
+  for k := Net.Connections.Count - 1 downto 0 do
+    if (Net.Connections[k].Gate = Leaf) and (not Net.Connections[k].IsDriver) then
+      Net.Connections.Delete(k);
+
+  PrevNet := Net.Name;
+  for k := 1 to Count do
+  begin
+    Inc(NetCounter);
+    ChildName := Format('%s__clkbuf_%d', [Leaf.CellName, NetCounter]);
+    while AModel.Nets.ContainsKey(ChildName) do
+    begin
+      Inc(NetCounter);
+      ChildName := Format('%s__clkbuf_%d', [Leaf.CellName, NetCounter]);
+    end;
+
+    Gate := TGateInstance.Create;
+    Gate.CellName := BCell.Name;
+    Gate.Cell := BCell;
+    Gate.ClockLevel := Leaf.ClockLevel;
+
+    Conn := TPinConnection.Create;
+    Conn.Port := BCell.FindPort(Buffer.InputPin);
+    Conn.PinName := Buffer.InputPin;
+    Conn.NetName := PrevNet;
+    Gate.Connections.Add(Conn);
+    NC.Gate := Gate;
+    NC.PinName := Buffer.InputPin;
+    NC.IsDriver := False;
+    AModel.Nets[PrevNet].Connections.Add(NC);
+
+    Conn := TPinConnection.Create;
+    Conn.Port := BCell.FindPort(Buffer.OutputPin);
+    Conn.PinName := Buffer.OutputPin;
+    Conn.NetName := ChildName;
+    Gate.Connections.Add(Conn);
+    AModel.FindOrCreateNet(ChildName);
+    NC.Gate := Gate;
+    NC.PinName := Buffer.OutputPin;
+    NC.IsDriver := True;
+    AModel.Nets[ChildName].Connections.Add(NC);
+
+    AModel.Gates.Add(Gate);
+    PrevNet := ChildName;
+  end;
+
+  // Re-hang the leaf on the last buffer's output.
+  ClkConn.NetName := PrevNet;
+  NC.Gate := Leaf;
+  NC.PinName := ClkConn.PinName;
+  NC.IsDriver := False;
+  AModel.Nets[PrevNet].Connections.Add(NC);
+end;
+
+// Coin-change: find the combination of buffer types (unbounded counts)
+// whose total delay is closest to Deficit. Fills Counts (one entry per
+// BufferTypes entry; zeroed first). Ties prefer an undershoot (a leaf
+// arriving slightly early is safer than slightly late). Delays are scaled
+// to 0.01 ps units so the DP operates on integers.
+procedure BestBufferChange(const Deficit: Double;
+  const BufferTypes: TArray<TBufferType>; var Counts: TArray<Integer>);
+const
+  SCALE = 100.0; // 0.01 ps resolution
+var
+  den: TArray<Integer>;
+  dp: TArray<Boolean>;
+  use: TArray<Integer>;
+  maxD, target, hi, v, t, d, err, bestV, bestErr: Integer;
+  rem: Integer;
+begin
+  for t := 0 to High(Counts) do
+    Counts[t] := 0;
+  if (Length(BufferTypes) = 0) or (Deficit <= 0) then
+    Exit;
+
+  SetLength(den, Length(BufferTypes));
+  maxD := 0;
+  for t := 0 to High(BufferTypes) do
+  begin
+    d := Round(BufferTypes[t].DelayPs * SCALE);
+    if d < 1 then
+      d := 1;
+    den[t] := d;
+    if d > maxD then
+      maxD := d;
+  end;
+
+  target := Round(Deficit * SCALE);
+  if target < 1 then
+    Exit;
+
+  // Achievable sums in [0, target + maxD].
+  hi := target + maxD;
+  SetLength(dp, hi + 1);
+  SetLength(use, hi + 1);
+  dp[0] := True;
+  use[0] := -1;
+  for v := 1 to hi do
+  begin
+    dp[v] := False;
+    use[v] := -1;
+    for t := 0 to High(den) do
+    begin
+      d := den[t];
+      if (v >= d) and dp[v - d] then
+      begin
+        dp[v] := True;
+        use[v] := t;
+        Break;
+      end;
+    end;
+  end;
+
+  // Closest achievable amount to the deficit.
+  bestV := -1;
+  bestErr := MaxInt;
+  for v := 0 to hi do
+  begin
+    if not dp[v] then
+      Continue;
+    err := Abs(v - target);
+    if err < bestErr then
+    begin
+      bestErr := err;
+      bestV := v;
+    end
+    else if (err = bestErr) and (v <= target) and (bestV > target) then
+      bestV := v; // prefer undershoot on ties
+  end;
+
+  if bestV <= 0 then
+    Exit;
+
+  // Reconstruct the counts.
+  rem := bestV;
+  while rem > 0 do
+  begin
+    t := use[rem];
+    if t < 0 then
+      Break;
+    Inc(Counts[t]);
+    rem := rem - den[t];
+  end;
+end;
+
+// Pads the faster branches of a row's clock tree with the selected buffers
+// so all leaves arrive as close to the slowest leaf as possible. Buffers are
+// inserted only on the leaf-side branches, as many in a row as needed, using
+// a coin-change search over the available buffer delays.
+procedure BalanceRowTree(AModel: TBlifModel; Lib: TLibrary;
+  const BufferTypes: TArray<TBufferType>; const ARowNet: string;
+  const TreeDelays: TDictionary<string, Double>;
+  var NetCounter: Integer; Errors: TStrings);
+var
+  Dist: TDictionary<TGateInstance, Double>;
+  Leaf: TGateInstance;
+  Arr: Double;
+  Target, Deficit, Added: Double;
+  Counts: TArray<Integer>;
+  t: Integer;
+begin
+  if Length(BufferTypes) = 0 then
+    Exit;
+  SetLength(Counts, Length(BufferTypes));
+
+  Dist := TDictionary<TGateInstance, Double>.Create;
+  try
+    BuildTreeDistances(AModel, ARowNet, TreeDelays, Dist);
+    Target := 0;
+    for Arr in Dist.Values do
+      if Arr > Target then
+        Target := Arr;
+
+    for Leaf in Dist.Keys do
+    begin
+      Arr := Dist[Leaf];
+      if Arr >= Target then
+        Continue;
+      Deficit := Target - Arr;
+      if Deficit <= 0 then
+        Continue;
+
+      BestBufferChange(Deficit, BufferTypes, Counts);
+      for t := 0 to High(Counts) do
+      begin
+        if Counts[t] <= 0 then
+          Continue;
+        Added := Counts[t] * BufferTypes[t].DelayPs;
+        InsertBufferChain(AModel, Lib, BufferTypes[t], Counts[t], Leaf,
+          NetCounter);
+        Errors.Add(Format(
+          'Clock network: balanced %s with %d x %s (+%.1f ps).',
+          [Leaf.CellName, Counts[t], BufferTypes[t].CellName, Added]));
+      end;
+    end;
+  finally
+    Dist.Free;
+  end;
+end;
+
 function BuildClockNetwork(AModel: TBlifModel; Lib: TLibrary;
   const SplitterTypes: TArray<TSplitterType>;
+  const BufferTypes: TArray<TBufferType>;
   Errors: TStrings): TClockNetworkInfo;
 var
   Delays, SplitterDelays: TDictionary<string, Double>;
@@ -330,6 +576,9 @@ var
   JunctionCell: TCell;
   InPort, OutA, OutB: TPort;
   BranchNetName, DelayNetName, TreeTap: string;
+  TreeDly: TDictionary<string, Double>;
+  BufCounter: Integer;
+  BufferT: Integer;
 begin
   Result := nil;
   if (AModel = nil) or (Lib = nil) or (Length(SplitterTypes) = 0) then
@@ -356,6 +605,16 @@ begin
     for i := 0 to Length(SplitterTypes) - 1 do
       SplitterDelays.AddOrSetValue(SplitterTypes[i].CellName,
         SplitterTypes[i].DelayPs);
+
+    // Combined delay table (splitters + buffers) so tree-distance walks
+    // can traverse buffer chains inserted during balancing.
+    TreeDly := TDictionary<string, Double>.Create;
+    for BufferT := 0 to Length(SplitterTypes) - 1 do
+      TreeDly.AddOrSetValue(SplitterTypes[BufferT].CellName,
+        SplitterTypes[BufferT].DelayPs);
+    for BufferT := 0 to Length(BufferTypes) - 1 do
+      TreeDly.AddOrSetValue(BufferTypes[BufferT].CellName,
+        BufferTypes[BufferT].DelayPs);
 
     // ---- 1. Discover rows (distinct levels >= 0), highest first ----------
     for i := 0 to AModel.Gates.Count - 1 do
@@ -402,6 +661,7 @@ begin
     // clock pins; junction splitters and delays wire these nets together.
     SetLength(RowNetNames, Info.Rows.Count);
     MovedCount := 0;
+    BufCounter := 0;
     for i := 0 to High(RowNetNames) do
     begin
       RowNetNames[i] := Format('clk_row_%d', [Info.Rows[i]]);
@@ -646,6 +906,11 @@ begin
         SplitterTypes);
       LabelRowTree(AModel, TreeTap, Info.Rows[RowIdx], SplitterDelays);
       TreeDepth[RowIdx] := MaxTreePathPs(AModel, TreeTap, SplitterDelays);
+
+      // Balance branch arrival times with the selected buffers.
+      BalanceRowTree(AModel, Lib, BufferTypes, TreeTap, SplitterDelays,
+        BufCounter, Errors);
+
       Errors.Add(Format(
         'Clock network: row %d tap "%s": %d splitter(s), tree depth %.1f ps.',
         [Info.Rows[RowIdx], TreeTap, InsertedHere, TreeDepth[RowIdx]]));
@@ -672,8 +937,8 @@ begin
       begin
         TreeDistU.Clear;
         TreeDistL.Clear;
-        BuildTreeDistances(AModel, RowNetNames[i], SplitterDelays, TreeDistU);
-        BuildTreeDistances(AModel, RowNetNames[i + 1], SplitterDelays,
+        BuildTreeDistances(AModel, RowNetNames[i], TreeDly, TreeDistU);
+        BuildTreeDistances(AModel, RowNetNames[i + 1], TreeDly,
           TreeDistL);
 
         BestSeed := 0;
@@ -715,6 +980,7 @@ begin
   finally
     Delays.Free;
     SplitterDelays.Free;
+    TreeDly.Free;
     Info.Free;
   end;
 end;

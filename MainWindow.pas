@@ -33,17 +33,14 @@ type
     Memo1: TMemo;
     TabItem3: TTabItem;
     Label2: TLabel;
-    Label3: TLabel;
-    ListBox2: TListBox;
-    Label4: TLabel;
-    ListBox3: TListBox;
-    ButtonSplit: TButton;
-    TabItem4: TTabItem;
-    Label5: TLabel;
-    Label6: TLabel;
-    ListBox4: TListBox;
-    Label7: TLabel;
-    ListBox5: TListBox;
+    SubTabControl: TTabControl;
+    SubTabSplitters: TTabItem;
+    SubTabDFF: TTabItem;
+    SubTabBuffers: TTabItem;
+    ListBoxSplitters: TListBox;
+    ListBoxDFF: TListBox;
+    ListBoxBuffers: TListBox;
+    ListBoxSelected: TListBox;
     TabItem5: TTabItem;
     PaintBox1: TPaintBox;
     TrackBar1: TTrackBar;
@@ -63,13 +60,12 @@ type
     procedure Button3Click(Sender: TObject);
     procedure Button5Click(Sender: TObject);
     procedure ListBox1DblClick(Sender: TObject);
-    procedure ListBox2DblClick(Sender: TObject);
-    procedure ListBox3DblClick(Sender: TObject);
-    procedure ListBox4DblClick(Sender: TObject);
-    procedure ListBox5DblClick(Sender: TObject);
+    procedure ListBoxSplittersDblClick(Sender: TObject);
+    procedure ListBoxDFFDblClick(Sender: TObject);
+    procedure ListBoxBuffersDblClick(Sender: TObject);
+    procedure ListBoxSelectedDblClick(Sender: TObject);
     procedure TabControl1Change(Sender: TObject);
     procedure TrackBar1Change(Sender: TObject);
-    procedure ButtonSplitClick(Sender: TObject);
     procedure ButtonBackClick(Sender: TObject);
     procedure ButtonNextClick(Sender: TObject);
     procedure PaintBox1MouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Single);
@@ -86,6 +82,8 @@ type
     FCellDelays: TDictionary<string, Double>;
     FFlipFlopNames: TStringList;
     FFlipFlopCandidates: TList<TCell>;
+    FBufferNames: TStringList;
+    FBufferCandidates: TList<TCell>;
     FPipelineRows: TArray<TList<TGateInstance>>;
     FPipelineModel: TBlifModel;
     FSliderPos: Integer;
@@ -112,10 +110,10 @@ type
     function IsSplitterCandidate(const Cell: TCell; out NumOutputs: Integer): Boolean;
     function CellDelayPs(const Cell: TCell): Double;
     function DelayTextPs(const Delay: Double): string;
-    procedure PopulateSplitterList;
-    procedure RefreshSplitterList;
-    procedure PopulateFlipFlopList;
-    procedure RefreshFlipFlopList;
+    procedure PopulateSelectionTab;
+    procedure RefreshSelectedList;
+    procedure RemoveSelection(const AName: string);
+    procedure RunSplitterInsertion;
     procedure FreePipelineRows;
     procedure BuildPipelineRows(const AModel: TBlifModel);
     procedure PaintPipeline(Sender: TObject; Canvas: TCanvas);
@@ -157,12 +155,13 @@ procedure TForm1.UpdateUI;
 begin
   Button3.Enabled := (FLib <> nil);
   Button5.Enabled := (FLib <> nil);
-  ButtonSplit.Enabled := (FModel <> nil) and (FSplitterNames.Count > 0);
   ButtonBack.Enabled := (TabControl1.TabIndex > 0);
   ButtonNext.Enabled := (FLib <> nil) and
     (TabControl1.TabIndex < TabControl1.TabCount - 1);
   if TabControl1.TabIndex = 2 then
-    ButtonNext.Enabled := ButtonNext.Enabled and FSplittersInserted;
+    ButtonNext.Enabled := ButtonNext.Enabled and
+      (FSplitterNames.Count > 0) and (FFlipFlopNames.Count > 0) and
+      (FBufferNames.Count > 0);
 end;
 
 procedure TForm1.FormCreate(Sender: TObject);
@@ -172,11 +171,13 @@ begin
   FCellDelays := TDictionary<string, Double>.Create;
   FFlipFlopNames := TStringList.Create;
   FFlipFlopCandidates := TList<TCell>.Create;
+  FBufferNames := TStringList.Create;
+  FBufferCandidates := TList<TCell>.Create;
   ListBox1.OnDblClick := ListBox1DblClick;
-  ListBox2.OnDblClick := ListBox2DblClick;
-  ListBox3.OnDblClick := ListBox3DblClick;
-  ListBox4.OnDblClick := ListBox4DblClick;
-  ListBox5.OnDblClick := ListBox5DblClick;
+  ListBoxSplitters.OnDblClick := ListBoxSplittersDblClick;
+  ListBoxDFF.OnDblClick := ListBoxDFFDblClick;
+  ListBoxBuffers.OnDblClick := ListBoxBuffersDblClick;
+  ListBoxSelected.OnDblClick := ListBoxSelectedDblClick;
   PaintBox1.OnPaint := PaintPipeline;
   PaintBox1.OnMouseDown := PaintBox1MouseDown;
   PaintBox1.OnMouseMove := PaintBox1MouseMove;
@@ -206,6 +207,8 @@ begin
   FCellDelays.Free;
   FFlipFlopNames.Free;
   FFlipFlopCandidates.Free;
+  FBufferNames.Free;
+  FBufferCandidates.Free;
   FSliderTimer.Free;
   FreePipelineRows;
   FreePipelineModel;
@@ -237,10 +240,8 @@ begin
   FCellDelays.Clear;
   FFlipFlopNames.Clear;
   FFlipFlopCandidates.Clear;
-  ListBox2.Clear;
-  ListBox3.Clear;
-  ListBox4.Clear;
-  ListBox5.Clear;
+  FBufferNames.Clear;
+  FBufferCandidates.Clear;
   Label1.Text := 'Parsing: ' + ExtractFileName(FLefFile);
 
   try
@@ -392,125 +393,209 @@ begin
     Result := Format('%.1f ps', [Delay]);
 end;
 
-procedure TForm1.RefreshSplitterList;
+procedure TForm1.RefreshSelectedList;
 var
   i: Integer;
   Cell: TCell;
-  NumOutputs: Integer;
   Delay: Double;
+  Item: TListBoxItem;
 begin
-  ListBox3.Clear;
+  ListBoxSelected.Clear;
+  if FLib = nil then
+    Exit;
+
+  // Splitters (green).
   for i := 0 to FSplitterNames.Count - 1 do
   begin
-    if FLib = nil then
-      Break;
     Cell := FLib.FindCell(FSplitterNames[i]);
-    if (Cell = nil) or not IsSplitterCandidate(Cell, NumOutputs) then
+    if Cell = nil then
       Continue;
     Delay := CellDelayPs(Cell);
-    ListBox3.Items.Add(Format('%s (%d-way, %s)',
-      [Cell.Name, NumOutputs, DelayTextPs(Delay)]));
+    Item := TListBoxItem.Create(ListBoxSelected);
+    Item.Parent := ListBoxSelected;
+    Item.Text := Format('%s (%s)', [Cell.Name, DelayTextPs(Delay)]);
+    Item.TagString := Cell.Name;
+    Item.StyledSettings := Item.StyledSettings - [TStyledSetting.FontColor];
+    Item.TextSettings.FontColor := $FF00C853;
+  end;
+
+  // Flip-flops (red).
+  for i := 0 to FFlipFlopNames.Count - 1 do
+  begin
+    Cell := FLib.FindCell(FFlipFlopNames[i]);
+    if Cell = nil then
+      Continue;
+    Delay := CellDelayPs(Cell);
+    Item := TListBoxItem.Create(ListBoxSelected);
+    Item.Parent := ListBoxSelected;
+    Item.Text := Format('%s (%s)', [Cell.Name, DelayTextPs(Delay)]);
+    Item.TagString := Cell.Name;
+    Item.StyledSettings := Item.StyledSettings - [TStyledSetting.FontColor];
+    Item.TextSettings.FontColor := $FFD50000;
+  end;
+
+  // Buffers (light blue).
+  for i := 0 to FBufferNames.Count - 1 do
+  begin
+    Cell := FLib.FindCell(FBufferNames[i]);
+    if Cell = nil then
+      Continue;
+    Delay := CellDelayPs(Cell);
+    Item := TListBoxItem.Create(ListBoxSelected);
+    Item.Parent := ListBoxSelected;
+    Item.Text := Format('%s (%s)', [Cell.Name, DelayTextPs(Delay)]);
+    Item.TagString := Cell.Name;
+    Item.StyledSettings := Item.StyledSettings - [TStyledSetting.FontColor];
+    Item.TextSettings.FontColor := $FF81D4FA;
   end;
 end;
 
-procedure TForm1.PopulateSplitterList;
+procedure TForm1.PopulateSelectionTab;
 var
   i: Integer;
   Cell: TCell;
   NumOutputs: Integer;
+  ClockPin, DataPin, OutputPin, InPin, OutPin: string;
   Delay: Double;
 begin
-  ListBox2.Clear;
+  // Possible splitters (already-selected ones are excluded).
+  ListBoxSplitters.Clear;
   FCandidateCells.Clear;
-  RefreshSplitterList;
-  if FLib = nil then
-    Exit;
-  for i := 0 to FLib.Cells.Count - 1 do
-  begin
-    Cell := FLib.Cells[i];
-    if IsSplitterCandidate(Cell, NumOutputs) then
+  if FLib <> nil then
+    for i := 0 to FLib.Cells.Count - 1 do
     begin
+      Cell := FLib.Cells[i];
+      if not IsSplitterCandidate(Cell, NumOutputs) then
+        Continue;
+      if FSplitterNames.IndexOf(Cell.Name) >= 0 then
+        Continue;
       Delay := CellDelayPs(Cell);
-      ListBox2.Items.Add(Format('%s (%d outputs, %s)',
+      ListBoxSplitters.Items.Add(Format('%s (%d-way, %s)',
         [Cell.Name, NumOutputs, DelayTextPs(Delay)]));
       FCandidateCells.Add(Cell);
     end;
-  end;
-  if ListBox2.Items.Count = 0 then
-    ListBox2.Items.Add('(no splitter cells: need 1 input, 2+ outputs)');
+  if ListBoxSplitters.Items.Count = 0 then
+    ListBoxSplitters.Items.Add('(no splitter cells: need 1 input, 2+ outputs)');
+
+  // Possible flip-flops. Only a single FF type is supported, so once one is
+  // selected the list is exhausted.
+  ListBoxDFF.Clear;
+  FFlipFlopCandidates.Clear;
+  if FFlipFlopNames.Count >= 1 then
+    ListBoxDFF.Items.Add('(one flip-flop already selected)')
+  else if FLib <> nil then
+    for i := 0 to FLib.Cells.Count - 1 do
+    begin
+      Cell := FLib.Cells[i];
+      if not IsFlipFlopCandidate(Cell, ClockPin, DataPin, OutputPin) then
+        Continue;
+      Delay := CellDelayPs(Cell);
+      ListBoxDFF.Items.Add(Format('%s (%s)',
+        [Cell.Name, DelayTextPs(Delay)]));
+      FFlipFlopCandidates.Add(Cell);
+    end;
+  if ListBoxDFF.Items.Count = 0 then
+    ListBoxDFF.Items.Add('(no flip-flop cells)');
+
+  // Possible buffers (already-selected ones are excluded).
+  ListBoxBuffers.Clear;
+  FBufferCandidates.Clear;
+  if FLib <> nil then
+    for i := 0 to FLib.Cells.Count - 1 do
+    begin
+      Cell := FLib.Cells[i];
+      if not IsBufferCandidate(Cell, InPin, OutPin) then
+        Continue;
+      if FBufferNames.IndexOf(Cell.Name) >= 0 then
+        Continue;
+      Delay := CellDelayPs(Cell);
+      ListBoxBuffers.Items.Add(Format('%s (%s)',
+        [Cell.Name, DelayTextPs(Delay)]));
+      FBufferCandidates.Add(Cell);
+    end;
+  if ListBoxBuffers.Items.Count = 0 then
+    ListBoxBuffers.Items.Add('(no buffer cells)');
+
+  RefreshSelectedList;
 end;
 
-procedure TForm1.ListBox2DblClick(Sender: TObject);
+procedure TForm1.RemoveSelection(const AName: string);
+var
+  Idx: Integer;
+begin
+  Idx := FSplitterNames.IndexOf(AName);
+  if Idx >= 0 then
+    FSplitterNames.Delete(Idx)
+  else
+  begin
+    Idx := FFlipFlopNames.IndexOf(AName);
+    if Idx >= 0 then
+      FFlipFlopNames.Delete(Idx)
+    else
+    begin
+      Idx := FBufferNames.IndexOf(AName);
+      if Idx >= 0 then
+        FBufferNames.Delete(Idx);
+    end;
+  end;
+end;
+
+procedure TForm1.ListBoxSplittersDblClick(Sender: TObject);
 var
   Cell: TCell;
 begin
-  if (ListBox2.ItemIndex < 0) or (ListBox2.ItemIndex >= FCandidateCells.Count) then
+  if (ListBoxSplitters.ItemIndex < 0) or
+     (ListBoxSplitters.ItemIndex >= FCandidateCells.Count) then
     Exit;
-  Cell := FCandidateCells[ListBox2.ItemIndex];
+  Cell := FCandidateCells[ListBoxSplitters.ItemIndex];
   if FSplitterNames.IndexOf(Cell.Name) < 0 then
-  begin
     FSplitterNames.Add(Cell.Name);
-    RefreshSplitterList;
-    UpdateUI;
-  end;
-end;
-
-procedure TForm1.ListBox3DblClick(Sender: TObject);
-begin
-  if (ListBox3.ItemIndex < 0) or (ListBox3.ItemIndex >= FSplitterNames.Count) then
-    Exit;
-  FSplitterNames.Delete(ListBox3.ItemIndex);
-  RefreshSplitterList;
+  PopulateSelectionTab;
   UpdateUI;
 end;
 
-procedure TForm1.RefreshFlipFlopList;
+procedure TForm1.ListBoxDFFDblClick(Sender: TObject);
 var
-  i: Integer;
   Cell: TCell;
-  ClockPin, DataPin, OutputPin: string;
-  Delay: Double;
 begin
-  ListBox5.Clear;
-  for i := 0 to FFlipFlopNames.Count - 1 do
-  begin
-    if FLib = nil then
-      Break;
-    Cell := FLib.FindCell(FFlipFlopNames[i]);
-    if (Cell = nil) or not IsFlipFlopCandidate(Cell, ClockPin, DataPin, OutputPin) then
-      Continue;
-    Delay := CellDelayPs(Cell);
-    ListBox5.Items.Add(Format('%s (%s, %s -> %s, %s)',
-      [Cell.Name, DataPin, ClockPin, OutputPin, DelayTextPs(Delay)]));
-  end;
+  if (ListBoxDFF.ItemIndex < 0) or
+     (ListBoxDFF.ItemIndex >= FFlipFlopCandidates.Count) then
+    Exit;
+  // Insertion supports a single flip-flop type; only the first is accepted.
+  if FFlipFlopNames.Count >= 1 then
+    Exit;
+  Cell := FFlipFlopCandidates[ListBoxDFF.ItemIndex];
+  FFlipFlopNames.Add(Cell.Name);
+  PopulateSelectionTab;
+  UpdateUI;
 end;
 
-procedure TForm1.PopulateFlipFlopList;
+procedure TForm1.ListBoxBuffersDblClick(Sender: TObject);
 var
-  i: Integer;
   Cell: TCell;
-  ClockPin, DataPin, OutputPin: string;
-  Delay: Double;
 begin
-  ListBox4.Clear;
-  FFlipFlopCandidates.Clear;
-  RefreshFlipFlopList;
-  if FLib = nil then
+  if (ListBoxBuffers.ItemIndex < 0) or
+     (ListBoxBuffers.ItemIndex >= FBufferCandidates.Count) then
     Exit;
-  for i := 0 to FLib.Cells.Count - 1 do
-  begin
-    Cell := FLib.Cells[i];
-    if IsFlipFlopCandidate(Cell, ClockPin, DataPin, OutputPin) then
-    begin
-      Delay := CellDelayPs(Cell);
-      ListBox4.Items.Add(Format('%s (%s, %s -> %s, %s)',
-        [Cell.Name, DataPin, ClockPin, OutputPin, DelayTextPs(Delay)]));
-      FFlipFlopCandidates.Add(Cell);
-    end;
-  end;
-  if ListBox4.Items.Count = 0 then
-    ListBox4.Items.Add(
-      '(no flip-flop cells: need 2 inputs, 1 output, one input named clk/clock)');
+  Cell := FBufferCandidates[ListBoxBuffers.ItemIndex];
+  if FBufferNames.IndexOf(Cell.Name) < 0 then
+    FBufferNames.Add(Cell.Name);
+  PopulateSelectionTab;
+  UpdateUI;
+end;
+
+procedure TForm1.ListBoxSelectedDblClick(Sender: TObject);
+var
+  Item: TListBoxItem;
+begin
+  if ListBoxSelected.ItemIndex < 0 then
+    Exit;
+  Item := ListBoxSelected.ItemByIndex(ListBoxSelected.ItemIndex);
+  if Item = nil then
+    Exit;
+  RemoveSelection(Item.TagString);
+  PopulateSelectionTab;
+  UpdateUI;
 end;
 
 procedure TForm1.FreePipelineRows;
@@ -1200,7 +1285,7 @@ const
 
 begin
   Handled := False;
-  if TabControl1.TabIndex = 4 then
+  if TabControl1.TabIndex = 3 then
   begin
     if ZoomAt(PaintBox1, FPanX, FPanY, FZoom) then
     begin
@@ -1208,7 +1293,7 @@ begin
       RepaintPipelinePage;
     end;
   end
-  else if TabControl1.TabIndex = 5 then
+  else if TabControl1.TabIndex = 4 then
   begin
     if ZoomAt(PaintBox2, FClockPanX, FClockPanY, FClockZoom) then
     begin
@@ -1511,7 +1596,7 @@ end;
 procedure TForm1.SliderTimerTimer(Sender: TObject);
 begin
   FSliderTimer.Enabled := False;
-  if TabControl1.TabIndex <> 4 then
+  if TabControl1.TabIndex <> 3 then
     Exit;
   BuildPipelineModel;
   UpdateModeLabel;
@@ -1555,7 +1640,7 @@ begin
   // controls (labels, slider, buttons) until those are included in the
   // redraw pass. The form itself has no Repaint (it is not a TControl),
   // so invalidate every direct child of the form.
-  if TabControl1.TabIndex <> 4 then
+  if TabControl1.TabIndex <> 3 then
     Exit;
   for i := 0 to Children.Count - 1 do
     if Children[i] is TControl then
@@ -1564,7 +1649,7 @@ end;
 
 procedure TForm1.RepaintClockPage;
 begin
-  if TabControl1.TabIndex <> 5 then
+  if TabControl1.TabIndex <> 4 then
     Exit;
   // Repaint the tab control and buttons to ensure everything is refreshed
   TabControl1.Repaint;
@@ -1583,11 +1668,13 @@ end;
 procedure TForm1.BuildClockModel;
 var
   Types: TArray<TSplitterType>;
+  BufTypes: TArray<TBufferType>;
   Errors: TStringList;
-  i, n: Integer;
+  i, n, BufN: Integer;
   Cell: TCell;
   Delay: Double;
   NumOutputs: Integer;
+  InPin, OutPin: string;
 begin
   FreeClockModel;
   if (FPipelineModel = nil) or (FLib = nil) or (FFlipFlopNames.Count = 0) then
@@ -1614,9 +1701,28 @@ begin
   end;
   SetLength(Types, n);
 
+  // The selected buffer cells, with timing, for tree balancing.
+  BufN := 0;
+  SetLength(BufTypes, FBufferNames.Count);
+  for i := 0 to FBufferNames.Count - 1 do
+  begin
+    Cell := FLib.FindCell(FBufferNames[i]);
+    if (Cell = nil) or not IsBufferCandidate(Cell, InPin, OutPin) then
+      Continue;
+    Delay := CellDelayPs(Cell);
+    if Delay < 0 then
+      Continue;
+    BufTypes[BufN].CellName := Cell.Name;
+    BufTypes[BufN].DelayPs := Delay;
+    BufTypes[BufN].InputPin := InPin;
+    BufTypes[BufN].OutputPin := OutPin;
+    Inc(BufN);
+  end;
+  SetLength(BufTypes, BufN);
+
   Errors := TStringList.Create;
   try
-    FClockNet := BuildClockNetwork(FClockModel, FLib, Types, Errors);
+    FClockNet := BuildClockNetwork(FClockModel, FLib, Types, BufTypes, Errors);
     Memo1.Lines.AddStrings(Errors); // diagnostics incl. per-stage seeds
   finally
     Errors.Free;
@@ -1841,6 +1947,7 @@ var
   var
     i: Integer;
     Clr: TAlphaColor;
+    NumOutputs: Integer;
   begin
     if Node.IsLeaf then
     begin
@@ -1857,8 +1964,12 @@ var
     end
     else
     begin
-      // Interior splitter node.
-      Canvas.Fill.Color := $FF00C853;
+      // Interior tree node. Splitters stay green (the exception); buffers
+      // and any other unclocked cell use the light-blue general colour.
+      if IsSplitterCandidate(Node.Gate.Cell, NumOutputs) then
+        Canvas.Fill.Color := $FF00C853
+      else
+        Canvas.Fill.Color := $FF81D4FA;
       Canvas.FillRect(TRectF.Create(
         WX(Node.X) - WLen(Sq) / 2, WY(Node.Y) - WLen(Sq) / 2,
         WX(Node.X) + WLen(Sq) / 2, WY(Node.Y) + WLen(Sq) / 2), 0, 0, [], 1.0);
@@ -2035,38 +2146,13 @@ begin
   end;
 end;
 
-procedure TForm1.ListBox4DblClick(Sender: TObject);
-var
-  Cell: TCell;
-begin
-  if (ListBox4.ItemIndex < 0) or (ListBox4.ItemIndex >= FFlipFlopCandidates.Count) then
-    Exit;
-  // Insertion supports a single flip-flop type, so only the first selection
-  // is accepted; further double-clicks are ignored.
-  if FFlipFlopNames.Count >= 1 then
-    Exit;
-  Cell := FFlipFlopCandidates[ListBox4.ItemIndex];
-  FFlipFlopNames.Add(Cell.Name);
-  RefreshFlipFlopList;
-end;
-
-procedure TForm1.ListBox5DblClick(Sender: TObject);
-begin
-  if (ListBox5.ItemIndex < 0) or (ListBox5.ItemIndex >= FFlipFlopNames.Count) then
-    Exit;
-  FFlipFlopNames.Delete(ListBox5.ItemIndex);
-  RefreshFlipFlopList;
-end;
-
 procedure TForm1.TabControl1Change(Sender: TObject);
 var
   Dummy: TStringList;
 begin
   if TabControl1.TabIndex = 2 then
-    PopulateSplitterList;
+    PopulateSelectionTab;
   if TabControl1.TabIndex = 3 then
-    PopulateFlipFlopList;
-  if TabControl1.TabIndex = 4 then
   begin
     FPanX := 0;
     FPanY := 0;
@@ -2082,7 +2168,7 @@ begin
       Dummy.Free;
     end;
   end;
-  if TabControl1.TabIndex = 5 then
+  if TabControl1.TabIndex = 4 then
   begin
     // Clock stage: always rebuild from the current DFF-inserted netlist.
     FClockPanX := 0;
@@ -2103,7 +2189,7 @@ begin
   UpdateUI;
 end;
 
-procedure TForm1.ButtonSplitClick(Sender: TObject);
+procedure TForm1.RunSplitterInsertion;
 var
   SplitterTypes: TArray<TSplitterType>;
   i: Integer;
@@ -2184,7 +2270,7 @@ var
   Line: string;
 begin
   DumpModel := Model;
-  if (TabControl1.TabIndex = 4) and (FPipelineModel <> nil) and
+  if (TabControl1.TabIndex = 3) and (FPipelineModel <> nil) and
     (FPipelineModel <> Model) then
     DumpModel := FPipelineModel;
   Dump := TStringList.Create;
@@ -2260,6 +2346,9 @@ end;
 
 procedure TForm1.ButtonNextClick(Sender: TObject);
 begin
+  // Leaving the selection tab runs the splitter insertion automatically.
+  if (TabControl1.TabIndex = 2) and (not FSplittersInserted) then
+    RunSplitterInsertion;
   if TabControl1.TabIndex < TabControl1.TabCount - 1 then
     TabControl1.TabIndex := TabControl1.TabIndex + 1;
   UpdateUI;

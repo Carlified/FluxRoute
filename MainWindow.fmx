@@ -138,8 +138,8 @@ object Form1: TForm1
         Size.Height = 328.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 3
-        Viewport.Width = 592.000000000000000000
-        Viewport.Height = 328.000000000000000000
+        Viewport.Width = 588.000000000000000000
+        Viewport.Height = 324.000000000000000000
       end
     end
     object TabItem3: TTabItem
@@ -153,7 +153,7 @@ object Form1: TForm1
       Size.PlatformDefault = False
       StyleLookup = ''
       TabOrder = 0
-      Text = 'Splitters'
+      Text = 'Components'
       ExplicitSize.cx = 640.000000000000000000
       ExplicitSize.cy = 408.000000000000000000
       object Label2: TLabel
@@ -163,139 +163,100 @@ object Form1: TForm1
         Size.Height = 20.000000000000000000
         Size.PlatformDefault = False
         Text = 
-          'Double-click a cell to add it, or double-click to remove it. A s' +
-          'plitter has 1 input and 2 or more outputs.'
+          'Double-click a cell on the left to add it, or double-click it in t' +
+          'he list on the right to remove it.'
         TabOrder = 1
       end
-      object Label3: TLabel
-        Position.X = 24.000000000000000000
-        Position.Y = 36.000000000000000000
-        Size.Width = 280.000000000000000000
-        Size.Height = 16.000000000000000000
-        Size.PlatformDefault = False
-        Text = 'Possible splitters'
-        TabOrder = 2
-      end
-      object ListBox2: TListBox
+      object SubTabControl: TTabControl
         Position.X = 24.000000000000000000
         Position.Y = 52.000000000000000000
         Size.Width = 280.000000000000000000
-        Size.Height = 292.000000000000000000
+        Size.Height = 344.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 2
+        object SubTabSplitters: TTabItem
+          CustomIcon = <
+            item
+            end>
+          TextSettings.Trimming = None
+          IsSelected = False
+          Size.Width = 8.000000000000000000
+          Size.Height = 8.000000000000000000
+          Size.PlatformDefault = False
+          StyleLookup = ''
+          TabOrder = 0
+          Text = 'Splitters'
+          object ListBoxSplitters: TListBox
+            Align = Client
+            Size.Width = 280.000000000000000000
+            Size.Height = 316.000000000000000000
+            Size.PlatformDefault = False
+            DisableFocusEffect = True
+            DefaultItemStyles.ItemStyle = ''
+            DefaultItemStyles.GroupHeaderStyle = ''
+            DefaultItemStyles.GroupFooterStyle = ''
+          end
+        end
+        object SubTabDFF: TTabItem
+          CustomIcon = <
+            item
+            end>
+          TextSettings.Trimming = None
+          IsSelected = False
+          Size.Width = 8.000000000000000000
+          Size.Height = 8.000000000000000000
+          Size.PlatformDefault = False
+          StyleLookup = ''
+          TabOrder = 0
+          Text = 'DFF'
+          object ListBoxDFF: TListBox
+            Align = Client
+            Size.Width = 280.000000000000000000
+            Size.Height = 316.000000000000000000
+            Size.PlatformDefault = False
+            DisableFocusEffect = True
+            DefaultItemStyles.ItemStyle = ''
+            DefaultItemStyles.GroupHeaderStyle = ''
+            DefaultItemStyles.GroupFooterStyle = ''
+          end
+        end
+        object SubTabBuffers: TTabItem
+          CustomIcon = <
+            item
+            end>
+          TextSettings.Trimming = None
+          IsSelected = False
+          Size.Width = 8.000000000000000000
+          Size.Height = 8.000000000000000000
+          Size.PlatformDefault = False
+          StyleLookup = ''
+          TabOrder = 0
+          Text = 'Buffers'
+          object ListBoxBuffers: TListBox
+            Align = Client
+            Size.Width = 280.000000000000000000
+            Size.Height = 316.000000000000000000
+            Size.PlatformDefault = False
+            DisableFocusEffect = True
+            DefaultItemStyles.ItemStyle = ''
+            DefaultItemStyles.GroupHeaderStyle = ''
+            DefaultItemStyles.GroupFooterStyle = ''
+          end
+        end
+      end
+      object ListBoxSelected: TListBox
+        Position.X = 320.000000000000000000
+        Position.Y = 52.000000000000000000
+        Size.Width = 296.000000000000000000
+        Size.Height = 344.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 3
         DisableFocusEffect = True
         DefaultItemStyles.ItemStyle = ''
         DefaultItemStyles.GroupHeaderStyle = ''
         DefaultItemStyles.GroupFooterStyle = ''
-        Viewport.Width = 276.000000000000000000
-        Viewport.Height = 288.000000000000000000
-      end
-      object Label4: TLabel
-        Position.X = 320.000000000000000000
-        Position.Y = 36.000000000000000000
-        Size.Width = 296.000000000000000000
-        Size.Height = 16.000000000000000000
-        Size.PlatformDefault = False
-        Text = 'Selected splitters'
-        TabOrder = 4
-      end
-      object ListBox3: TListBox
-        Position.X = 320.000000000000000000
-        Position.Y = 52.000000000000000000
-        Size.Width = 296.000000000000000000
-        Size.Height = 292.000000000000000000
-        Size.PlatformDefault = False
-        TabOrder = 5
-        DisableFocusEffect = True
-        DefaultItemStyles.ItemStyle = ''
-        DefaultItemStyles.GroupHeaderStyle = ''
-        DefaultItemStyles.GroupFooterStyle = ''
         Viewport.Width = 292.000000000000000000
-        Viewport.Height = 288.000000000000000000
-      end
-      object ButtonSplit: TButton
-        Enabled = False
-        Position.X = 24.000000000000000000
-        Position.Y = 352.000000000000000000
-        Size.Width = 150.000000000000000000
-        Size.Height = 32.000000000000000000
-        Size.PlatformDefault = False
-        TabOrder = 6
-        Text = 'Insert splitters'
-        TextSettings.Trimming = None
-        OnClick = ButtonSplitClick
-      end
-    end
-    object TabItem4: TTabItem
-      CustomIcon = <
-        item
-        end>
-      TextSettings.Trimming = None
-      IsSelected = False
-      Size.Width = 8.000000000000000000
-      Size.Height = 8.000000000000000000
-      Size.PlatformDefault = False
-      StyleLookup = ''
-      TabOrder = 0
-      Text = 'Flip-flops'
-      ExplicitSize.cx = 640.000000000000000000
-      ExplicitSize.cy = 408.000000000000000000
-      object Label5: TLabel
-        Position.X = 24.000000000000000000
-        Position.Y = 12.000000000000000000
-        Size.Width = 592.000000000000000000
-        Size.Height = 20.000000000000000000
-        Size.PlatformDefault = False
-        Text = 
-          'Double-click a cell to add it, or double-click to remove it. A f' +
-          'lip-flop has 2 inputs (one clock) and 1 output.'
-        TabOrder = 1
-      end
-      object Label6: TLabel
-        Position.X = 24.000000000000000000
-        Position.Y = 36.000000000000000000
-        Size.Width = 280.000000000000000000
-        Size.Height = 16.000000000000000000
-        Size.PlatformDefault = False
-        Text = 'Possible flip-flops'
-        TabOrder = 2
-      end
-      object ListBox4: TListBox
-        Position.X = 24.000000000000000000
-        Position.Y = 52.000000000000000000
-        Size.Width = 280.000000000000000000
-        Size.Height = 340.000000000000000000
-        Size.PlatformDefault = False
-        TabOrder = 3
-        DisableFocusEffect = True
-        DefaultItemStyles.ItemStyle = ''
-        DefaultItemStyles.GroupHeaderStyle = ''
-        DefaultItemStyles.GroupFooterStyle = ''
-        Viewport.Width = 276.000000000000000000
-        Viewport.Height = 336.000000000000000000
-      end
-      object Label7: TLabel
-        Position.X = 320.000000000000000000
-        Position.Y = 36.000000000000000000
-        Size.Width = 296.000000000000000000
-        Size.Height = 16.000000000000000000
-        Size.PlatformDefault = False
-        Text = 'Selected flip-flops'
-        TabOrder = 4
-      end
-      object ListBox5: TListBox
-        Position.X = 320.000000000000000000
-        Position.Y = 52.000000000000000000
-        Size.Width = 296.000000000000000000
-        Size.Height = 340.000000000000000000
-        Size.PlatformDefault = False
-        TabOrder = 5
-        DisableFocusEffect = True
-        DefaultItemStyles.ItemStyle = ''
-        DefaultItemStyles.GroupHeaderStyle = ''
-        DefaultItemStyles.GroupFooterStyle = ''
-        Viewport.Width = 292.000000000000000000
-        Viewport.Height = 336.000000000000000000
+        Viewport.Height = 340.000000000000000000
       end
     end
     object TabItem5: TTabItem
@@ -374,7 +335,7 @@ object Form1: TForm1
           CanParentFocus = True
           Orientation = Horizontal
           Size.Width = 444.000000000000000000
-          Size.Height = 32.000000000000000000
+          Size.Height = 19.000000000000000000
           Size.PlatformDefault = False
           TabOrder = 1
           OnChange = TrackBar1Change

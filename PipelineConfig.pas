@@ -32,6 +32,11 @@ function CellHasClock(const Cell: TCell): Boolean;
 function IsFlipFlopCandidate(const Cell: TCell;
   out ClockPin, DataPin, OutputPin: string): Boolean;
 
+// A buffer is a cell with exactly one input and one output (no clock or
+// other auxiliary pins). Fills InputPin and OutputPin on success.
+function IsBufferCandidate(const Cell: TCell;
+  out InputPin, OutputPin: string): Boolean;
+
 implementation
 
 uses
@@ -201,6 +206,36 @@ begin
     end;
   Result := (NumInputs >= MinInputs) and (NumInputs <= MaxInputs) and
             (NumOutputs = RequiredOutputs) and (ClockPin <> '');
+end;
+
+function IsBufferCandidate(const Cell: TCell;
+  out InputPin, OutputPin: string): Boolean;
+var
+  Port: TPort;
+  NumInputs: Integer;
+  NumOutputs: Integer;
+begin
+  Result := False;
+  InputPin := '';
+  OutputPin := '';
+  if Cell = nil then
+    Exit;
+  NumInputs := 0;
+  NumOutputs := 0;
+  for Port in Cell.Ports do
+    case Port.Direction of
+      pdInput:
+      begin
+        Inc(NumInputs);
+        InputPin := Port.Name;
+      end;
+      pdOutput:
+      begin
+        Inc(NumOutputs);
+        OutputPin := Port.Name;
+      end;
+    end;
+  Result := (NumInputs = 1) and (NumOutputs = 1);
 end;
 
 initialization
