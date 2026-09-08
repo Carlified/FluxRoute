@@ -185,46 +185,6 @@ object Form1: TForm1
         Viewport.Height = 252.000000000000000000
       end
     end
-    object TabItem2: TTabItem
-      CustomIcon = <
-        item
-        end>
-      TextSettings.Trimming = None
-      IsSelected = False
-      Size.Width = 8.000000000000000000
-      Size.Height = 8.000000000000000000
-      Size.PlatformDefault = False
-      StyleLookup = ''
-      TabOrder = 0
-      Text = 'Netlist'
-      ExplicitSize.cx = 640.000000000000000000
-      ExplicitSize.cy = 408.000000000000000000
-      object Button5: TButton
-        Enabled = False
-        Position.X = 24.000000000000000000
-        Position.Y = 24.000000000000000000
-        Size.Width = 150.000000000000000000
-        Size.Height = 32.000000000000000000
-        Size.PlatformDefault = False
-        TabOrder = 1
-        Text = 'Load BLIF file'
-        TextSettings.Trimming = None
-        OnClick = Button5Click
-      end
-      object Memo1: TMemo
-        Touch.InteractiveGestures = [Pan, LongTap, DoubleTap]
-        DataDetectorTypes = []
-        ReadOnly = True
-        Position.X = 24.000000000000000000
-        Position.Y = 64.000000000000000000
-        Size.Width = 592.000000000000000000
-        Size.Height = 328.000000000000000000
-        Size.PlatformDefault = False
-        TabOrder = 3
-        Viewport.Width = 588.000000000000000000
-        Viewport.Height = 324.000000000000000000
-      end
-    end
     object TabItem3: TTabItem
       CustomIcon = <
         item
@@ -236,7 +196,7 @@ object Form1: TForm1
       Size.PlatformDefault = False
       StyleLookup = ''
       TabOrder = 0
-      Text = 'Components'
+      Text = 'Cells'
       ExplicitSize.cx = 640.000000000000000000
       ExplicitSize.cy = 408.000000000000000000
       object Label2: TLabel
@@ -340,6 +300,46 @@ object Form1: TForm1
         DefaultItemStyles.GroupFooterStyle = ''
         Viewport.Width = 292.000000000000000000
         Viewport.Height = 340.000000000000000000
+      end
+    end
+    object TabItem2: TTabItem
+      CustomIcon = <
+        item
+        end>
+      TextSettings.Trimming = None
+      IsSelected = False
+      Size.Width = 8.000000000000000000
+      Size.Height = 8.000000000000000000
+      Size.PlatformDefault = False
+      StyleLookup = ''
+      TabOrder = 0
+      Text = 'BLIF'
+      ExplicitSize.cx = 640.000000000000000000
+      ExplicitSize.cy = 408.000000000000000000
+      object Button5: TButton
+        Enabled = False
+        Position.X = 24.000000000000000000
+        Position.Y = 24.000000000000000000
+        Size.Width = 150.000000000000000000
+        Size.Height = 32.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 1
+        Text = 'Load BLIF file'
+        TextSettings.Trimming = None
+        OnClick = Button5Click
+      end
+      object Memo1: TMemo
+        Touch.InteractiveGestures = [Pan, LongTap, DoubleTap]
+        DataDetectorTypes = []
+        ReadOnly = True
+        Position.X = 24.000000000000000000
+        Position.Y = 64.000000000000000000
+        Size.Width = 592.000000000000000000
+        Size.Height = 328.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 3
+        Viewport.Width = 588.000000000000000000
+        Viewport.Height = 324.000000000000000000
       end
     end
     object TabItem5: TTabItem

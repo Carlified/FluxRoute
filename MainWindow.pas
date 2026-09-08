@@ -22,12 +22,12 @@ uses
   FMX.Memo.Types, FMX.ScrollBox;
 
 const
-  // Top-level wizard page indexes. A Start/project page was inserted at the
-  // front, so every later page is offset by one.
+  // Top-level wizard page indexes. A Start/project page is at the front.
+  // Order: Start, Library, Cell selection, BLIF loading, Pipeline, Clock.
   TabStart = 0;
   TabLibrary = 1;
-  TabNetlist = 2;
-  TabComponents = 3;
+  TabComponents = 2; // cell selection (splitters/FF/buffers)
+  TabNetlist = 3;    // BLIF loading
   TabPipeline = 4;
   TabClock = 5;
 
@@ -356,6 +356,8 @@ begin
     ButtonNext.Enabled := ButtonNext.Enabled and
       (FSplitterNames.Count > 0) and (FFlipFlopNames.Count > 0) and
       (FBufferNames.Count > 0);
+  if TabControl1.TabIndex = TabNetlist then
+    ButtonNext.Enabled := ButtonNext.Enabled and (FModel <> nil);
 end;
 
 procedure TForm1.UpdateRecentList;
@@ -598,17 +600,18 @@ begin
         mrYes:
         begin
           SaveProjectFileAs;
+          // Saved successfully: let the dialog fully unwind, then close.
           if FProjectPath <> '' then
           begin
             FAllowClose := True;
-            Close;
+            TThread.ForceQueue(nil, procedure begin Close; end);
           end;
           // Save As cancelled: stay open with the work untouched.
         end;
         mrNo:
         begin
           FAllowClose := True;
-          Close;
+          TThread.ForceQueue(nil, procedure begin Close; end);
         end;
       end;
     end);
@@ -2674,8 +2677,8 @@ end;
 
 procedure TForm1.ButtonNextClick(Sender: TObject);
 begin
-  // Leaving the selection tab runs the splitter insertion automatically.
-  if (TabControl1.TabIndex = TabComponents) and (not FSplittersInserted) then
+  // Leaving the BLIF tab runs the splitter insertion automatically.
+  if (TabControl1.TabIndex = TabNetlist) and (not FSplittersInserted) then
     RunSplitterInsertion;
   if TabControl1.TabIndex < TabControl1.TabCount - 1 then
     TabControl1.TabIndex := TabControl1.TabIndex + 1;
