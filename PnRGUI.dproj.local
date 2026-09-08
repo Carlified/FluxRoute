@@ -14,12 +14,12 @@
     <File Path="CellViewer.pas"/>
     <File Path="LefLibrary.pas"/>
     <File Path="MainWindow.pas"/>
-    <File Path="MainWindow.fmx"/>
     <File Path="SplitterInsert.pas"/>
     <File Path="VerilogTiming.pas"/>
     <File Path="FlipFlopInsert.pas"/>
     <File Path="PipelineAnalysis.pas"/>
     <File Path="PipelineConfig.pas"/>
     <File Path="ClockNetwork.pas"/>
+    <File Path="ProjectData.pas"/>
   </ProjectSortOrder>
 </BorlandProject>

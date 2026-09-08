@@ -17,11 +17,29 @@ uses
   PipelineConfig,
   PipelineAnalysis,
   FlipFlopInsert, ClockNetwork,
+  ProjectData,
+  FMX.DialogService,
   FMX.Memo.Types, FMX.ScrollBox;
+
+const
+  // Top-level wizard page indexes. A Start/project page was inserted at the
+  // front, so every later page is offset by one.
+  TabStart = 0;
+  TabLibrary = 1;
+  TabNetlist = 2;
+  TabComponents = 3;
+  TabPipeline = 4;
+  TabClock = 5;
 
 type
   TForm1 = class(TForm)
     TabControl1: TTabControl;
+    LabelStartTitle: TLabel;
+    LabelStartHint: TLabel;
+    ButtonNewProject: TButton;
+    ButtonOpenProject: TButton;
+    LabelRecent: TLabel;
+    ListBoxRecent: TListBox;
     TabItem1: TTabItem;
     WelcomeLabel: TLabel;
     Button1: TButton;
@@ -53,8 +71,11 @@ type
     ButtonBack: TButton;
     ButtonNext: TButton;
     OpenDialog1: TOpenDialog;
+    SaveDialog1: TSaveDialog;
     procedure FormCreate(Sender: TObject);
     procedure FormDestroy(Sender: TObject);
+    procedure FormKeyDown(Sender: TObject; var Key: Word; var KeyChar: WideChar; Shift: TShiftState);
+    procedure FormCloseQuery(Sender: TObject; var CanClose: Boolean);
     procedure FormMouseWheel(Sender: TObject; Shift: TShiftState; WheelDelta: Integer; var Handled: Boolean);
     procedure Button1Click(Sender: TObject);
     procedure Button3Click(Sender: TObject);
@@ -68,6 +89,9 @@ type
     procedure TrackBar1Change(Sender: TObject);
     procedure ButtonBackClick(Sender: TObject);
     procedure ButtonNextClick(Sender: TObject);
+    procedure ButtonNewProjectClick(Sender: TObject);
+    procedure ButtonOpenProjectClick(Sender: TObject);
+    procedure ListBoxRecentDblClick(Sender: TObject);
     procedure PaintBox1MouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Single);
     procedure PaintBox1MouseMove(Sender: TObject; Shift: TShiftState; X, Y: Single);
     procedure PaintBox1MouseUp(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Single);
@@ -96,6 +120,12 @@ type
     FClockModel: TBlifModel;      // deep copy of the DFF-inserted netlist
     FClockNet: TClockNetworkInfo; // clock stage registry (top-down)
     FSplittersInserted: Boolean;
+    FProject: TProjectFile;
+    FProjectPath: string;
+    FRecent: TStringList;
+    FLastProject: string;
+    FClosePromptActive: Boolean;
+    FAllowClose: Boolean;
     FPanX, FPanY: Single;
     FDragX, FDragY: Single;
     FDragging: Boolean;
@@ -105,6 +135,15 @@ type
     FClkDragging: Boolean;
     FClockZoom: Single;
     procedure FreeLib;
+    procedure ResetWorkspace;
+    procedure LoadLibraryFromFile(const Path: string; AShowErrors: Boolean = True);
+    procedure SetCellFolderPath(const Path: string; AShowErrors: Boolean = True);
+    procedure LoadNetlistFromFile(const Path: string; AShowErrors: Boolean = True);
+    procedure ApplyProjectSettings;
+    procedure OpenProjectFile(const Path: string);
+    procedure SaveProjectFileAs;
+    procedure SaveProjectState;
+    procedure UpdateRecentList;
     procedure UpdateUI;
     procedure RenderNetlist(Model: TBlifModel; Errors: TStrings);
     function IsSplitterCandidate(const Cell: TCell; out NumOutputs: Integer): Boolean;
@@ -151,6 +190,161 @@ begin
   FLib := nil;
 end;
 
+procedure TForm1.ResetWorkspace;
+begin
+  FSplittersInserted := False;
+  FreePipelineRows;
+  FreePipelineModel;
+  FreeClockModel;
+  FreeLib;
+  FLefFile := '';
+  FCellFolder := '';
+  FBlifFile := '';
+  FSplitterNames.Clear;
+  FCandidateCells.Clear;
+  FCellDelays.Clear;
+  FFlipFlopNames.Clear;
+  FFlipFlopCandidates.Clear;
+  FBufferNames.Clear;
+  FBufferCandidates.Clear;
+  ListBox1.Clear;
+  ListBoxSplitters.Clear;
+  ListBoxDFF.Clear;
+  ListBoxBuffers.Clear;
+  ListBoxSelected.Clear;
+  Memo1.Lines.Clear;
+  UpdateLimitLabels;
+end;
+
+procedure TForm1.LoadLibraryFromFile(const Path: string; AShowErrors: Boolean);
+var
+  Lib: TLibrary;
+  i: Integer;
+begin
+  if not TFile.Exists(Path) then
+  begin
+    Label1.Text := 'LEF file not found: ' + Path;
+    if AShowErrors then
+      ShowMessage(Label1.Text);
+    Exit;
+  end;
+
+  ResetWorkspace;
+  FLefFile := Path;
+  Label1.Text := 'Parsing: ' + ExtractFileName(FLefFile);
+
+  try
+    Lib := LoadLefLibrary(FLefFile);
+  except
+    on E: Exception do
+    begin
+      Label1.Text := 'Failed to parse LEF file.';
+      if AShowErrors then
+        ShowMessage('Failed to parse LEF file:' + sLineBreak + sLineBreak + E.Message);
+      UpdateUI;
+      Exit;
+    end;
+  end;
+
+  FLib := Lib;
+  for i := 0 to FLib.Cells.Count - 1 do
+    ListBox1.Items.Add(FLib.Cells[i].Name);
+  Label1.Text := Format('Loaded %d cell(s) from %s',
+    [FLib.Cells.Count, ExtractFileName(FLefFile)]);
+  UpdateUI;
+  SaveProjectState;
+end;
+
+procedure TForm1.SetCellFolderPath(const Path: string; AShowErrors: Boolean);
+var
+  Cell: TCell;
+  CellsWithMatches, TotalFiles: Integer;
+begin
+  FCellFolder := Path;
+  if FLib = nil then
+    Exit;
+
+  if not TDirectory.Exists(FCellFolder) then
+  begin
+    Label1.Text := 'Cell folder no longer exists.';
+    if AShowErrors then
+      ShowMessage(Label1.Text);
+    Exit;
+  end;
+
+  FLib.FindCellSourceFiles(FCellFolder);
+
+  CellsWithMatches := 0;
+  TotalFiles := 0;
+  for Cell in FLib.Cells do
+    if Cell.SourceFiles.Count > 0 then
+    begin
+      Inc(CellsWithMatches);
+      Inc(TotalFiles, Cell.SourceFiles.Count);
+    end;
+
+  Label1.Text := Format('Found %d linked file(s) for %d of %d cells. Double-click a cell to view it.',
+    [TotalFiles, CellsWithMatches, FLib.Cells.Count]);
+  UpdateUI;
+  SaveProjectState;
+end;
+
+procedure TForm1.LoadNetlistFromFile(const Path: string; AShowErrors: Boolean);
+var
+  Errors: TStringList;
+begin
+  if FLib = nil then
+    Exit;
+
+  if not TFile.Exists(Path) then
+  begin
+    Label1.Text := 'BLIF file not found: ' + Path;
+    if AShowErrors then
+      ShowMessage(Label1.Text);
+    Exit;
+  end;
+
+  FBlifFile := Path;
+  FModel.Free; // a new BLIF file invalidates the previously parsed netlist
+  FModel := nil;
+  FSplittersInserted := False;
+  FreePipelineRows;
+  FreePipelineModel;
+  FreeClockModel;
+  UpdateLimitLabels;
+  FCellDelays.Clear;
+  Memo1.Lines.Clear;
+  Label1.Text := 'Parsing: ' + ExtractFileName(FBlifFile);
+
+  Errors := TStringList.Create;
+  try
+    try
+      FModel := ParseBlif(FBlifFile, FLib, Errors);
+    except
+      on E: Exception do
+      begin
+        Label1.Text := 'Failed to parse BLIF file.';
+        if AShowErrors then
+          ShowMessage('Failed to parse BLIF file:' + sLineBreak + sLineBreak + E.Message);
+        UpdateUI;
+        Exit;
+      end;
+    end;
+
+    CheckNetConnectivity(FModel, Errors);
+
+    ComputeClockLevels(FModel, Errors);
+
+    RenderNetlist(FModel, Errors);
+    Label1.Text := Format('Loaded netlist "%s": %d gate(s), %d net(s), %d error(s)',
+      [FModel.Name, FModel.Gates.Count, FModel.Nets.Count, Errors.Count]);
+  finally
+    Errors.Free;
+  end;
+  UpdateUI;
+  SaveProjectState;
+end;
+
 procedure TForm1.UpdateUI;
 begin
   Button3.Enabled := (FLib <> nil);
@@ -158,10 +352,157 @@ begin
   ButtonBack.Enabled := (TabControl1.TabIndex > 0);
   ButtonNext.Enabled := (FLib <> nil) and
     (TabControl1.TabIndex < TabControl1.TabCount - 1);
-  if TabControl1.TabIndex = 2 then
+  if TabControl1.TabIndex = TabComponents then
     ButtonNext.Enabled := ButtonNext.Enabled and
       (FSplitterNames.Count > 0) and (FFlipFlopNames.Count > 0) and
       (FBufferNames.Count > 0);
+end;
+
+procedure TForm1.UpdateRecentList;
+var
+  i: Integer;
+begin
+  ListBoxRecent.Clear;
+  for i := 0 to FRecent.Count - 1 do
+    ListBoxRecent.Items.Add(FRecent[i]);
+end;
+
+procedure TForm1.SaveProjectState;
+begin
+  if FProjectPath = '' then
+  begin
+    UpdateUI;
+    Exit;
+  end;
+  FProject.LefFile := FLefFile;
+  FProject.CellFolder := FCellFolder;
+  FProject.BlifFile := FBlifFile;
+  FProject.Splitters.Assign(FSplitterNames);
+  FProject.Buffers.Assign(FBufferNames);
+  if FFlipFlopNames.Count > 0 then
+    FProject.FlipFlop := FFlipFlopNames[0]
+  else
+    FProject.FlipFlop := '';
+  FProject.SplittersInserted := FSplittersInserted;
+  FProject.LastTab := TabControl1.TabIndex;
+  try
+    FProject.SaveToFile(FProjectPath);
+  except
+    on E: Exception do
+      ShowMessage('Failed to save project:' + sLineBreak + E.Message);
+  end;
+  if FRecent.IndexOf(FProjectPath) < 0 then
+  begin
+    FRecent.Insert(0, FProjectPath);
+    while FRecent.Count > MaxRecentProjects do
+      FRecent.Delete(FRecent.Count - 1);
+    try
+      SaveRecentProjects(FProjectPath, FRecent);
+    except
+    end;
+    UpdateRecentList;
+  end;
+  UpdateUI;
+end;
+
+procedure TForm1.SaveProjectFileAs;
+begin
+  if FBlifFile <> '' then
+    SaveDialog1.InitialDir := ExtractFilePath(FBlifFile);
+  SaveDialog1.FileName := 'FluxRoute.fluxroute';
+  if not SaveDialog1.Execute then
+    Exit;
+  FProjectPath := SaveDialog1.FileName;
+  SaveProjectState;
+  Label1.Text := 'Project saved: ' + ExtractFileName(FProjectPath);
+end;
+
+procedure TForm1.ApplyProjectSettings;
+begin
+  if FProject.LefFile <> '' then
+    LoadLibraryFromFile(FProject.LefFile, False);
+  if FProject.CellFolder <> '' then
+    SetCellFolderPath(FProject.CellFolder, False);
+  if (FLib <> nil) and (FProject.BlifFile <> '') then
+    LoadNetlistFromFile(FProject.BlifFile, False);
+
+  // Restore component selections (valid even if some files failed to load).
+  FSplitterNames.Assign(FProject.Splitters);
+  FFlipFlopNames.Clear;
+  if FProject.FlipFlop <> '' then
+    FFlipFlopNames.Add(FProject.FlipFlop);
+  FBufferNames.Assign(FProject.Buffers);
+
+  // Reproduce the splitter-inserted netlist if the project had reached it.
+  if (FModel <> nil) and FProject.SplittersInserted then
+  begin
+    RunSplitterInsertion;
+    FSplittersInserted := True;
+  end;
+end;
+
+procedure TForm1.OpenProjectFile(const Path: string);
+begin
+  if not TFile.Exists(Path) then
+  begin
+    ShowMessage('Project file not found:' + sLineBreak + Path);
+    Exit;
+  end;
+  try
+    FProject.LoadFromFile(Path);
+  except
+    on E: Exception do
+    begin
+      ShowMessage('Failed to read project:' + sLineBreak + E.Message);
+      Exit;
+    end;
+  end;
+  FProjectPath := Path;
+  ResetWorkspace;
+  ApplyProjectSettings;
+  UpdateRecentList;
+  if FProject.LastTab < 0 then
+    FProject.LastTab := 0;
+  if FProject.LastTab > TabControl1.TabCount - 1 then
+    FProject.LastTab := TabControl1.TabCount - 1;
+  if FModel <> nil then
+    TabControl1.TabIndex := FProject.LastTab
+  else if FLib <> nil then
+    TabControl1.TabIndex := TabLibrary
+  else
+    TabControl1.TabIndex := TabStart;
+  UpdateUI;
+end;
+
+procedure TForm1.ButtonNewProjectClick(Sender: TObject);
+begin
+  ResetWorkspace;
+  FProjectPath := '';
+  FProject.Clear;
+  UpdateUI;
+  TabControl1.TabIndex := TabLibrary;
+  Label1.Text := 'New project. Load a LEF file to begin.';
+end;
+
+procedure TForm1.ButtonOpenProjectClick(Sender: TObject);
+begin
+  OpenDialog1.Filter := 'FluxRoute projects (*.fluxroute)|*.fluxroute|All files (*.*)|*.*';
+  OpenDialog1.FilterIndex := 1;
+  if not OpenDialog1.Execute then
+    Exit;
+  OpenProjectFile(OpenDialog1.FileName);
+end;
+
+procedure TForm1.ListBoxRecentDblClick(Sender: TObject);
+var
+  Item: TListBoxItem;
+begin
+  if ListBoxRecent.ItemIndex < 0 then
+    Exit;
+  Item := ListBoxRecent.ItemByIndex(ListBoxRecent.ItemIndex);
+  if Item = nil then
+    Exit;
+  OpenProjectFile(Item.Text);
 end;
 
 procedure TForm1.FormCreate(Sender: TObject);
@@ -174,6 +515,7 @@ begin
   FBufferNames := TStringList.Create;
   FBufferCandidates := TList<TCell>.Create;
   ListBox1.OnDblClick := ListBox1DblClick;
+  ListBoxRecent.OnDblClick := ListBoxRecentDblClick;
   ListBoxSplitters.OnDblClick := ListBoxSplittersDblClick;
   ListBoxDFF.OnDblClick := ListBoxDFFDblClick;
   ListBoxBuffers.OnDblClick := ListBoxBuffersDblClick;
@@ -195,9 +537,82 @@ begin
   FSliderTimer.Interval := 200;
   FSliderTimer.Enabled := False;
   FSliderTimer.OnTimer := SliderTimerTimer;
+  FProject := TProjectFile.Create;
+  FRecent := TStringList.Create;
+  LoadRecentProjects(FLastProject, FRecent);
+  UpdateRecentList;
   UpdateModeLabel;
   UpdateLimitLabels;
   UpdateUI;
+  // Always start on the Start page; recent projects are opened explicitly.
+  TabControl1.TabIndex := TabStart;
+end;
+
+procedure TForm1.FormKeyDown(Sender: TObject; var Key: Word;
+  var KeyChar: WideChar; Shift: TShiftState);
+begin
+  // Ctrl+S on Windows, Cmd+S on macOS. Only the explicit save actions open
+  // the Save As dialog; everything else saves silently or never asks.
+  if (Key = Ord('S')) and ((ssCtrl in Shift) or (ssCommand in Shift)) then
+  begin
+    Key := 0;
+    if FProjectPath = '' then
+      SaveProjectFileAs
+    else
+    begin
+      SaveProjectState;
+      Label1.Text := 'Project saved: ' + ExtractFileName(FProjectPath);
+    end;
+  end;
+end;
+
+procedure TForm1.FormCloseQuery(Sender: TObject; var CanClose: Boolean);
+begin
+  // Re-entrant close after the user confirmed (Yes/No) in the callback.
+  if FAllowClose then
+  begin
+    CanClose := True;
+    Exit;
+  end;
+  // A prompt is already showing; keep the window open until it resolves.
+  if FClosePromptActive then
+  begin
+    CanClose := False;
+    Exit;
+  end;
+  // A saved project is always up to date (auto-save), and a fresh session
+  // with nothing loaded has nothing to protect: close normally.
+  if (FProjectPath <> '') or (FLib = nil) then
+  begin
+    CanClose := True;
+    Exit;
+  end;
+  // Unsaved work that was never written to a project file: ask asynchronously.
+  FClosePromptActive := True;
+  TDialogService.MessageDialog('Save the current project before closing?',
+    TMsgDlgType.mtConfirmation, mbYesNoCancel, TMsgDlgBtn.mbYes, 0,
+    procedure(const AResult: TModalResult)
+    begin
+      FClosePromptActive := False;
+      case AResult of
+        mrYes:
+        begin
+          SaveProjectFileAs;
+          if FProjectPath <> '' then
+          begin
+            FAllowClose := True;
+            Close;
+          end;
+          // Save As cancelled: stay open with the work untouched.
+        end;
+        mrNo:
+        begin
+          FAllowClose := True;
+          Close;
+        end;
+      end;
+    end);
+  CanClose := False;
 end;
 
 procedure TForm1.FormDestroy(Sender: TObject);
@@ -210,6 +625,8 @@ begin
   FBufferNames.Free;
   FBufferCandidates.Free;
   FSliderTimer.Free;
+  FProject.Free;
+  FRecent.Free;
   FreePipelineRows;
   FreePipelineModel;
   FreeClockModel;
@@ -217,57 +634,17 @@ begin
 end;
 
 procedure TForm1.Button1Click(Sender: TObject);
-var
-  Lib: TLibrary;
-  i: Integer;
 begin
   OpenDialog1.Filter := 'LEF files (*.lef)|*.lef|All files (*.*)|*.*';
   OpenDialog1.FilterIndex := 1;
   if not OpenDialog1.Execute then
     Exit;
-
-  FLefFile := OpenDialog1.FileName;
-  FreeLib; // a new LEF file invalidates the previously parsed library
-  FSplittersInserted := False;
-  FreePipelineRows;
-  FreePipelineModel;
-  FreeClockModel;
-  UpdateLimitLabels;
-  ListBox1.Clear;
-  Memo1.Lines.Clear;
-  FSplitterNames.Clear;
-  FCandidateCells.Clear;
-  FCellDelays.Clear;
-  FFlipFlopNames.Clear;
-  FFlipFlopCandidates.Clear;
-  FBufferNames.Clear;
-  FBufferCandidates.Clear;
-  Label1.Text := 'Parsing: ' + ExtractFileName(FLefFile);
-
-  try
-    Lib := LoadLefLibrary(FLefFile);
-  except
-    on E: Exception do
-    begin
-      ShowMessage('Failed to parse LEF file:' + sLineBreak + sLineBreak + E.Message);
-      UpdateUI;
-      Exit;
-    end;
-  end;
-
-  FLib := Lib;
-  for i := 0 to FLib.Cells.Count - 1 do
-    ListBox1.Items.Add(FLib.Cells[i].Name);
-  Label1.Text := Format('Loaded %d cell(s) from %s',
-    [FLib.Cells.Count, ExtractFileName(FLefFile)]);
-  UpdateUI;
+  LoadLibraryFromFile(OpenDialog1.FileName);
 end;
 
 procedure TForm1.Button3Click(Sender: TObject);
 var
   Folder: string;
-  Cell: TCell;
-  CellsWithMatches, TotalFiles: Integer;
 begin
   if FLib = nil then
     Exit;
@@ -275,33 +652,10 @@ begin
   Folder := FCellFolder;
   if not SelectDirectory('Select folder containing cell source files', '', Folder) then
     Exit;
-  FCellFolder := Folder;
-
-  if not TDirectory.Exists(FCellFolder) then
-  begin
-    ShowMessage('Cell folder no longer exists.');
-    Exit;
-  end;
-
-  FLib.FindCellSourceFiles(FCellFolder);
-
-  CellsWithMatches := 0;
-  TotalFiles := 0;
-  for Cell in FLib.Cells do
-    if Cell.SourceFiles.Count > 0 then
-    begin
-      Inc(CellsWithMatches);
-      Inc(TotalFiles, Cell.SourceFiles.Count);
-    end;
-
-  Label1.Text := Format('Found %d linked file(s) for %d of %d cells. Double-click a cell to view it.',
-    [TotalFiles, CellsWithMatches, FLib.Cells.Count]);
-  UpdateUI;
+  SetCellFolderPath(Folder);
 end;
 
 procedure TForm1.Button5Click(Sender: TObject);
-var
-  Errors: TStringList;
 begin
   if FLib = nil then
     Exit;
@@ -310,42 +664,7 @@ begin
   OpenDialog1.FilterIndex := 1;
   if not OpenDialog1.Execute then
     Exit;
-
-  FBlifFile := OpenDialog1.FileName;
-  FModel.Free; // a new BLIF file invalidates the previously parsed netlist
-  FModel := nil;
-  FSplittersInserted := False;
-  FreePipelineRows;
-  FreePipelineModel;
-  FreeClockModel;
-  UpdateLimitLabels;
-  FCellDelays.Clear;
-  Memo1.Lines.Clear;
-  Label1.Text := 'Parsing: ' + ExtractFileName(FBlifFile);
-
-  Errors := TStringList.Create;
-  try
-    try
-      FModel := ParseBlif(FBlifFile, FLib, Errors);
-    except
-      on E: Exception do
-      begin
-        ShowMessage('Failed to parse BLIF file:' + sLineBreak + sLineBreak + E.Message);
-        Exit;
-      end;
-    end;
-
-    CheckNetConnectivity(FModel, Errors);
-
-    ComputeClockLevels(FModel, Errors);
-
-    RenderNetlist(FModel, Errors);
-    Label1.Text := Format('Loaded netlist "%s": %d gate(s), %d net(s), %d error(s)',
-      [FModel.Name, FModel.Gates.Count, FModel.Nets.Count, Errors.Count]);
-  finally
-    Errors.Free;
-  end;
-  UpdateUI;
+  LoadNetlistFromFile(OpenDialog1.FileName);
 end;
 
 function TForm1.IsSplitterCandidate(const Cell: TCell; out NumOutputs: Integer): Boolean;
@@ -552,6 +871,7 @@ begin
     FSplitterNames.Add(Cell.Name);
   PopulateSelectionTab;
   UpdateUI;
+  SaveProjectState;
 end;
 
 procedure TForm1.ListBoxDFFDblClick(Sender: TObject);
@@ -568,6 +888,7 @@ begin
   FFlipFlopNames.Add(Cell.Name);
   PopulateSelectionTab;
   UpdateUI;
+  SaveProjectState;
 end;
 
 procedure TForm1.ListBoxBuffersDblClick(Sender: TObject);
@@ -582,6 +903,7 @@ begin
     FBufferNames.Add(Cell.Name);
   PopulateSelectionTab;
   UpdateUI;
+  SaveProjectState;
 end;
 
 procedure TForm1.ListBoxSelectedDblClick(Sender: TObject);
@@ -596,6 +918,7 @@ begin
   RemoveSelection(Item.TagString);
   PopulateSelectionTab;
   UpdateUI;
+  SaveProjectState;
 end;
 
 procedure TForm1.FreePipelineRows;
@@ -1285,7 +1608,7 @@ const
 
 begin
   Handled := False;
-  if TabControl1.TabIndex = 3 then
+  if TabControl1.TabIndex = TabPipeline then
   begin
     if ZoomAt(PaintBox1, FPanX, FPanY, FZoom) then
     begin
@@ -1293,7 +1616,7 @@ begin
       RepaintPipelinePage;
     end;
   end
-  else if TabControl1.TabIndex = 4 then
+  else if TabControl1.TabIndex = TabClock then
   begin
     if ZoomAt(PaintBox2, FClockPanX, FClockPanY, FClockZoom) then
     begin
@@ -1596,7 +1919,7 @@ end;
 procedure TForm1.SliderTimerTimer(Sender: TObject);
 begin
   FSliderTimer.Enabled := False;
-  if TabControl1.TabIndex <> 3 then
+  if TabControl1.TabIndex <> TabPipeline then
     Exit;
   BuildPipelineModel;
   UpdateModeLabel;
@@ -1640,7 +1963,7 @@ begin
   // controls (labels, slider, buttons) until those are included in the
   // redraw pass. The form itself has no Repaint (it is not a TControl),
   // so invalidate every direct child of the form.
-  if TabControl1.TabIndex <> 3 then
+  if TabControl1.TabIndex <> TabPipeline then
     Exit;
   for i := 0 to Children.Count - 1 do
     if Children[i] is TControl then
@@ -1649,7 +1972,7 @@ end;
 
 procedure TForm1.RepaintClockPage;
 begin
-  if TabControl1.TabIndex <> 4 then
+  if TabControl1.TabIndex <> TabClock then
     Exit;
   // Repaint the tab control and buttons to ensure everything is refreshed
   TabControl1.Repaint;
@@ -1813,7 +2136,7 @@ var
 var
   R: TRectF;
   rIdx, MaxDepth, i: Integer;
-  TrunkX, TreeX0, ColGap, LayerStep, Sq, RootY, YMid, StageDelay, XCur: Single;
+  TrunkX, TreeX0, ColGap, LayerStep, Sq, RootY, YMid, StageDelay: Single;
   TapNetName, DelayTxt, LevelTxt: string;
   Roots: TObjectList<TClockTreeNode>;
   RootYs: TArray<Single>;
@@ -2150,9 +2473,12 @@ procedure TForm1.TabControl1Change(Sender: TObject);
 var
   Dummy: TStringList;
 begin
-  if TabControl1.TabIndex = 2 then
+  if TabControl1.TabIndex = TabComponents then
+  begin
+    SubTabControl.TabIndex := 0; // default to the Splitters sub-tab
     PopulateSelectionTab;
-  if TabControl1.TabIndex = 3 then
+  end;
+  if TabControl1.TabIndex = TabPipeline then
   begin
     FPanX := 0;
     FPanY := 0;
@@ -2168,7 +2494,7 @@ begin
       Dummy.Free;
     end;
   end;
-  if TabControl1.TabIndex = 4 then
+  if TabControl1.TabIndex = TabClock then
   begin
     // Clock stage: always rebuild from the current DFF-inserted netlist.
     FClockPanX := 0;
@@ -2187,6 +2513,7 @@ begin
     end;
   end;
   UpdateUI;
+  SaveProjectState;
 end;
 
 procedure TForm1.RunSplitterInsertion;
@@ -2255,6 +2582,7 @@ begin
     Errors.Free;
   end;
   UpdateUI;
+  SaveProjectState;
 end;
 
 procedure TForm1.RenderNetlist(Model: TBlifModel; Errors: TStrings);
@@ -2270,7 +2598,7 @@ var
   Line: string;
 begin
   DumpModel := Model;
-  if (TabControl1.TabIndex = 3) and (FPipelineModel <> nil) and
+  if (TabControl1.TabIndex = TabPipeline) and (FPipelineModel <> nil) and
     (FPipelineModel <> Model) then
     DumpModel := FPipelineModel;
   Dump := TStringList.Create;
@@ -2347,7 +2675,7 @@ end;
 procedure TForm1.ButtonNextClick(Sender: TObject);
 begin
   // Leaving the selection tab runs the splitter insertion automatically.
-  if (TabControl1.TabIndex = 2) and (not FSplittersInserted) then
+  if (TabControl1.TabIndex = TabComponents) and (not FSplittersInserted) then
     RunSplitterInsertion;
   if TabControl1.TabIndex < TabControl1.TabCount - 1 then
     TabControl1.TabIndex := TabControl1.TabIndex + 1;

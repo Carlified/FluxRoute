@@ -9,11 +9,13 @@ object Form1: TForm1
   FormFactor.Devices = [Desktop]
   OnCreate = FormCreate
   OnDestroy = FormDestroy
+  OnKeyDown = FormKeyDown
+  OnCloseQuery = FormCloseQuery
   DesignerMasterStyle = 0
   object Label1: TLabel
     Position.X = 24.000000000000000000
     Position.Y = 424.000000000000000000
-    Size.Width = 430.000000000000000000
+    Size.Width = 280.000000000000000000
     Size.Height = 32.000000000000000000
     Size.PlatformDefault = False
     Text = 'Load a LEF file to begin.'
@@ -39,12 +41,93 @@ object Form1: TForm1
       408s
       640s
       408s)
-    object TabItem1: TTabItem
+    object TabItemStart: TTabItem
       CustomIcon = <
         item
         end>
       TextSettings.Trimming = None
       IsSelected = True
+      Size.Width = 8.000000000000000000
+      Size.Height = 8.000000000000000000
+      Size.PlatformDefault = False
+      StyleLookup = ''
+      TabOrder = 0
+      Text = 'Start'
+      ExplicitSize.cx = 640.000000000000000000
+      ExplicitSize.cy = 408.000000000000000000
+      object LabelStartTitle: TLabel
+        Position.X = 24.000000000000000000
+        Position.Y = 12.000000000000000000
+        Size.Width = 300.000000000000000000
+        Size.Height = 28.000000000000000000
+        Size.PlatformDefault = False
+        Text = 'FluxRoute'
+        TextSettings.HorzAlign = Center
+        TabOrder = 1
+      end
+      object LabelStartHint: TLabel
+        Position.X = 24.000000000000000000
+        Position.Y = 44.000000000000000000
+        Size.Width = 592.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = 
+          'Open a previous project to pick up where you left off, or start ' +
+          'a new one.'
+        TabOrder = 2
+      end
+      object ButtonNewProject: TButton
+        Position.X = 24.000000000000000000
+        Position.Y = 84.000000000000000000
+        Size.Width = 200.000000000000000000
+        Size.Height = 32.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 3
+        Text = 'New Project'
+        TextSettings.Trimming = None
+        OnClick = ButtonNewProjectClick
+      end
+      object ButtonOpenProject: TButton
+        Position.X = 24.000000000000000000
+        Position.Y = 124.000000000000000000
+        Size.Width = 200.000000000000000000
+        Size.Height = 32.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 4
+        Text = 'Open Project...'
+        TextSettings.Trimming = None
+        OnClick = ButtonOpenProjectClick
+      end
+      object LabelRecent: TLabel
+        Position.X = 24.000000000000000000
+        Position.Y = 176.000000000000000000
+        Size.Width = 592.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = 'Recent projects (double-click to open):'
+        TabOrder = 5
+      end
+      object ListBoxRecent: TListBox
+        Position.X = 24.000000000000000000
+        Position.Y = 204.000000000000000000
+        Size.Width = 592.000000000000000000
+        Size.Height = 188.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 6
+        DisableFocusEffect = True
+        DefaultItemStyles.ItemStyle = ''
+        DefaultItemStyles.GroupHeaderStyle = ''
+        DefaultItemStyles.GroupFooterStyle = ''
+        Viewport.Width = 588.000000000000000000
+        Viewport.Height = 184.000000000000000000
+      end
+    end
+    object TabItem1: TTabItem
+      CustomIcon = <
+        item
+        end>
+      TextSettings.Trimming = None
+      IsSelected = False
       Size.Width = 8.000000000000000000
       Size.Height = 8.000000000000000000
       Size.PlatformDefault = False
@@ -421,6 +504,12 @@ object Form1: TForm1
   end
   object OpenDialog1: TOpenDialog
     Left = 592
+    Top = 8
+  end
+  object SaveDialog1: TSaveDialog
+    DefaultExt = '.fluxroute'
+    Filter = 'FluxRoute projects (*.fluxroute)|*.fluxroute|All files (*.*)|*.*'
+    Left = 552
     Top = 8
   end
 end
