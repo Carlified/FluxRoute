@@ -122,6 +122,7 @@ type
     FSplittersInserted: Boolean;
     FProject: TProjectFile;
     FProjectPath: string;
+    FLoadingProject: Boolean;
     FRecent: TStringList;
     FLastProject: string;
     FClosePromptActive: Boolean;
@@ -252,7 +253,6 @@ begin
   Label1.Text := Format('Loaded %d cell(s) from %s',
     [FLib.Cells.Count, ExtractFileName(FLefFile)]);
   UpdateUI;
-  SaveProjectState;
 end;
 
 procedure TForm1.SetCellFolderPath(const Path: string; AShowErrors: Boolean);
@@ -286,7 +286,6 @@ begin
   Label1.Text := Format('Found %d linked file(s) for %d of %d cells. Double-click a cell to view it.',
     [TotalFiles, CellsWithMatches, FLib.Cells.Count]);
   UpdateUI;
-  SaveProjectState;
 end;
 
 procedure TForm1.LoadNetlistFromFile(const Path: string; AShowErrors: Boolean);
@@ -342,7 +341,6 @@ begin
     Errors.Free;
   end;
   UpdateUI;
-  SaveProjectState;
 end;
 
 procedure TForm1.UpdateUI;
@@ -376,6 +374,13 @@ begin
     UpdateUI;
     Exit;
   end;
+  // While a project is being opened, the form state is only partially
+  // restored; do not let intermediate loader saves clobber the loaded data.
+  if FLoadingProject then
+  begin
+    UpdateUI;
+    Exit;
+  end;
   FProject.LefFile := FLefFile;
   FProject.CellFolder := FCellFolder;
   FProject.BlifFile := FBlifFile;
@@ -387,6 +392,7 @@ begin
     FProject.FlipFlop := '';
   FProject.SplittersInserted := FSplittersInserted;
   FProject.LastTab := TabControl1.TabIndex;
+  FProject.SliderPos := FSliderPos;
   try
     FProject.SaveToFile(FProjectPath);
   except
@@ -435,6 +441,14 @@ begin
     FFlipFlopNames.Add(FProject.FlipFlop);
   FBufferNames.Assign(FProject.Buffers);
 
+  // Restore the pipeline slider so the DFF-insertion mode (compact vs
+  // delay-levelized) matches what the user chose.
+  FSliderPos := FProject.SliderPos;
+  if FSliderPos < 0 then
+    FSliderPos := 0;
+  if FSliderPos > 100 then
+    FSliderPos := 100;
+
   // Reproduce the splitter-inserted netlist if the project had reached it.
   if (FModel <> nil) and FProject.SplittersInserted then
   begin
@@ -460,8 +474,13 @@ begin
     end;
   end;
   FProjectPath := Path;
-  ResetWorkspace;
-  ApplyProjectSettings;
+  FLoadingProject := True;
+  try
+    ResetWorkspace;
+    ApplyProjectSettings;
+  finally
+    FLoadingProject := False;
+  end;
   UpdateRecentList;
   if FProject.LastTab < 0 then
     FProject.LastTab := 0;
@@ -474,6 +493,7 @@ begin
   else
     TabControl1.TabIndex := TabStart;
   UpdateUI;
+  SaveProjectState;
 end;
 
 procedure TForm1.ButtonNewProjectClick(Sender: TObject);
@@ -586,6 +606,7 @@ begin
   // with nothing loaded has nothing to protect: close normally.
   if (FProjectPath <> '') or (FLib = nil) then
   begin
+    SaveProjectState; // persist the latest state (e.g. slider) before closing
     CanClose := True;
     Exit;
   end;
@@ -874,7 +895,6 @@ begin
     FSplitterNames.Add(Cell.Name);
   PopulateSelectionTab;
   UpdateUI;
-  SaveProjectState;
 end;
 
 procedure TForm1.ListBoxDFFDblClick(Sender: TObject);
@@ -891,7 +911,6 @@ begin
   FFlipFlopNames.Add(Cell.Name);
   PopulateSelectionTab;
   UpdateUI;
-  SaveProjectState;
 end;
 
 procedure TForm1.ListBoxBuffersDblClick(Sender: TObject);
@@ -906,7 +925,6 @@ begin
     FBufferNames.Add(Cell.Name);
   PopulateSelectionTab;
   UpdateUI;
-  SaveProjectState;
 end;
 
 procedure TForm1.ListBoxSelectedDblClick(Sender: TObject);
@@ -921,7 +939,6 @@ begin
   RemoveSelection(Item.TagString);
   PopulateSelectionTab;
   UpdateUI;
-  SaveProjectState;
 end;
 
 procedure TForm1.FreePipelineRows;
@@ -2486,6 +2503,17 @@ begin
     FPanX := 0;
     FPanY := 0;
     FZoom := 1.0;
+    // Prerequisite: splitter insertion must have run on this netlist.
+    if (FModel <> nil) and (not FSplittersInserted) then
+      RunSplitterInsertion;
+    // Keep the thumb at the restored position without re-triggering a build.
+    FSliderUpdating := True;
+    try
+      if Round(TrackBar1.Value) <> FSliderPos then
+        TrackBar1.Value := FSliderPos;
+    finally
+      FSliderUpdating := False;
+    end;
     BuildPipelineModel;
     UpdateModeLabel;
     UpdateLimitLabels;
@@ -2503,6 +2531,16 @@ begin
     FClockPanX := 0;
     FClockPanY := 0;
     FClockZoom := 1.0;
+    // Prerequisites: splitters inserted, then the pipeline (DFF-inserted)
+    // model built - the clock view is derived from it.
+    if (FModel <> nil) and (not FSplittersInserted) then
+      RunSplitterInsertion;
+    if FPipelineModel = nil then
+    begin
+      BuildPipelineModel;
+      UpdateModeLabel;
+      UpdateLimitLabels;
+    end;
     BuildClockModel;
     RepaintClockPage;
     Dummy := TStringList.Create;
@@ -2516,7 +2554,6 @@ begin
     end;
   end;
   UpdateUI;
-  SaveProjectState;
 end;
 
 procedure TForm1.RunSplitterInsertion;
@@ -2585,7 +2622,6 @@ begin
     Errors.Free;
   end;
   UpdateUI;
-  SaveProjectState;
 end;
 
 procedure TForm1.RenderNetlist(Model: TBlifModel; Errors: TStrings);

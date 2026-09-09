@@ -27,6 +27,7 @@ type
     FFlipFlop: string;
     FSplittersInserted: Boolean;
     FLastTab: Integer;
+    FSliderPos: Integer;
     procedure LoadFromJson(Root: TJSONObject);
   public
     constructor Create;
@@ -42,6 +43,7 @@ type
     property FlipFlop: string read FFlipFlop write FFlipFlop;
     property SplittersInserted: Boolean read FSplittersInserted write FSplittersInserted;
     property LastTab: Integer read FLastTab write FLastTab;
+    property SliderPos: Integer read FSliderPos write FSliderPos;
   end;
 
 // Path of the small "recent projects" preferences file. Kept next to the
@@ -87,6 +89,7 @@ begin
   FFlipFlop := '';
   FSplittersInserted := False;
   FLastTab := 0;
+  FSliderPos := 0;
 end;
 
 procedure TProjectFile.LoadFromJson(Root: TJSONObject);
@@ -108,6 +111,8 @@ begin
     FSplittersInserted := Root.GetValue<Boolean>('splittersInserted');
   if Root.GetValue('lastTab') is TJSONValue then
     FLastTab := Root.GetValue<Integer>('lastTab');
+  if Root.GetValue('sliderPos') is TJSONValue then
+    FSliderPos := Root.GetValue<Integer>('sliderPos');
 
   FSplitters.Clear;
   Arr := Root.GetValue('splitters') as TJSONArray;
@@ -153,6 +158,7 @@ begin
     Root.AddPair('flipFlop', FFlipFlop);
     Root.AddPair('splittersInserted', FSplittersInserted);
     Root.AddPair('lastTab', FLastTab);
+    Root.AddPair('sliderPos', FSliderPos);
 
     Arr := TJSONArray.Create;
     for i := 0 to FSplitters.Count - 1 do
