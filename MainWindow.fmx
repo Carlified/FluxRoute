@@ -4,24 +4,16 @@ object Form1: TForm1
   Caption = 'FluxRoute'
   ClientHeight = 480
   ClientWidth = 640
-  FormFactor.Width = 320
-  FormFactor.Height = 480
+  Constraints.MinWidth = 640.000000000000000000
+  Constraints.MinHeight = 480.000000000000000000
   FormFactor.Devices = [Desktop]
   OnCreate = FormCreate
   OnDestroy = FormDestroy
   OnKeyDown = FormKeyDown
   OnCloseQuery = FormCloseQuery
   DesignerMasterStyle = 0
-  object Label1: TLabel
-    Position.X = 24.000000000000000000
-    Position.Y = 424.000000000000000000
-    Size.Width = 280.000000000000000000
-    Size.Height = 32.000000000000000000
-    Size.PlatformDefault = False
-    Text = 'Load a LEF file to begin.'
-    TabOrder = 1
-  end
   object TabControl1: TTabControl
+    Align = Client
     Size.Width = 640.000000000000000000
     Size.Height = 408.000000000000000000
     Size.PlatformDefault = False
@@ -56,19 +48,18 @@ object Form1: TForm1
       ExplicitSize.cx = 640.000000000000000000
       ExplicitSize.cy = 408.000000000000000000
       object LabelStartTitle: TLabel
-        Position.X = 24.000000000000000000
-        Position.Y = 12.000000000000000000
-        Size.Width = 300.000000000000000000
+        Align = Top
+        Margins.Left = 16.000000000000000000
+        Margins.Top = 16.000000000000000000
         Size.Height = 28.000000000000000000
         Size.PlatformDefault = False
         Text = 'FluxRoute'
-        TextSettings.HorzAlign = Center
         TabOrder = 1
       end
       object LabelStartHint: TLabel
-        Position.X = 24.000000000000000000
-        Position.Y = 44.000000000000000000
-        Size.Width = 592.000000000000000000
+        Align = Top
+        Margins.Left = 16.000000000000000000
+        Margins.Top = 8.000000000000000000
         Size.Height = 20.000000000000000000
         Size.PlatformDefault = False
         Text = 
@@ -76,50 +67,55 @@ object Form1: TForm1
           'a new one.'
         TabOrder = 2
       end
-      object ButtonNewProject: TButton
-        Position.X = 24.000000000000000000
-        Position.Y = 84.000000000000000000
-        Size.Width = 200.000000000000000000
+      object GridStartButtons: TGridLayout
+        Align = Top
+        Margins.Left = 16.000000000000000000
+        Margins.Top = 16.000000000000000000
+        Margins.Right = 16.000000000000000000
+        Orientation = Horizontal
+        ItemWidth = -1.000000000000000000
+        ItemHeight = -1.000000000000000000
         Size.Height = 32.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 3
-        Text = 'New Project'
-        TextSettings.Trimming = None
-        OnClick = ButtonNewProjectClick
-      end
-      object ButtonOpenProject: TButton
-        Position.X = 24.000000000000000000
-        Position.Y = 124.000000000000000000
-        Size.Width = 200.000000000000000000
-        Size.Height = 32.000000000000000000
-        Size.PlatformDefault = False
-        TabOrder = 4
-        Text = 'Open Project...'
-        TextSettings.Trimming = None
-        OnClick = ButtonOpenProjectClick
+        object ButtonNewProject: TButton
+          Margins.Right = 4.000000000000000000
+          Size.PlatformDefault = False
+          TabOrder = 1
+          Text = 'New Project'
+          TextSettings.Trimming = None
+          OnClick = ButtonNewProjectClick
+        end
+        object ButtonOpenProject: TButton
+          Margins.Left = 4.000000000000000000
+          Size.PlatformDefault = False
+          TabOrder = 2
+          Text = 'Open Project...'
+          TextSettings.Trimming = None
+          OnClick = ButtonOpenProjectClick
+        end
       end
       object LabelRecent: TLabel
-        Position.X = 24.000000000000000000
-        Position.Y = 176.000000000000000000
-        Size.Width = 592.000000000000000000
+        Align = Top
+        Margins.Left = 16.000000000000000000
+        Margins.Top = 24.000000000000000000
         Size.Height = 20.000000000000000000
         Size.PlatformDefault = False
         Text = 'Recent projects (double-click to open):'
         TabOrder = 5
       end
       object ListBoxRecent: TListBox
-        Position.X = 24.000000000000000000
-        Position.Y = 204.000000000000000000
-        Size.Width = 592.000000000000000000
-        Size.Height = 188.000000000000000000
+        Align = Client
+        Margins.Left = 16.000000000000000000
+        Margins.Top = 8.000000000000000000
+        Margins.Right = 16.000000000000000000
+        Margins.Bottom = 16.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 6
         DisableFocusEffect = True
         DefaultItemStyles.ItemStyle = ''
         DefaultItemStyles.GroupHeaderStyle = ''
         DefaultItemStyles.GroupFooterStyle = ''
-        Viewport.Width = 588.000000000000000000
-        Viewport.Height = 184.000000000000000000
       end
     end
     object TabItem1: TTabItem
@@ -137,9 +133,9 @@ object Form1: TForm1
       ExplicitSize.cx = 640.000000000000000000
       ExplicitSize.cy = 408.000000000000000000
       object WelcomeLabel: TLabel
-        Position.X = 24.000000000000000000
-        Position.Y = 12.000000000000000000
-        Size.Width = 592.000000000000000000
+        Align = Top
+        Margins.Left = 16.000000000000000000
+        Margins.Top = 12.000000000000000000
         Size.Height = 28.000000000000000000
         Size.PlatformDefault = False
         Text = 
@@ -147,42 +143,47 @@ object Form1: TForm1
           'iew it.'
         TabOrder = 1
       end
-      object Button1: TButton
-        Position.X = 24.000000000000000000
-        Position.Y = 48.000000000000000000
-        Size.Width = 150.000000000000000000
+      object GridLibraryButtons: TGridLayout
+        Align = Top
+        Margins.Left = 16.000000000000000000
+        Margins.Top = 12.000000000000000000
+        Margins.Right = 16.000000000000000000
+        Orientation = Horizontal
+        ItemWidth = -1.000000000000000000
+        ItemHeight = -1.000000000000000000
         Size.Height = 32.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 2
-        Text = 'Load LEF file'
-        TextSettings.Trimming = None
-        OnClick = Button1Click
-      end
-      object Button3: TButton
-        Enabled = False
-        Position.X = 24.000000000000000000
-        Position.Y = 88.000000000000000000
-        Size.Width = 150.000000000000000000
-        Size.Height = 32.000000000000000000
-        Size.PlatformDefault = False
-        TabOrder = 4
-        Text = 'Load Library'
-        TextSettings.Trimming = None
-        OnClick = Button3Click
+        object Button1: TButton
+          Margins.Right = 4.000000000000000000
+          Size.PlatformDefault = False
+          TabOrder = 2
+          Text = 'Load LEF file'
+          TextSettings.Trimming = None
+          OnClick = Button1Click
+        end
+        object Button3: TButton
+          Enabled = False
+          Margins.Left = 4.000000000000000000
+          Size.PlatformDefault = False
+          TabOrder = 4
+          Text = 'Load Library'
+          TextSettings.Trimming = None
+          OnClick = Button3Click
+        end
       end
       object ListBox1: TListBox
-        Position.X = 24.000000000000000000
-        Position.Y = 136.000000000000000000
-        Size.Width = 592.000000000000000000
-        Size.Height = 256.000000000000000000
+        Align = Client
+        Margins.Left = 16.000000000000000000
+        Margins.Top = 12.000000000000000000
+        Margins.Right = 16.000000000000000000
+        Margins.Bottom = 16.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 6
         DisableFocusEffect = True
         DefaultItemStyles.ItemStyle = ''
         DefaultItemStyles.GroupHeaderStyle = ''
         DefaultItemStyles.GroupFooterStyle = ''
-        Viewport.Width = 588.000000000000000000
-        Viewport.Height = 252.000000000000000000
       end
     end
     object TabItem3: TTabItem
@@ -200,9 +201,9 @@ object Form1: TForm1
       ExplicitSize.cx = 640.000000000000000000
       ExplicitSize.cy = 408.000000000000000000
       object Label2: TLabel
-        Position.X = 24.000000000000000000
-        Position.Y = 12.000000000000000000
-        Size.Width = 592.000000000000000000
+        Align = Top
+        Margins.Left = 16.000000000000000000
+        Margins.Top = 12.000000000000000000
         Size.Height = 20.000000000000000000
         Size.PlatformDefault = False
         Text = 
@@ -210,96 +211,94 @@ object Form1: TForm1
           'he list on the right to remove it.'
         TabOrder = 1
       end
-      object SubTabControl: TTabControl
-        Position.X = 24.000000000000000000
-        Position.Y = 52.000000000000000000
-        Size.Width = 280.000000000000000000
-        Size.Height = 344.000000000000000000
+      object GridCells: TGridLayout
+        Align = Client
+        Margins.Left = 16.000000000000000000
+        Margins.Top = 12.000000000000000000
+        Margins.Right = 16.000000000000000000
+        Margins.Bottom = 16.000000000000000000
+        Orientation = Horizontal
+        ItemWidth = -1.000000000000000000
+        ItemHeight = -1.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 2
-        object SubTabSplitters: TTabItem
-          CustomIcon = <
-            item
-            end>
-          TextSettings.Trimming = None
-          IsSelected = False
-          Size.Width = 8.000000000000000000
-          Size.Height = 8.000000000000000000
+        object SubTabControl: TTabControl
+          Margins.Right = 4.000000000000000000
           Size.PlatformDefault = False
-          StyleLookup = ''
-          TabOrder = 0
-          Text = 'Splitters'
-          object ListBoxSplitters: TListBox
-            Align = Client
-            Size.Width = 280.000000000000000000
-            Size.Height = 316.000000000000000000
+          TabOrder = 2
+          object SubTabSplitters: TTabItem
+            CustomIcon = <
+              item
+              end>
+            TextSettings.Trimming = None
+            IsSelected = False
+            Size.Width = 8.000000000000000000
+            Size.Height = 8.000000000000000000
             Size.PlatformDefault = False
-            DisableFocusEffect = True
-            DefaultItemStyles.ItemStyle = ''
-            DefaultItemStyles.GroupHeaderStyle = ''
-            DefaultItemStyles.GroupFooterStyle = ''
+            StyleLookup = ''
+            TabOrder = 0
+            Text = 'Splitters'
+            object ListBoxSplitters: TListBox
+              Align = Client
+              Size.PlatformDefault = False
+              DisableFocusEffect = True
+              DefaultItemStyles.ItemStyle = ''
+              DefaultItemStyles.GroupHeaderStyle = ''
+              DefaultItemStyles.GroupFooterStyle = ''
+            end
+          end
+          object SubTabDFF: TTabItem
+            CustomIcon = <
+              item
+              end>
+            TextSettings.Trimming = None
+            IsSelected = False
+            Size.Width = 8.000000000000000000
+            Size.Height = 8.000000000000000000
+            Size.PlatformDefault = False
+            StyleLookup = ''
+            TabOrder = 0
+            Text = 'DFF'
+            object ListBoxDFF: TListBox
+              Align = Client
+              Size.PlatformDefault = False
+              DisableFocusEffect = True
+              DefaultItemStyles.ItemStyle = ''
+              DefaultItemStyles.GroupHeaderStyle = ''
+              DefaultItemStyles.GroupFooterStyle = ''
+            end
+          end
+          object SubTabBuffers: TTabItem
+            CustomIcon = <
+              item
+              end>
+            TextSettings.Trimming = None
+            IsSelected = False
+            Size.Width = 8.000000000000000000
+            Size.Height = 8.000000000000000000
+            Size.PlatformDefault = False
+            StyleLookup = ''
+            TabOrder = 0
+            Text = 'Buffers'
+            object ListBoxBuffers: TListBox
+              Align = Client
+              Size.PlatformDefault = False
+              DisableFocusEffect = True
+              DefaultItemStyles.ItemStyle = ''
+              DefaultItemStyles.GroupHeaderStyle = ''
+              DefaultItemStyles.GroupFooterStyle = ''
+            end
           end
         end
-        object SubTabDFF: TTabItem
-          CustomIcon = <
-            item
-            end>
-          TextSettings.Trimming = None
-          IsSelected = False
-          Size.Width = 8.000000000000000000
-          Size.Height = 8.000000000000000000
+        object ListBoxSelected: TListBox
+          Margins.Left = 4.000000000000000000
           Size.PlatformDefault = False
-          StyleLookup = ''
-          TabOrder = 0
-          Text = 'DFF'
-          object ListBoxDFF: TListBox
-            Align = Client
-            Size.Width = 280.000000000000000000
-            Size.Height = 316.000000000000000000
-            Size.PlatformDefault = False
-            DisableFocusEffect = True
-            DefaultItemStyles.ItemStyle = ''
-            DefaultItemStyles.GroupHeaderStyle = ''
-            DefaultItemStyles.GroupFooterStyle = ''
-          end
+          TabOrder = 3
+          DisableFocusEffect = True
+          DefaultItemStyles.ItemStyle = ''
+          DefaultItemStyles.GroupHeaderStyle = ''
+          DefaultItemStyles.GroupFooterStyle = ''
         end
-        object SubTabBuffers: TTabItem
-          CustomIcon = <
-            item
-            end>
-          TextSettings.Trimming = None
-          IsSelected = False
-          Size.Width = 8.000000000000000000
-          Size.Height = 8.000000000000000000
-          Size.PlatformDefault = False
-          StyleLookup = ''
-          TabOrder = 0
-          Text = 'Buffers'
-          object ListBoxBuffers: TListBox
-            Align = Client
-            Size.Width = 280.000000000000000000
-            Size.Height = 316.000000000000000000
-            Size.PlatformDefault = False
-            DisableFocusEffect = True
-            DefaultItemStyles.ItemStyle = ''
-            DefaultItemStyles.GroupHeaderStyle = ''
-            DefaultItemStyles.GroupFooterStyle = ''
-          end
-        end
-      end
-      object ListBoxSelected: TListBox
-        Position.X = 320.000000000000000000
-        Position.Y = 52.000000000000000000
-        Size.Width = 296.000000000000000000
-        Size.Height = 344.000000000000000000
-        Size.PlatformDefault = False
-        TabOrder = 3
-        DisableFocusEffect = True
-        DefaultItemStyles.ItemStyle = ''
-        DefaultItemStyles.GroupHeaderStyle = ''
-        DefaultItemStyles.GroupFooterStyle = ''
-        Viewport.Width = 292.000000000000000000
-        Viewport.Height = 340.000000000000000000
       end
     end
     object TabItem2: TTabItem
@@ -318,9 +317,10 @@ object Form1: TForm1
       ExplicitSize.cy = 408.000000000000000000
       object Button5: TButton
         Enabled = False
-        Position.X = 24.000000000000000000
-        Position.Y = 24.000000000000000000
-        Size.Width = 150.000000000000000000
+        Align = Top
+        Margins.Left = 16.000000000000000000
+        Margins.Top = 12.000000000000000000
+        Margins.Right = 16.000000000000000000
         Size.Height = 32.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 1
@@ -329,17 +329,16 @@ object Form1: TForm1
         OnClick = Button5Click
       end
       object Memo1: TMemo
+        Align = Client
+        Margins.Left = 16.000000000000000000
+        Margins.Top = 12.000000000000000000
+        Margins.Right = 16.000000000000000000
+        Margins.Bottom = 16.000000000000000000
         Touch.InteractiveGestures = [Pan, LongTap, DoubleTap]
         DataDetectorTypes = []
         ReadOnly = True
-        Position.X = 24.000000000000000000
-        Position.Y = 64.000000000000000000
-        Size.Width = 592.000000000000000000
-        Size.Height = 328.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 3
-        Viewport.Width = 588.000000000000000000
-        Viewport.Height = 324.000000000000000000
       end
     end
     object TabItem5: TTabItem
@@ -478,29 +477,46 @@ object Form1: TForm1
       end
     end
   end
-  object ButtonBack: TButton
-    Enabled = False
-    Position.X = 480.000000000000000000
-    Position.Y = 424.000000000000000000
-    Size.Width = 70.000000000000000000
-    Size.Height = 32.000000000000000000
+  object LayoutBottom: TLayout
+    Align = Bottom
+    Size.Height = 56.000000000000000000
     Size.PlatformDefault = False
-    TabOrder = 8
-    Text = '< Back'
-    TextSettings.Trimming = None
-    OnClick = ButtonBackClick
-  end
-  object ButtonNext: TButton
-    Enabled = False
-    Position.X = 556.000000000000000000
-    Position.Y = 424.000000000000000000
-    Size.Width = 70.000000000000000000
-    Size.Height = 32.000000000000000000
-    Size.PlatformDefault = False
-    TabOrder = 9
-    Text = 'Next >'
-    TextSettings.Trimming = None
-    OnClick = ButtonNextClick
+    TabOrder = 10
+    object Label1: TLabel
+      Align = Client
+      Margins.Left = 12.000000000000000000
+      Margins.Top = 12.000000000000000000
+      Margins.Bottom = 12.000000000000000000
+      Size.PlatformDefault = False
+      Text = 'Load a LEF file to begin.'
+      TabOrder = 1
+    end
+    object ButtonBack: TButton
+      Align = Right
+      Margins.Top = 12.000000000000000000
+      Margins.Right = 8.000000000000000000
+      Margins.Bottom = 12.000000000000000000
+      Size.Width = 70.000000000000000000
+      Size.Height = 32.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 8
+      Text = '< Back'
+      TextSettings.Trimming = None
+      OnClick = ButtonBackClick
+    end
+    object ButtonNext: TButton
+      Align = Right
+      Margins.Top = 12.000000000000000000
+      Margins.Right = 12.000000000000000000
+      Margins.Bottom = 12.000000000000000000
+      Size.Width = 70.000000000000000000
+      Size.Height = 32.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 9
+      Text = 'Next >'
+      TextSettings.Trimming = None
+      OnClick = ButtonNextClick
+    end
   end
   object OpenDialog1: TOpenDialog
     Left = 592
