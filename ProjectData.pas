@@ -28,6 +28,13 @@ type
     FSplittersInserted: Boolean;
     FLastTab: Integer;
     FSliderPos: Integer;
+    FCoreSize: string;
+    FRowHeight: string;
+    FDieW: string;
+    FDieH: string;
+    FUtilization: string;
+    FBiasCurrent: string;
+    FPTLLength: string;
     procedure LoadFromJson(Root: TJSONObject);
   public
     constructor Create;
@@ -44,6 +51,13 @@ type
     property SplittersInserted: Boolean read FSplittersInserted write FSplittersInserted;
     property LastTab: Integer read FLastTab write FLastTab;
     property SliderPos: Integer read FSliderPos write FSliderPos;
+    property CoreSize: string read FCoreSize write FCoreSize;
+    property RowHeight: string read FRowHeight write FRowHeight;
+    property DieW: string read FDieW write FDieW;
+    property DieH: string read FDieH write FDieH;
+    property Utilization: string read FUtilization write FUtilization;
+    property BiasCurrent: string read FBiasCurrent write FBiasCurrent;
+    property PTLLength: string read FPTLLength write FPTLLength;
   end;
 
 // Path of the small "recent projects" preferences file. Kept next to the
@@ -90,6 +104,13 @@ begin
   FSplittersInserted := False;
   FLastTab := 0;
   FSliderPos := 0;
+  FCoreSize := '';
+  FRowHeight := '';
+  FDieW := '';
+  FDieH := '';
+  FUtilization := '';
+  FBiasCurrent := '';
+  FPTLLength := '';
 end;
 
 procedure TProjectFile.LoadFromJson(Root: TJSONObject);
@@ -113,6 +134,20 @@ begin
     FLastTab := Root.GetValue<Integer>('lastTab');
   if Root.GetValue('sliderPos') is TJSONValue then
     FSliderPos := Root.GetValue<Integer>('sliderPos');
+  if Root.GetValue('coreSize') is TJSONValue then
+    FCoreSize := Root.GetValue<string>('coreSize');
+  if Root.GetValue('rowHeight') is TJSONValue then
+    FRowHeight := Root.GetValue<string>('rowHeight');
+  if Root.GetValue('dieW') is TJSONValue then
+    FDieW := Root.GetValue<string>('dieW');
+  if Root.GetValue('dieH') is TJSONValue then
+    FDieH := Root.GetValue<string>('dieH');
+  if Root.GetValue('utilization') is TJSONValue then
+    FUtilization := Root.GetValue<string>('utilization');
+  if Root.GetValue('biasCurrent') is TJSONValue then
+    FBiasCurrent := Root.GetValue<string>('biasCurrent');
+  if Root.GetValue('ptlLength') is TJSONValue then
+    FPTLLength := Root.GetValue<string>('ptlLength');
 
   FSplitters.Clear;
   Arr := Root.GetValue('splitters') as TJSONArray;
@@ -159,6 +194,13 @@ begin
     Root.AddPair('splittersInserted', FSplittersInserted);
     Root.AddPair('lastTab', FLastTab);
     Root.AddPair('sliderPos', FSliderPos);
+    Root.AddPair('coreSize', FCoreSize);
+    Root.AddPair('rowHeight', FRowHeight);
+    Root.AddPair('dieW', FDieW);
+    Root.AddPair('dieH', FDieH);
+    Root.AddPair('utilization', FUtilization);
+    Root.AddPair('biasCurrent', FBiasCurrent);
+    Root.AddPair('ptlLength', FPTLLength);
 
     Arr := TJSONArray.Create;
     for i := 0 to FSplitters.Count - 1 do

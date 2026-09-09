@@ -6,7 +6,7 @@ uses
   System.SysUtils, System.Types, System.UITypes, System.Classes, System.Variants,
   FMX.Types, FMX.Controls, FMX.Forms, FMX.Graphics, FMX.Dialogs, FMX.StdCtrls,
   FMX.Controls.Presentation, FMX.ListBox, FMX.Memo, FMX.Layouts, FMX.TabControl,
-  FMX.Objects,
+  FMX.Objects, FMX.Edit,
   System.IOUtils, System.JSON, System.Math, System.Math.Vectors,
   System.Generics.Collections, System.StrUtils,
   LefLibrary,
@@ -23,13 +23,15 @@ uses
 
 const
   // Top-level wizard page indexes. A Start/project page is at the front.
-  // Order: Start, Library, Cell selection, BLIF loading, Pipeline, Clock.
+  // Order: Start, Library, Cell selection, BLIF loading, Pipeline, Clock,
+  // Placement configuration.
   TabStart = 0;
   TabLibrary = 1;
   TabComponents = 2; // cell selection (splitters/FF/buffers)
   TabNetlist = 3;    // BLIF loading
   TabPipeline = 4;
   TabClock = 5;
+  TabPlacement = 6;  // floorplanning / placement configuration
 
 type
   TForm1 = class(TForm)
@@ -59,6 +61,17 @@ type
     ListBoxDFF: TListBox;
     ListBoxBuffers: TListBox;
     ListBoxSelected: TListBox;
+    EditCoreSize: TEdit;
+    EditRowHeight: TEdit;
+    LabelCoreDim: TLabel;
+    LabelRowCells: TLabel;
+    EditDieW: TEdit;
+    EditDieH: TEdit;
+    LabelDieAreaText: TLabel;
+    EditUtilization: TEdit;
+    EditBiasCurrent: TEdit;
+    EditPTLLength: TEdit;
+    ListBoxPlacementErrors: TListBox;
     TabItem5: TTabItem;
     PaintBox1: TPaintBox;
     TrackBar1: TTrackBar;
@@ -92,6 +105,9 @@ type
     procedure ButtonNewProjectClick(Sender: TObject);
     procedure ButtonOpenProjectClick(Sender: TObject);
     procedure ListBoxRecentDblClick(Sender: TObject);
+    procedure EditPlacementChanged(Sender: TObject);
+    procedure EditPlacementKeyDown(Sender: TObject; var Key: Word;
+      var KeyChar: WideChar; Shift: TShiftState);
     procedure PaintBox1MouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Single);
     procedure PaintBox1MouseMove(Sender: TObject; Shift: TShiftState; X, Y: Single);
     procedure PaintBox1MouseUp(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Single);
@@ -127,6 +143,8 @@ type
     FLastProject: string;
     FClosePromptActive: Boolean;
     FAllowClose: Boolean;
+    FPlacementInitialized: Boolean;
+    FFormattingPlacement: Boolean;
     FPanX, FPanY: Single;
     FDragX, FDragY: Single;
     FDragging: Boolean;
@@ -145,6 +163,11 @@ type
     procedure SaveProjectFileAs;
     procedure SaveProjectState;
     procedure UpdateRecentList;
+    procedure RemoveRecentProject(const Path: string);
+    procedure InitializePlacementConfig;
+    procedure ValidatePlacement;
+    procedure FormatPlacementFields;
+    procedure AddPlacementMsg(const Text: string; Color: TAlphaColor; IsError: Boolean);
     procedure UpdateUI;
     procedure RenderNetlist(Model: TBlifModel; Errors: TStrings);
     function IsSplitterCandidate(const Cell: TCell; out NumOutputs: Integer): Boolean;
@@ -194,6 +217,7 @@ end;
 procedure TForm1.ResetWorkspace;
 begin
   FSplittersInserted := False;
+  FPlacementInitialized := False;
   FreePipelineRows;
   FreePipelineModel;
   FreeClockModel;
@@ -367,6 +391,328 @@ begin
     ListBoxRecent.Items.Add(FRecent[i]);
 end;
 
+procedure TForm1.RemoveRecentProject(const Path: string);
+var
+  Idx: Integer;
+begin
+  Idx := FRecent.IndexOf(Path);
+  if Idx < 0 then
+    Exit;
+  FRecent.Delete(Idx);
+  try
+    SaveRecentProjects('', FRecent);
+  except
+  end;
+  UpdateRecentList;
+end;
+
+function GcdOf(const A, B: Double): Double;
+var
+  AA, BB, R: Double;
+begin
+  AA := Abs(A);
+  BB := Abs(B);
+  if BB = 0 then
+    Exit(AA);
+  while BB > 1e-9 do
+  begin
+    R := AA - Trunc(AA / BB) * BB;
+    AA := BB;
+    BB := R;
+  end;
+  Result := AA;
+end;
+
+function IsMultipleOf(const A, B: Double): Boolean;
+begin
+  if B = 0 then
+    Result := False
+  else
+    Result := Abs(A / B - Round(A / B)) < 1e-6;
+end;
+
+function DimToStr(const V: Double): string;
+begin
+  if Abs(V - Round(V)) < 1e-6 then
+    Result := IntToStr(Round(V))
+  else
+    Result := FloatToStr(V);
+end;
+
+function TryDimParse(const S: string; out V: Double): Boolean;
+begin
+  V := 0;
+  if Trim(S) = '' then
+    Exit(False);
+  Result := TryStrToFloat(S, V, TFormatSettings.Invariant);
+end;
+
+function FormatDim2(const V: Double): string;
+begin
+  Result := FormatFloat('0.00', V);
+end;
+
+procedure TForm1.InitializePlacementConfig;
+var
+  G, ModeH: Double;
+  Cell: TCell;
+  Key, BestKey, BestCount: Integer;
+  Tally: TDictionary<Integer, Integer>;
+begin
+  G := 0;
+  ModeH := 0;
+  if (FLib <> nil) and (FLib.Cells.Count > 0) then
+  begin
+    for Cell in FLib.Cells do
+      if Cell.Width > 0 then
+        G := GcdOf(G, Cell.Width);
+
+    // Mode of all cell heights (most common value), keyed on thousandths
+    // so simple decimal sizes (0.5, 1.0, ...) group cleanly.
+    Tally := TDictionary<Integer, Integer>.Create;
+    try
+      for Cell in FLib.Cells do
+        if Cell.Height > 0 then
+        begin
+          Key := Round(Cell.Height * 1000);
+          if Tally.ContainsKey(Key) then
+            Tally[Key] := Tally[Key] + 1
+          else
+            Tally.Add(Key, 1);
+        end;
+      BestKey := -1;
+      BestCount := 0;
+      for Key in Tally.Keys do
+        if Tally[Key] > BestCount then
+        begin
+          BestCount := Tally[Key];
+          BestKey := Key;
+        end;
+      if BestKey >= 0 then
+        ModeH := BestKey / 1000;
+    finally
+      Tally.Free;
+    end;
+  end;
+
+  // Setting these fires OnChange, but the initial-guard flag is still off.
+  EditCoreSize.Text := DimToStr(G);
+  EditRowHeight.Text := DimToStr(ModeH);
+  // Default die area to a single core block (G x G) as a starting point.
+  EditDieW.Text := DimToStr(G);
+  EditDieH.Text := DimToStr(G);
+  // Placement budget defaults.
+  EditUtilization.Text := '60';
+  EditBiasCurrent.Text := '5';
+  EditPTLLength.Text := '550';
+  FPlacementInitialized := True;
+  FormatPlacementFields;
+  ValidatePlacement;
+end;
+
+procedure TForm1.FormatPlacementFields;
+var
+  Core, RowH, DieW, DieH: Double;
+begin
+  // Suppress OnChange while we rewrite the text boxes programmatically.
+  FFormattingPlacement := True;
+  try
+    Core := -1;
+    if TryDimParse(EditCoreSize.Text, Core) then
+      EditCoreSize.Text := FormatDim2(Core);
+    if TryDimParse(EditRowHeight.Text, RowH) then
+      EditRowHeight.Text := FormatDim2(RowH);
+    if TryDimParse(EditDieW.Text, DieW) then
+      EditDieW.Text := FormatDim2(DieW);
+    if TryDimParse(EditDieH.Text, DieH) then
+      EditDieH.Text := FormatDim2(DieH);
+    if TryDimParse(EditUtilization.Text, Core) then
+      EditUtilization.Text := FormatDim2(Core);
+    if TryDimParse(EditBiasCurrent.Text, Core) then
+      EditBiasCurrent.Text := FormatDim2(Core);
+    if TryDimParse(EditPTLLength.Text, Core) then
+      EditPTLLength.Text := FormatDim2(Core);
+  finally
+    FFormattingPlacement := False;
+  end;
+
+  // Labels only update from the last successfully parsed values.
+  if TryDimParse(EditCoreSize.Text, Core) then
+    LabelCoreDim.Text := ' x ' + FormatDim2(Core) + ' um';
+  if (Core > 0) and TryDimParse(EditRowHeight.Text, RowH) then
+    LabelRowCells.Text := ' - ' + IntToStr(Round(RowH / Core)) + ' cells';
+  if TryDimParse(EditDieW.Text, DieW) and TryDimParse(EditDieH.Text, DieH) then
+    LabelDieAreaText.Text := FormatDim2(DieW * DieH) + ' um2';
+end;
+
+procedure TForm1.ValidatePlacement;
+var
+  Core, RowH, CellH, DieW, DieH, Util, Bias, PTL: Double;
+  Cell: TCell;
+  Used: Boolean;
+  UsedNames: TDictionary<string, Boolean>;
+  Gate: TGateInstance;
+  ErrMsgs, WarnMsgs: TStringList;
+  i: Integer;
+begin
+  ListBoxPlacementErrors.Clear;
+  // Restore the default text colors before re-flagging invalid fields.
+  EditRowHeight.StyledSettings := EditRowHeight.StyledSettings + [TStyledSetting.FontColor];
+  EditDieW.StyledSettings := EditDieW.StyledSettings + [TStyledSetting.FontColor];
+  EditDieH.StyledSettings := EditDieH.StyledSettings + [TStyledSetting.FontColor];
+  EditUtilization.StyledSettings := EditUtilization.StyledSettings + [TStyledSetting.FontColor];
+
+  if not TryDimParse(EditCoreSize.Text, Core) or not TryDimParse(EditRowHeight.Text, RowH) then
+  begin
+    AddPlacementMsg('Core block size and row height must be valid numbers.', $FFFF0000, True);
+    Exit;
+  end;
+  if (Core <= 0) or (RowH <= 0) then
+  begin
+    AddPlacementMsg('Core block size and row height must be positive numbers.', $FFFF0000, True);
+    Exit;
+  end;
+
+  // Error 1: the row height must be a multiple of the core block.
+  if not IsMultipleOf(RowH, Core) then
+  begin
+    EditRowHeight.StyledSettings := EditRowHeight.StyledSettings - [TStyledSetting.FontColor];
+    EditRowHeight.TextSettings.FontColor := TAlphaColorRec.Red;
+    AddPlacementMsg(Format('Row height must be a multiple of the core block size (row height %s is not a multiple of %s).',
+      [DimToStr(RowH), DimToStr(Core)]), $FFFF0000, True);
+  end;
+
+  // Die area dimensions must also tile the core grid.
+  if TryDimParse(EditDieW.Text, DieW) and (DieW > 0) and
+     (not IsMultipleOf(DieW, Core)) then
+  begin
+    EditDieW.StyledSettings := EditDieW.StyledSettings - [TStyledSetting.FontColor];
+    EditDieW.TextSettings.FontColor := TAlphaColorRec.Red;
+    AddPlacementMsg(Format('Die width must be a multiple of the core block size (die width %s is not a multiple of %s).',
+      [DimToStr(DieW), DimToStr(Core)]), $FFFF0000, True);
+  end;
+  if TryDimParse(EditDieH.Text, DieH) and (DieH > 0) and
+     (not IsMultipleOf(DieH, Core)) then
+  begin
+    EditDieH.StyledSettings := EditDieH.StyledSettings - [TStyledSetting.FontColor];
+    EditDieH.TextSettings.FontColor := TAlphaColorRec.Red;
+    AddPlacementMsg(Format('Die height must be a multiple of the core block size (die height %s is not a multiple of %s).',
+      [DimToStr(DieH), DimToStr(Core)]), $FFFF0000, True);
+  end;
+
+  // Target utilization must stay within [0, 100]%.
+  if TryDimParse(EditUtilization.Text, Util) and ((Util < 0) or (Util > 100)) then
+  begin
+    EditUtilization.StyledSettings := EditUtilization.StyledSettings - [TStyledSetting.FontColor];
+    EditUtilization.TextSettings.FontColor := TAlphaColorRec.Red;
+    AddPlacementMsg(Format('Target utilization must be between 0 and 100%% (value is %s).',
+      [DimToStr(Util)]), $FFFF0000, True);
+  end;
+
+  // Every remaining text box must contain a valid number.
+  if not TryDimParse(EditDieW.Text, DieW) then
+    AddPlacementMsg('Die width must be a valid number.', $FFFF0000, True);
+  if not TryDimParse(EditDieH.Text, DieH) then
+    AddPlacementMsg('Die height must be a valid number.', $FFFF0000, True);
+  if not TryDimParse(EditUtilization.Text, Util) then
+    AddPlacementMsg('Target utilization must be a valid number.', $FFFF0000, True);
+  if not TryDimParse(EditBiasCurrent.Text, Bias) then
+    AddPlacementMsg('Max bias current must be a valid number.', $FFFF0000, True);
+  if not TryDimParse(EditPTLLength.Text, PTL) then
+    AddPlacementMsg('Max PTL length must be a valid number.', $FFFF0000, True);
+
+  // Which cells actually appear in the parsed netlist?
+  UsedNames := nil;
+  if FModel <> nil then
+  begin
+    UsedNames := TDictionary<string, Boolean>.Create;
+    for Gate in FModel.Gates do
+      if Gate.CellName <> '' then
+        UsedNames.AddOrSetValue(Gate.CellName, True);
+  end;
+  ErrMsgs := TStringList.Create;
+  WarnMsgs := TStringList.Create;
+  try
+    if FLib <> nil then
+      for Cell in FLib.Cells do
+      begin
+        Used := (UsedNames <> nil) and UsedNames.ContainsKey(Cell.Name);
+
+        // Width must tile the core grid: report each cell that fails.
+        if (Cell.Width > 0) and (not IsMultipleOf(Cell.Width, Core)) then
+        begin
+          if Used then
+            ErrMsgs.Add(Format('Cell "%s" width %s is not a multiple of the block and cell is used in the netlist.',
+              [Cell.Name, DimToStr(Cell.Width)]))
+          else
+            WarnMsgs.Add(Format('Cell "%s" width %s is not a multiple of the block but cell isn''t used.',
+              [Cell.Name, DimToStr(Cell.Width)]));
+        end;
+
+        CellH := Cell.Height;
+        if CellH <= 0 then
+          Continue;
+        // A cell whose height does not match the configured row height
+        // cannot be placed in a row and is excluded by the height check.
+        if Abs(CellH - RowH) > 1e-6 then
+        begin
+          if Used then
+            ErrMsgs.Add(Format('Cell "%s" will not fit in a row, and cell is used in the netlist.',
+              [Cell.Name]))
+          else
+            WarnMsgs.Add(Format('Cell "%s" will not fit in a row, but is not used in this netlist.',
+              [Cell.Name]));
+        end;
+      end;
+
+    // Order: the row-multiple error was added first, then all other errors
+    // (used in netlist), then all warnings (not used in netlist).
+    for i := 0 to ErrMsgs.Count - 1 do
+      AddPlacementMsg(ErrMsgs[i], $FFFF0000, True);
+    for i := 0 to WarnMsgs.Count - 1 do
+      AddPlacementMsg(WarnMsgs[i], $FFFF8C00, False);
+  finally
+    ErrMsgs.Free;
+    WarnMsgs.Free;
+    UsedNames.Free;
+  end;
+end;
+
+procedure TForm1.AddPlacementMsg(const Text: string; Color: TAlphaColor;
+  IsError: Boolean);
+var
+  Item: TListBoxItem;
+begin
+  Item := TListBoxItem.Create(ListBoxPlacementErrors);
+  Item.Parent := ListBoxPlacementErrors;
+  if IsError then
+    Item.Text := '[ERROR] ' + Text
+  else
+    Item.Text := '[WARNING] ' + Text;
+  Item.StyledSettings := Item.StyledSettings - [TStyledSetting.FontColor];
+  Item.TextSettings.FontColor := Color;
+end;
+
+procedure TForm1.EditPlacementChanged(Sender: TObject);
+begin
+  if FPlacementInitialized and (not FFormattingPlacement) then
+    ValidatePlacement;
+end;
+
+procedure TForm1.EditPlacementKeyDown(Sender: TObject; var Key: Word;
+  var KeyChar: WideChar; Shift: TShiftState);
+begin
+  if Key = vkReturn then
+  begin
+    Key := 0;
+    if FPlacementInitialized then
+    begin
+      FormatPlacementFields;
+      ValidatePlacement;
+    end;
+  end;
+end;
+
 procedure TForm1.SaveProjectState;
 begin
   if FProjectPath = '' then
@@ -393,6 +739,15 @@ begin
   FProject.SplittersInserted := FSplittersInserted;
   FProject.LastTab := TabControl1.TabIndex;
   FProject.SliderPos := FSliderPos;
+  // Placement configuration: store the raw text so even invalid entries
+  // (and their error states) are preserved across sessions.
+  FProject.CoreSize := EditCoreSize.Text;
+  FProject.RowHeight := EditRowHeight.Text;
+  FProject.DieW := EditDieW.Text;
+  FProject.DieH := EditDieH.Text;
+  FProject.Utilization := EditUtilization.Text;
+  FProject.BiasCurrent := EditBiasCurrent.Text;
+  FProject.PTLLength := EditPTLLength.Text;
   try
     FProject.SaveToFile(FProjectPath);
   except
@@ -417,7 +772,7 @@ procedure TForm1.SaveProjectFileAs;
 begin
   if FBlifFile <> '' then
     SaveDialog1.InitialDir := ExtractFilePath(FBlifFile);
-  SaveDialog1.FileName := 'FluxRoute.fluxroute';
+  SaveDialog1.FileName := 'Project';
   if not SaveDialog1.Execute then
     Exit;
   FProjectPath := SaveDialog1.FileName;
@@ -449,6 +804,23 @@ begin
   if FSliderPos > 100 then
     FSliderPos := 100;
 
+  // Restore the placement configuration verbatim (raw text, so invalid
+  // entries and the resulting errors come back too). Marking the page as
+  // already-initialized stops the GCD/mode derivation from overwriting the
+  // saved values; re-entry then just re-validates.
+  if FProject.CoreSize <> '' then
+  begin
+    EditCoreSize.Text := FProject.CoreSize;
+    EditRowHeight.Text := FProject.RowHeight;
+    EditDieW.Text := FProject.DieW;
+    EditDieH.Text := FProject.DieH;
+    EditUtilization.Text := FProject.Utilization;
+    EditBiasCurrent.Text := FProject.BiasCurrent;
+    EditPTLLength.Text := FProject.PTLLength;
+    FPlacementInitialized := True;
+    FormatPlacementFields; // refresh the derived labels from saved values
+  end;
+
   // Reproduce the splitter-inserted netlist if the project had reached it.
   if (FModel <> nil) and FProject.SplittersInserted then
   begin
@@ -462,6 +834,7 @@ begin
   if not TFile.Exists(Path) then
   begin
     ShowMessage('Project file not found:' + sLineBreak + Path);
+    RemoveRecentProject(Path);
     Exit;
   end;
   try
@@ -542,6 +915,12 @@ begin
   ListBoxDFF.OnDblClick := ListBoxDFFDblClick;
   ListBoxBuffers.OnDblClick := ListBoxBuffersDblClick;
   ListBoxSelected.OnDblClick := ListBoxSelectedDblClick;
+  // Placement configuration edits: bind live + Enter re-validation directly
+  // so the page recalculates regardless of the .fmx event bindings.
+  EditCoreSize.OnChange := EditPlacementChanged;
+  EditRowHeight.OnChange := EditPlacementChanged;
+  EditCoreSize.OnKeyDown := EditPlacementKeyDown;
+  EditRowHeight.OnKeyDown := EditPlacementKeyDown;
   PaintBox1.OnPaint := PaintPipeline;
   PaintBox1.OnMouseDown := PaintBox1MouseDown;
   PaintBox1.OnMouseMove := PaintBox1MouseMove;
@@ -2497,6 +2876,15 @@ begin
   begin
     SubTabControl.TabIndex := 0; // default to the Splitters sub-tab
     PopulateSelectionTab;
+  end;
+  if TabControl1.TabIndex = TabPlacement then
+  begin
+    // The GCD/mode derivation runs once (per library); re-entry only
+    // re-validates the current field values.
+    if not FPlacementInitialized then
+      InitializePlacementConfig
+    else
+      ValidatePlacement;
   end;
   if TabControl1.TabIndex = TabPipeline then
   begin

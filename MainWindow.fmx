@@ -32,6 +32,8 @@ object Form1: TForm1
       640s
       408s
       640s
+      408s
+      640s
       408s)
     object TabItemStart: TTabItem
       CustomIcon = <
@@ -474,6 +476,236 @@ object Form1: TForm1
         Size.Width = 640.000000000000000000
         Size.Height = 408.000000000000000000
         Size.PlatformDefault = False
+      end
+    end
+    object TabItem4: TTabItem
+      CustomIcon = <
+        item
+        end>
+      TextSettings.Trimming = None
+      IsSelected = False
+      Size.Width = 8.000000000000000000
+      Size.Height = 8.000000000000000000
+      Size.PlatformDefault = False
+      StyleLookup = ''
+      TabOrder = 0
+      Text = 'Placement Configuration'
+      ExplicitSize.cx = 640.000000000000000000
+      ExplicitSize.cy = 408.000000000000000000
+      object LayoutPlacementTop: TLayout
+        Align = Top
+        Size.Height = 272.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 1
+        object LabelPlacementTitle: TLabel
+        Position.X = 24.000000000000000000
+        Position.Y = 12.000000000000000000
+        Size.Width = 592.000000000000000000
+        Size.Height = 22.000000000000000000
+        Size.PlatformDefault = False
+        Text = 'Placement Configuration'
+        TabOrder = 1
+      end
+      object LabelCoreSize: TLabel
+        Position.X = 24.000000000000000000
+        Position.Y = 44.000000000000000000
+        Size.Width = 170.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = 'Core block size:'
+        TabOrder = 2
+      end
+      object EditCoreSize: TEdit
+        Position.X = 200.000000000000000000
+        Position.Y = 40.000000000000000000
+        Size.Width = 70.000000000000000000
+        Size.Height = 26.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 3
+        OnChange = EditPlacementChanged
+        OnKeyDown = EditPlacementKeyDown
+      end
+      object LabelCoreDim: TLabel
+        Position.X = 278.000000000000000000
+        Position.Y = 44.000000000000000000
+        Size.Width = 160.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = ' x 0.00 um'
+        TabOrder = 6
+      end
+      object LabelRowHeight: TLabel
+        Position.X = 24.000000000000000000
+        Position.Y = 76.000000000000000000
+        Size.Width = 170.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = 'Row height:'
+        TabOrder = 4
+      end
+      object EditRowHeight: TEdit
+        Position.X = 200.000000000000000000
+        Position.Y = 72.000000000000000000
+        Size.Width = 70.000000000000000000
+        Size.Height = 26.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 5
+        OnChange = EditPlacementChanged
+        OnKeyDown = EditPlacementKeyDown
+      end
+      object LabelRowCells: TLabel
+        Position.X = 278.000000000000000000
+        Position.Y = 76.000000000000000000
+        Size.Width = 160.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = ' - cells'
+        TabOrder = 7
+      end
+      object LabelDieArea: TLabel
+        Position.X = 24.000000000000000000
+        Position.Y = 108.000000000000000000
+        Size.Width = 170.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = 'Die area:'
+        TabOrder = 11
+      end
+      object EditDieW: TEdit
+        Position.X = 200.000000000000000000
+        Position.Y = 104.000000000000000000
+        Size.Width = 70.000000000000000000
+        Size.Height = 26.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 12
+        OnChange = EditPlacementChanged
+        OnKeyDown = EditPlacementKeyDown
+      end
+      object LabelDieX: TLabel
+        Position.X = 276.000000000000000000
+        Position.Y = 108.000000000000000000
+        Size.Width = 12.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = 'x'
+        TabOrder = 13
+      end
+      object EditDieH: TEdit
+        Position.X = 286.000000000000000000
+        Position.Y = 104.000000000000000000
+        Size.Width = 70.000000000000000000
+        Size.Height = 26.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 14
+        OnChange = EditPlacementChanged
+        OnKeyDown = EditPlacementKeyDown
+      end
+      object LabelDieUm: TLabel
+        Position.X = 362.000000000000000000
+        Position.Y = 108.000000000000000000
+        Size.Width = 30.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = 'um,'
+        TabOrder = 15
+      end
+      object LabelDieAreaText: TLabel
+        Position.X = 396.000000000000000000
+        Position.Y = 108.000000000000000000
+        Size.Width = 180.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = '0.00 um2'
+        TabOrder = 16
+      end
+      object LabelUtilization: TLabel
+        Position.X = 24.000000000000000000
+        Position.Y = 140.000000000000000000
+        Size.Width = 170.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = 'Target utilization (%):'
+        TabOrder = 17
+      end
+      object EditUtilization: TEdit
+        Position.X = 200.000000000000000000
+        Position.Y = 136.000000000000000000
+        Size.Width = 70.000000000000000000
+        Size.Height = 26.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 18
+        OnChange = EditPlacementChanged
+        OnKeyDown = EditPlacementKeyDown
+      end
+      object LabelUtilSuffix: TLabel
+        Position.X = 278.000000000000000000
+        Position.Y = 140.000000000000000000
+        Size.Width = 20.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = '%'
+        TabOrder = 19
+      end
+      object LabelBiasCurrent: TLabel
+        Position.X = 24.000000000000000000
+        Position.Y = 188.000000000000000000
+        Size.Width = 170.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = 'Max bias current (uA):'
+        TabOrder = 20
+      end
+      object EditBiasCurrent: TEdit
+        Position.X = 200.000000000000000000
+        Position.Y = 184.000000000000000000
+        Size.Width = 70.000000000000000000
+        Size.Height = 26.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 21
+        OnChange = EditPlacementChanged
+        OnKeyDown = EditPlacementKeyDown
+      end
+      object LabelPTLLength: TLabel
+        Position.X = 24.000000000000000000
+        Position.Y = 220.000000000000000000
+        Size.Width = 170.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = 'Max PTL length (um):'
+        TabOrder = 22
+      end
+      object EditPTLLength: TEdit
+        Position.X = 200.000000000000000000
+        Position.Y = 216.000000000000000000
+        Size.Width = 70.000000000000000000
+        Size.Height = 26.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 23
+        OnChange = EditPlacementChanged
+        OnKeyDown = EditPlacementKeyDown
+      end
+      object LabelPlacementErrors: TLabel
+        Position.X = 24.000000000000000000
+        Position.Y = 252.000000000000000000
+        Size.Width = 592.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = 'Errors & Warnings:'
+        TabOrder = 9
+      end
+      end
+      object ListBoxPlacementErrors: TListBox
+        Align = Client
+        Margins.Left = 24.000000000000000000
+        Margins.Right = 24.000000000000000000
+        Margins.Top = 4.000000000000000000
+        Margins.Bottom = 16.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 10
+        DisableFocusEffect = True
+        DefaultItemStyles.ItemStyle = ''
+        DefaultItemStyles.GroupHeaderStyle = ''
+        DefaultItemStyles.GroupFooterStyle = ''
       end
     end
   end
