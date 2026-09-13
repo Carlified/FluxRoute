@@ -1,4 +1,4 @@
-unit MainWindow;
+﻿unit MainWindow;
 
 interface
 
@@ -24,7 +24,7 @@ uses
 const
   // Top-level wizard page indexes. A Start/project page is at the front.
   // Order: Start, Library, Cell selection, BLIF loading, Pipeline, Clock,
-  // Placement configuration.
+  // Placement configuration, Floorplan.
   TabStart = 0;
   TabLibrary = 1;
   TabComponents = 2; // cell selection (splitters/FF/buffers)
@@ -32,8 +32,58 @@ const
   TabPipeline = 4;
   TabClock = 5;
   TabPlacement = 6;  // floorplanning / placement configuration
+  TabFloorplan = 7;  // floorplan visualisation
 
 type
+  // One block of the floorplanning grid (for future maze routing).
+  // The _Fill kinds mark space extended out to the row extremities after the
+  // allocated width (drawn lighter; the allocated/fill split is not stored
+  // beyond these kinds).
+  TFloorplanCell = (fcEmpty, fcLogic, fcClock, fcBias, fcLogicFill, fcClockFill);
+
+  // A placed logic component: its grid cell inside the floorplan.
+  TPlacedComponent = record
+    Gate: TGateInstance;
+    InstanceName: string;
+    CellName: string;
+    ClockLevel: Integer;
+    X, Y: Integer; // top-left grid cell of the component
+    W, H: Integer; // component size in grid cells (cell width/height / core)
+  end;
+
+  // Immobile I/O anchor: an external input/output net pinned to a grid block
+  // at the top/bottom of the die. Used to anchor the barycentre relaxation so
+  // the layout cannot float freely.
+  TPadConnection = record
+    NetName: string;
+    X, Y: Integer; // grid cell (single block, for now)
+    IsInput: Boolean;
+  end;
+
+// One placed clock-tree cell: a real splitter/buffer (interior) or a clocked
+  // leaf. Children index the containing layer's node array.
+  TPlacedClockNode = record
+    Gate: TGateInstance;
+    IsLeaf: Boolean;
+    X, Y: Integer; // top-left grid cell
+    W, H: Integer; // real cell footprint in grid cells
+    Band: Integer; // layer-band this node is placed in (interior nodes)
+    Children: TArray<Integer>;
+  end;
+
+  // One placed spine (clock trunk) component: a junction splitter or a stage
+  // buffer. Trunk cells are rotated 90 deg CCW (the cell top faces the bias
+  // line), so the placed footprint swaps width and height (W = cell height,
+  // H = cell width). Overflow buffers lie on a band's clock row, unrotated.
+  TSpineComponent = record
+    Gate: TGateInstance;
+    IsJunction: Boolean;
+    X, Y: Integer; // top-left grid cell
+    W, H: Integer; // placed footprint
+    Rotated: Boolean;
+    Band: Integer; // -1 = in the trunk; else the overflow band index
+  end;
+
   TForm1 = class(TForm)
     TabControl1: TTabControl;
     LabelStartTitle: TLabel;
@@ -81,6 +131,13 @@ type
     TabItem6: TTabItem;
     Label8: TLabel;
     PaintBox2: TPaintBox;
+    PaintBox3: TPaintBox;
+    ButtonOptimize: TButton;
+    ButtonExport: TButton;
+    CheckBoxShowNames: TCheckBox;
+    CheckBoxShowColors: TCheckBox;
+    CheckBoxShowWires: TCheckBox;
+    ListBoxFloorplanErrors: TListBox;
     ButtonBack: TButton;
     ButtonNext: TButton;
     OpenDialog1: TOpenDialog;
@@ -108,6 +165,9 @@ type
     procedure EditPlacementChanged(Sender: TObject);
     procedure EditPlacementKeyDown(Sender: TObject; var Key: Word;
       var KeyChar: WideChar; Shift: TShiftState);
+    procedure ButtonOptimizeClick(Sender: TObject);
+    procedure ButtonExportClick(Sender: TObject);
+    procedure CheckBoxToggleChange(Sender: TObject);
     procedure PaintBox1MouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Single);
     procedure PaintBox1MouseMove(Sender: TObject; Shift: TShiftState; X, Y: Single);
     procedure PaintBox1MouseUp(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Single);
@@ -134,6 +194,7 @@ type
     FThreshold: Double;
     FCompactWorstDelay: Double;
     FClockModel: TBlifModel;      // deep copy of the DFF-inserted netlist
+    FClockBufferedModel: TBlifModel; // copy with delay blocks -> buffer chains
     FClockNet: TClockNetworkInfo; // clock stage registry (top-down)
     FSplittersInserted: Boolean;
     FProject: TProjectFile;
@@ -153,6 +214,34 @@ type
     FClkDragX, FClkDragY: Single;
     FClkDragging: Boolean;
     FClockZoom: Single;
+    FPlanPanX, FPlanPanY: Single;
+    FPlanDragX, FPlanDragY: Single;
+    FPlanDragging: Boolean;
+    FPlanZoom: Single;
+    FPlanNeedsFit: Boolean;
+    FPlacementErrorCount: Integer;
+    FFloorplan: TArray<TFloorplanCell>;
+    FFloorplanLayer: TArray<SmallInt>; // clock level per cell, -1 = none
+    FFloorplanW, FFloorplanH: Integer;
+    FFloorplanValid: Boolean;
+    FPlacedComponents: TArray<TPlacedComponent>;
+    FGatePlacement: TDictionary<TGateInstance, TPoint>; // gate -> grid cell
+    FPadMap: TDictionary<string, TPoint>; // primary net -> immobile pad cell
+    FPads: TArray<TPadConnection>; // ordered pads, for rendering
+    FClockSubtree: TArray<TArray<TPlacedClockNode>>; // balanced subtree per layer
+    FSpine: TArray<TSpineComponent>; // placed clock trunk (splitters + buffers)
+    FPlacementModel: TBlifModel; // model used for floorplan (post-DFF pipeline)
+    // Band layout snapshot for the ordering algorithm.
+    FPlanCore: Double;
+    FPlanLevels: TArray<Integer>;
+    FPlanNumLayers: Integer;
+    FPlanLevelFirstBand: TArray<Integer>;
+    FPlanLevelBandCount: TArray<Integer>;
+    FPlanBandStarts: TArray<Integer>;
+    FPlanXRight: Integer;
+    FPlanRowHBlocks: Integer;
+    FOrderChanged: Boolean;
+    FManhattanItem: TListBoxItem; // live 'total wire length' diagnostic line
     procedure FreeLib;
     procedure ResetWorkspace;
     procedure LoadLibraryFromFile(const Path: string; AShowErrors: Boolean = True);
@@ -195,6 +284,30 @@ type
     procedure PaintBox2MouseMove(Sender: TObject; Shift: TShiftState; X, Y: Single);
     procedure PaintBox2MouseUp(Sender: TObject; Button: TMouseButton;
       Shift: TShiftState; X, Y: Single);
+    procedure PaintFloorplan(Sender: TObject; Canvas: TCanvas);
+    procedure BuildFloorplan;
+    procedure RepaintFloorplanPage;
+    procedure AddFloorplanError(const Text: string);
+    function TotalManhattanDistance: Double;
+    procedure UpdateManhattanDiagnostic;
+    function GetPad(const ANetName: string; var P: TPoint): Boolean;
+    procedure BuildClockSubtreePlacements;
+    procedure BuildSpinePlacement;
+    function NetManhattan(Net: TNet): Double;
+    function CellCenterUm(G: TGateInstance; Core: Double;
+      var UX, UY: Double): Boolean;
+    procedure SetPlanCell(X, Y: Integer; Kind: TFloorplanCell; ALayer: Integer);
+    function GetPlanCell(X, Y: Integer): TFloorplanCell;
+    function GetPlanLayer(X, Y: Integer): Integer;
+    procedure FillPlanRect(X0, Y0, X1, Y1: Integer; Kind: TFloorplanCell;
+      ALayer: Integer);
+    procedure PaintBox3MouseDown(Sender: TObject; Button: TMouseButton;
+      Shift: TShiftState; X, Y: Single);
+    procedure PaintBox3MouseMove(Sender: TObject; Shift: TShiftState; X, Y: Single);
+    procedure PaintBox3MouseUp(Sender: TObject; Button: TMouseButton;
+      Shift: TShiftState; X, Y: Single);
+    procedure OrderLayer(L: Integer; CrossOnly: Boolean);
+    procedure ResolvePlacementOverlaps;
   public
     { Public declarations }
   end;
@@ -218,6 +331,9 @@ procedure TForm1.ResetWorkspace;
 begin
   FSplittersInserted := False;
   FPlacementInitialized := False;
+  FPlacedComponents := nil;
+  FGatePlacement.Clear;
+  FPlacementModel := nil;
   FreePipelineRows;
   FreePipelineModel;
   FreeClockModel;
@@ -380,6 +496,9 @@ begin
       (FBufferNames.Count > 0);
   if TabControl1.TabIndex = TabNetlist then
     ButtonNext.Enabled := ButtonNext.Enabled and (FModel <> nil);
+  if TabControl1.TabIndex = TabPlacement then
+    ButtonNext.Enabled := ButtonNext.Enabled and FPlacementInitialized and
+      (FPlacementErrorCount = 0);
 end;
 
 procedure TForm1.UpdateRecentList;
@@ -556,6 +675,7 @@ var
   i: Integer;
 begin
   ListBoxPlacementErrors.Clear;
+  FPlacementErrorCount := 0;
   // Restore the default text colors before re-flagging invalid fields.
   EditRowHeight.StyledSettings := EditRowHeight.StyledSettings + [TStyledSetting.FontColor];
   EditDieW.StyledSettings := EditDieW.StyledSettings + [TStyledSetting.FontColor];
@@ -686,7 +806,10 @@ begin
   Item := TListBoxItem.Create(ListBoxPlacementErrors);
   Item.Parent := ListBoxPlacementErrors;
   if IsError then
-    Item.Text := '[ERROR] ' + Text
+  begin
+    Inc(FPlacementErrorCount);
+    Item.Text := '[ERROR] ' + Text;
+  end
   else
     Item.Text := '[WARNING] ' + Text;
   Item.StyledSettings := Item.StyledSettings - [TStyledSetting.FontColor];
@@ -696,7 +819,10 @@ end;
 procedure TForm1.EditPlacementChanged(Sender: TObject);
 begin
   if FPlacementInitialized and (not FFormattingPlacement) then
+  begin
     ValidatePlacement;
+    UpdateUI;
+  end;
 end;
 
 procedure TForm1.EditPlacementKeyDown(Sender: TObject; var Key: Word;
@@ -709,6 +835,7 @@ begin
     begin
       FormatPlacementFields;
       ValidatePlacement;
+      UpdateUI;
     end;
   end;
 end;
@@ -905,6 +1032,8 @@ begin
   FSplitterNames := TStringList.Create;
   FCandidateCells := TList<TCell>.Create;
   FCellDelays := TDictionary<string, Double>.Create;
+  FGatePlacement := TDictionary<TGateInstance, TPoint>.Create;
+  FPadMap := TDictionary<string, TPoint>.Create;
   FFlipFlopNames := TStringList.Create;
   FFlipFlopCandidates := TList<TCell>.Create;
   FBufferNames := TStringList.Create;
@@ -929,9 +1058,14 @@ begin
   PaintBox2.OnMouseDown := PaintBox2MouseDown;
   PaintBox2.OnMouseMove := PaintBox2MouseMove;
   PaintBox2.OnMouseUp := PaintBox2MouseUp;
+  PaintBox3.OnPaint := PaintFloorplan;
+  PaintBox3.OnMouseDown := PaintBox3MouseDown;
+  PaintBox3.OnMouseMove := PaintBox3MouseMove;
+  PaintBox3.OnMouseUp := PaintBox3MouseUp;
   OnMouseWheel := FormMouseWheel;
   FZoom := 1.0;
   FClockZoom := 1.0;
+  FPlanZoom := 1.0;
   TabControl1.OnChange := TabControl1Change;
   FSliderPos := 0;
   FSliderTimer := TTimer.Create(Self);
@@ -1023,6 +1157,8 @@ begin
   FSplitterNames.Free;
   FCandidateCells.Free;
   FCellDelays.Free;
+  FGatePlacement.Free;
+  FPadMap.Free;
   FFlipFlopNames.Free;
   FFlipFlopCandidates.Free;
   FBufferNames.Free;
@@ -1972,14 +2108,1972 @@ begin
   FClkDragging := False;
 end;
 
+procedure TForm1.PaintBox3MouseDown(Sender: TObject; Button: TMouseButton;
+  Shift: TShiftState; X, Y: Single);
+begin
+  if Button = TMouseButton.mbLeft then
+  begin
+    FPlanDragging := True;
+    FPlanDragX := X;
+    FPlanDragY := Y;
+  end;
+end;
+
+procedure TForm1.PaintBox3MouseMove(Sender: TObject; Shift: TShiftState;
+  X, Y: Single);
+begin
+  if FPlanDragging then
+  begin
+    FPlanPanX := FPlanPanX + (X - FPlanDragX);
+    FPlanPanY := FPlanPanY + (Y - FPlanDragY);
+    FPlanDragX := X;
+    FPlanDragY := Y;
+    RepaintFloorplanPage;
+  end;
+end;
+
+procedure TForm1.PaintBox3MouseUp(Sender: TObject; Button: TMouseButton;
+  Shift: TShiftState; X, Y: Single);
+begin
+  FPlanDragging := False;
+end;
+
+procedure TForm1.OrderLayer(L: Integer; CrossOnly: Boolean);
+var
+  Items, Order, CellBand, PlacedX, BandUsed: TArray<Integer>;
+  BaryX, BaryY, NbrX: TArray<Double>;
+  i, j, k, Idx, TmpIdx, BandStartIdx, BandEndIdx, BandIdx, X, RowY: Integer;
+  Pref, d, cand: Integer;
+  W, DL, NextLeft: Integer;
+  SumX, SumY, TmpX, Dist, BestDist: Double;
+  Count, Wb, Hb: Integer;
+  Conn: TPinConnection;
+  Net: TNet;
+  NC: TNetConnection;
+  Pt, PadPt: TPoint;
+  Changed: Boolean;
+begin
+  // Collect this layer's placed component indices.
+  SetLength(Items, 0);
+  for Idx := 0 to High(FPlacedComponents) do
+    if FPlacedComponents[Idx].ClockLevel = FPlanLevels[L] then
+    begin
+      SetLength(Items, Length(Items) + 1);
+      Items[High(Items)] := Idx;
+    end;
+  if Length(Items) = 0 then
+    Exit;
+
+  // (X,Y) barycentres from placed neighbours (clock pins excluded).
+  SetLength(BaryX, Length(Items));
+  SetLength(BaryY, Length(Items));
+  for i := 0 to High(Items) do
+  begin
+    SumX := 0;
+    SumY := 0;
+    Count := 0;
+    if CrossOnly then
+      SetLength(NbrX, 0);
+    if FPlacedComponents[Items[i]].Gate <> nil then
+      for Conn in FPlacedComponents[Items[i]].Gate.Connections do
+      begin
+        if IsClockPinName(Conn.PinName) then
+          Continue;
+        if (FPlacementModel = nil) or
+           (not FPlacementModel.Nets.TryGetValue(Conn.NetName, Net)) then
+          Continue;
+        // Immobile I/O anchor: a primary input/output net on this pin is pinned
+        // to its pad at the die edge, so it counts as a fixed neighbour in the
+        // barycentre (anchors the layout so it cannot float freely).
+        if GetPad(Conn.NetName, PadPt) then
+        begin
+          if CrossOnly then
+          begin
+            SetLength(NbrX, Length(NbrX) + 1);
+            NbrX[High(NbrX)] := PadPt.X + 0.5;
+          end;
+          SumX := SumX + (PadPt.X + 0.5);
+          SumY := SumY + (PadPt.Y + 0.5);
+          Inc(Count);
+        end;
+        for NC in Net.Connections do
+        begin
+          if NC.Gate = FPlacedComponents[Items[i]].Gate then
+            Continue;
+          if not FGatePlacement.TryGetValue(NC.Gate, Pt) then
+            Continue;
+          // CrossOnly orders cells by their neighbours on OTHER layers only, so
+          // layer-to-layer wires align and stop crossing; same-layer neighbours
+          // are ignored during this phase.
+          if CrossOnly and
+             (NC.Gate.ClockLevel = FPlacedComponents[Items[i]].ClockLevel) then
+            Continue;
+          Wb := 1;
+          Hb := 1;
+          if NC.Gate.Cell <> nil then
+          begin
+            Wb := Round(NC.Gate.Cell.Width / FPlanCore);
+            Hb := Round(NC.Gate.Cell.Height / FPlanCore);
+            if Wb < 1 then
+              Wb := 1;
+            if Hb < 1 then
+              Hb := 1;
+          end;
+          if CrossOnly then
+          begin
+            SetLength(NbrX, Length(NbrX) + 1);
+            NbrX[High(NbrX)] := Pt.X + Wb / 2;
+          end;
+          SumX := SumX + (Pt.X + Wb / 2);
+          SumY := SumY + (Pt.Y + Hb / 2);
+          Inc(Count);
+        end;
+      end;
+    if Count > 0 then
+    begin
+      if CrossOnly then
+      begin
+        // Median of the cross-layer neighbour X-centres - the classic robust
+        // ordering key for crossing minimisation (outliers don't dominate).
+        for k := 1 to High(NbrX) do
+        begin
+          TmpX := NbrX[k];
+          j := k - 1;
+          while (j >= 0) and (NbrX[j] > TmpX) do
+          begin
+            NbrX[j + 1] := NbrX[j];
+            Dec(j);
+          end;
+          NbrX[j + 1] := TmpX;
+        end;
+        BaryX[i] := NbrX[Length(NbrX) div 2];
+      end
+      else
+        BaryX[i] := SumX / Count;
+      BaryY[i] := SumY / Count;
+    end
+    else
+    begin
+      // No neighbours: keep the current centre so isolated cells stay put.
+      BaryX[i] := FPlacedComponents[Items[i]].X +
+        FPlacedComponents[Items[i]].W / 2;
+      BaryY[i] := FPlacedComponents[Items[i]].Y +
+        FPlacedComponents[Items[i]].H / 2;
+    end;
+  end;
+
+  // Sort cell indices by X barycentre (stable insertion sort).
+  SetLength(Order, Length(Items));
+  for i := 0 to High(Order) do
+    Order[i] := i;
+  for i := 1 to High(Order) do
+  begin
+    TmpIdx := Order[i];
+    j := i - 1;
+    while (j >= 0) and (BaryX[Order[j]] > BaryX[TmpIdx]) do
+    begin
+      Order[j + 1] := Order[j];
+      Dec(j);
+    end;
+    Order[j + 1] := TmpIdx;
+  end;
+
+  // Band assignment: each cell prefers the band whose row centre is closest to
+  // its Y barycentre (this is what lets cells migrate between rows). Capacity
+  // is enforced by spilling each cell to the nearest band with room - a
+  // deterministic, one-shot decision, so there is no oscillation or drift.
+  BandStartIdx := FPlanLevelFirstBand[L];
+  BandEndIdx := BandStartIdx + FPlanLevelBandCount[L];
+  SetLength(CellBand, Length(Order));
+  SetLength(PlacedX, Length(Order));
+  SetLength(BandUsed, BandEndIdx - BandStartIdx);
+  for BandIdx := 0 to High(BandUsed) do
+    BandUsed[BandIdx] := 0;
+
+  for i := 0 to High(Order) do
+  begin
+    Idx := Items[Order[i]];
+    // Preferred band: the row centre closest to the Y barycentre, so cells are
+    // free to migrate between rows in both phases (only the X-ordering key
+    // differs) - moving a cell toward its connections' rows shortens wires.
+    Pref := BandStartIdx;
+    BestDist := MaxSingle;
+    for BandIdx := BandStartIdx to BandEndIdx - 1 do
+    begin
+      Dist := Abs((FPlanBandStarts[BandIdx] + FPlanRowHBlocks / 2) -
+        BaryY[Order[i]]);
+      if Dist < BestDist then
+      begin
+        BestDist := Dist;
+        Pref := BandIdx;
+      end;
+    end;
+    // Nearest band (from Pref outward) that can still fit this cell.
+    CellBand[i] := -1;
+    for d := 0 to BandEndIdx - BandStartIdx - 1 do
+    begin
+      cand := Pref + d;
+      if (cand >= BandStartIdx) and (cand < BandEndIdx) and
+         (BandUsed[cand - BandStartIdx] +
+          FPlacedComponents[Idx].W <= FPlanXRight - 1) then
+      begin
+        CellBand[i] := cand;
+        Break;
+      end;
+      cand := Pref - d;
+      if (d > 0) and (cand >= BandStartIdx) and (cand < BandEndIdx) and
+         (BandUsed[cand - BandStartIdx] +
+          FPlacedComponents[Idx].W <= FPlanXRight - 1) then
+      begin
+        CellBand[i] := cand;
+        Break;
+      end;
+    end;
+    if CellBand[i] < 0 then
+      Break; // no band has room left for this layer
+    BandUsed[CellBand[i] - BandStartIdx] :=
+      BandUsed[CellBand[i] - BandStartIdx] +
+      FPlacedComponents[Idx].W + 1; // width + one-cell gap
+  end;
+
+  // Spread each band's cells across the row at their barycentre targets (order
+  // preserved): each cell sits where its connections pull it instead of being
+  // densely packed, which shortens wires. Overlaps are resolved by a forward
+  // push and a backward release, so nothing drifts or runs off the die.
+  Changed := False;
+  for BandIdx := BandStartIdx to BandEndIdx - 1 do
+  begin
+    // Forward pass: place each cell at its target left, but not before the
+    // previous cell's right edge + gap.
+    X := 1;
+    for i := 0 to High(Order) do
+    begin
+      if CellBand[i] <> BandIdx then
+        Continue;
+      Idx := Items[Order[i]];
+      W := FPlacedComponents[Idx].W;
+      DL := Round(BaryX[Order[i]] - W / 2);
+      if DL < 1 then
+        DL := 1;
+      if DL > FPlanXRight - W then
+        DL := FPlanXRight - W;
+      if DL < X then
+        DL := X;
+      PlacedX[i] := DL;
+      X := DL + W + 1; // width + one-cell gap
+    end;
+    // Backward pass: clamp to the row's right edge and release any forward
+    // push where there is room to the left (prevents accumulation/drift).
+    NextLeft := FPlanXRight;
+    for i := High(Order) downto 0 do
+    begin
+      if CellBand[i] <> BandIdx then
+        Continue;
+      Idx := Items[Order[i]];
+      W := FPlacedComponents[Idx].W;
+      if PlacedX[i] + W > FPlanXRight then
+        PlacedX[i] := FPlanXRight - W;
+      if PlacedX[i] + W + 1 > NextLeft then
+        PlacedX[i] := NextLeft - W - 1;
+      if PlacedX[i] < 1 then
+        PlacedX[i] := 1;
+      NextLeft := PlacedX[i];
+    end;
+  end;
+
+  // Write the final positions.
+  for i := 0 to High(Order) do
+  begin
+    if (CellBand[i] < BandStartIdx) or (CellBand[i] >= BandEndIdx) then
+      Continue;
+    Idx := Items[Order[i]];
+    RowY := FPlanBandStarts[CellBand[i]] + 1 +
+      ((FPlanRowHBlocks - FPlacedComponents[Idx].H) div 2);
+    if (FPlacedComponents[Idx].X <> PlacedX[i]) or
+       (FPlacedComponents[Idx].Y <> RowY) then
+      Changed := True;
+    FPlacedComponents[Idx].X := PlacedX[i];
+    FPlacedComponents[Idx].Y := RowY;
+    FGatePlacement.AddOrSetValue(FPlacedComponents[Idx].Gate,
+      TPoint.Create(PlacedX[i], RowY));
+  end;
+
+  if Changed then
+    FOrderChanged := True;
+end;
+
+procedure TForm1.ButtonOptimizeClick(Sender: TObject);
+const
+  MaxCrossPasses = 40;
+  MaxOrderPasses = 100;
+var
+  Pass, L: Integer;
+begin
+  if not FFloorplanValid then
+    Exit;
+  if Length(FPlacedComponents) = 0 then
+    Exit;
+  // Phase 1 - untangle: order cells only by their neighbours on other layers,
+  // alternating the sweep direction, so layer-to-layer wires align and stop
+  // crossing before the full optimisation runs.
+  for Pass := 0 to MaxCrossPasses - 1 do
+  begin
+    FOrderChanged := False;
+    if Pass mod 2 = 0 then
+      for L := 0 to FPlanNumLayers - 1 do
+        OrderLayer(L, True)
+    else
+      for L := FPlanNumLayers - 1 downto 0 do
+        OrderLayer(L, True);
+    if not FOrderChanged then
+      Break; // converged
+  end;
+  // Phase 2 - full barycentre optimisation (all neighbours, X and Y),
+  // alternating the sweep direction so the Gauss-Seidel bias cancels.
+  for Pass := 0 to MaxOrderPasses - 1 do
+  begin
+    FOrderChanged := False;
+    if Pass mod 2 = 0 then
+      for L := 0 to FPlanNumLayers - 1 do
+        OrderLayer(L, False)
+    else
+      for L := FPlanNumLayers - 1 downto 0 do
+        OrderLayer(L, False);
+    if not FOrderChanged then
+      Break; // converged
+  end;
+  ResolvePlacementOverlaps; // guarantee cells never overlap
+  BuildClockSubtreePlacements; // rebuild the balanced clock subtrees
+  BuildSpinePlacement;
+  UpdateManhattanDiagnostic;
+  RepaintFloorplanPage;
+end;
+
+// Debug helper: dumps the current placement (positions, barycentres, and each
+// cell's placed connection targets) to placement_dump.txt in the working
+// directory so the layout can be inspected numerically.
+procedure TForm1.ButtonExportClick(Sender: TObject);
+var
+  SL: TStringList;
+  Item: TListBoxItem;
+  i: Integer;
+  Conn: TPinConnection;
+  Net: TNet;
+  NC: TNetConnection;
+  Pt: TPoint;
+  Path: string;
+  Bx, By, SumX, SumY: Double;
+  Count, Wb, Hb: Integer;
+begin
+  if Length(FPlacedComponents) = 0 then
+    Exit;
+  SL := TStringList.Create;
+  try
+    SL.Add(Format('Total wire length: %.0f um', [TotalManhattanDistance]));
+    SL.Add(Format('Core=%.3f  XRight=%d  Layers=%d  RowH=%d',
+      [FPlanCore, FPlanXRight, FPlanNumLayers, FPlanRowHBlocks]));
+    SL.Add('');
+    for i := 0 to High(FPlacedComponents) do
+    begin
+      // Recompute the X/Y barycentre from the placed neighbours.
+      SumX := 0;
+      SumY := 0;
+      Count := 0;
+      if FPlacedComponents[i].Gate <> nil then
+        for Conn in FPlacedComponents[i].Gate.Connections do
+        begin
+          if IsClockPinName(Conn.PinName) then
+            Continue;
+          if (FPlacementModel = nil) or
+             (not FPlacementModel.Nets.TryGetValue(Conn.NetName, Net)) then
+            Continue;
+          for NC in Net.Connections do
+          begin
+            if NC.Gate = FPlacedComponents[i].Gate then
+              Continue;
+            if not FGatePlacement.TryGetValue(NC.Gate, Pt) then
+              Continue;
+            Wb := 1;
+            Hb := 1;
+            if NC.Gate.Cell <> nil then
+            begin
+              Wb := Round(NC.Gate.Cell.Width / FPlanCore);
+              Hb := Round(NC.Gate.Cell.Height / FPlanCore);
+              if Wb < 1 then
+                Wb := 1;
+              if Hb < 1 then
+                Hb := 1;
+            end;
+            SumX := SumX + (Pt.X + Wb / 2);
+            SumY := SumY + (Pt.Y + Hb / 2);
+            Inc(Count);
+          end;
+        end;
+      if Count > 0 then
+      begin
+        Bx := SumX / Count;
+        By := SumY / Count;
+      end
+      else
+      begin
+        Bx := FPlacedComponents[i].X + FPlacedComponents[i].W / 2;
+        By := FPlacedComponents[i].Y + FPlacedComponents[i].H / 2;
+      end;
+      SL.Add(Format('P%4d %-20s [L%2d] X=%4d Y=%4d W=%2d H=%2d  bary=(%6.1f,%6.1f)',
+        [i, FPlacedComponents[i].InstanceName, FPlacedComponents[i].ClockLevel,
+         FPlacedComponents[i].X, FPlacedComponents[i].Y,
+         FPlacedComponents[i].W, FPlacedComponents[i].H, Bx, By]));
+      if FPlacedComponents[i].Gate <> nil then
+        for Conn in FPlacedComponents[i].Gate.Connections do
+        begin
+          if IsClockPinName(Conn.PinName) then
+            Continue;
+          if (FPlacementModel = nil) or
+             (not FPlacementModel.Nets.TryGetValue(Conn.NetName, Net)) then
+            Continue;
+          for NC in Net.Connections do
+          begin
+            if NC.Gate = FPlacedComponents[i].Gate then
+              Continue;
+            if FGatePlacement.TryGetValue(NC.Gate, Pt) then
+              SL.Add(Format('      -> %-20s [L%2d] @ (%d,%d)',
+                [NC.Gate.CellName, NC.Gate.ClockLevel, Pt.X, Pt.Y]));
+          end;
+        end;
+    end;
+    Path := GetCurrentDir + '\placement_dump.txt';
+    SL.SaveToFile(Path);
+  finally
+    SL.Free;
+  end;
+  Item := TListBoxItem.Create(ListBoxFloorplanErrors);
+  Item.Parent := ListBoxFloorplanErrors;
+  Item.Text := 'Placement dumped to ' + Path;
+end;
+
+procedure TForm1.CheckBoxToggleChange(Sender: TObject);
+begin
+  if TabControl1.TabIndex = TabFloorplan then
+    RepaintFloorplanPage;
+end;
+
+procedure TForm1.ResolvePlacementOverlaps;
+var
+  BandHeight, MaxBand, BandIdx, i, j, Idx, Tmp, MinX: Integer;
+  Items: TArray<Integer>;
+begin
+  if Length(FPlacedComponents) = 0 then
+    Exit;
+  BandHeight := 2 + 2 * FPlanRowHBlocks;
+  if BandHeight < 1 then
+    Exit;
+  MaxBand := 0;
+  for i := 0 to High(FPlacedComponents) do
+  begin
+    BandIdx := (FPlacedComponents[i].Y - 1) div BandHeight;
+    if BandIdx > MaxBand then
+      MaxBand := BandIdx;
+  end;
+  for BandIdx := 0 to MaxBand do
+  begin
+    // Collect the band's cells, then order them by X.
+    SetLength(Items, 0);
+    for i := 0 to High(FPlacedComponents) do
+      if (FPlacedComponents[i].Y - 1) div BandHeight = BandIdx then
+      begin
+        SetLength(Items, Length(Items) + 1);
+        Items[High(Items)] := i;
+      end;
+    if Length(Items) < 2 then
+      Continue;
+    for i := 1 to High(Items) do
+    begin
+      Tmp := Items[i];
+      j := i - 1;
+      while (j >= 0) and (FPlacedComponents[Items[j]].X > FPlacedComponents[Tmp].X) do
+      begin
+        Items[j + 1] := Items[j];
+        Dec(j);
+      end;
+      Items[j + 1] := Tmp;
+    end;
+    // Enforce the 1-cell gap so cells can never overlap, and clamp within the
+    // row so nothing runs off the die.
+    for i := 1 to High(Items) do
+    begin
+      MinX := FPlacedComponents[Items[i - 1]].X +
+        FPlacedComponents[Items[i - 1]].W + 1;
+      Idx := Items[i];
+      if FPlacedComponents[Idx].X < MinX then
+        FPlacedComponents[Idx].X := MinX;
+      if FPlacedComponents[Idx].X + FPlacedComponents[Idx].W > FPlanXRight then
+        FPlacedComponents[Idx].X := FPlanXRight - FPlacedComponents[Idx].W;
+      if FPlacedComponents[Idx].X < 1 then
+        FPlacedComponents[Idx].X := 1;
+      FGatePlacement.AddOrSetValue(FPlacedComponents[Idx].Gate,
+        TPoint.Create(FPlacedComponents[Idx].X, FPlacedComponents[Idx].Y));
+    end;
+  end;
+end;
+
+procedure TForm1.AddFloorplanError(const Text: string);
+var
+  Item: TListBoxItem;
+begin
+  Item := TListBoxItem.Create(ListBoxFloorplanErrors);
+  Item.Parent := ListBoxFloorplanErrors;
+  Item.Text := '[ERROR] ' + Text;
+  Item.StyledSettings := Item.StyledSettings - [TStyledSetting.FontColor];
+  Item.TextSettings.FontColor := $FFFF0000;
+end;
+
+// World-space (um) centre of a placed gate. Mirrors PlacedCenter but in the
+// placement's real coordinate system instead of screen pixels.
+function TForm1.CellCenterUm(G: TGateInstance; Core: Double;
+  var UX, UY: Double): Boolean;
+var
+  Pt: TPoint;
+  Wb, Hb: Double;
+begin
+  Result := (G <> nil) and FGatePlacement.TryGetValue(G, Pt);
+  if not Result then
+    Exit;
+  Wb := 1;
+  Hb := 1;
+  if G.Cell <> nil then
+  begin
+    Wb := G.Cell.Width / Core;
+    Hb := G.Cell.Height / Core;
+    if Wb < 1 then
+      Wb := 1;
+    if Hb < 1 then
+      Hb := 1;
+  end;
+  UX := (Pt.X + Wb / 2) * Core;
+  UY := (Pt.Y + Hb / 2) * Core;
+end;
+
+// Manhattan wire length (um) of one net: its placed, non-clock driver to each
+// of its placed, non-clock loads. Clock pins and unplaced gates are ignored,
+// exactly like the debug wire rendering.
+function TForm1.NetManhattan(Net: TNet): Double;
+var
+  NC: TNetConnection;
+  Driver, Load: TGateInstance;
+  Core, SX1, SY1, SX2, SY2: Double;
+begin
+  Result := 0;
+  if not (TryDimParse(EditCoreSize.Text, Core) and (Core > 0)) then
+    Core := FPlanCore;
+  Driver := nil;
+  for NC in Net.Connections do
+    if NC.IsDriver and (not IsClockPinName(NC.PinName)) and
+       FGatePlacement.ContainsKey(NC.Gate) then
+    begin
+      Driver := NC.Gate;
+      Break;
+    end;
+  if Driver = nil then
+    Exit;
+  if not CellCenterUm(Driver, Core, SX1, SY1) then
+    Exit;
+  for NC in Net.Connections do
+  begin
+    if NC.IsDriver then
+      Continue;
+    if IsClockPinName(NC.PinName) then
+      Continue;
+    Load := NC.Gate;
+    if not CellCenterUm(Load, Core, SX2, SY2) then
+      Continue;
+    Result := Result + Abs(SX1 - SX2) + Abs(SY1 - SY2);
+  end;
+end;
+
+// Sum of Manhattan distances (in um) of every data connection the debug wires
+// draw - the total of all nets' driver->load lengths.
+function TForm1.TotalManhattanDistance: Double;
+var
+  Pair: TPair<string, TNet>;
+begin
+  Result := 0;
+  if (FPlacementModel = nil) or (FPlacementModel.Nets = nil) then
+    Exit;
+  for Pair in FPlacementModel.Nets do
+    Result := Result + NetManhattan(Pair.Value);
+end;
+
+procedure TForm1.UpdateManhattanDiagnostic;
+var
+  Total: Double;
+begin
+  if ListBoxFloorplanErrors = nil then
+    Exit;
+  Total := TotalManhattanDistance;
+  if FManhattanItem = nil then
+  begin
+    FManhattanItem := TListBoxItem.Create(ListBoxFloorplanErrors);
+    FManhattanItem.Parent := ListBoxFloorplanErrors;
+  end;
+  FManhattanItem.Text := Format('Total wire length (Manhattan): %.0f um', [Total]);
+end;
+
+// Clock-tree balancing diagnostic: for each layer, compute the arrival time at
+// every clocked leaf (sum of splitter/buffer delays plus estimated wire delay
+// from the placed geometry) and report the skew (max - min) and total wire.
+// Small per-layer skew means the geometric balancing is working.
+// Returns the immobile pad position for a primary input/output net, if any.
+function TForm1.GetPad(const ANetName: string; var P: TPoint): Boolean;
+begin
+  Result := (FPadMap <> nil) and FPadMap.TryGetValue(ANetName, P);
+end;
+
+procedure TForm1.SetPlanCell(X, Y: Integer; Kind: TFloorplanCell; ALayer: Integer);
+begin
+  if (X >= 0) and (X < FFloorplanW) and (Y >= 0) and (Y < FFloorplanH) then
+  begin
+    FFloorplan[Y * FFloorplanW + X] := Kind;
+    FFloorplanLayer[Y * FFloorplanW + X] := ALayer;
+  end;
+end;
+
+function TForm1.GetPlanCell(X, Y: Integer): TFloorplanCell;
+begin
+  if (X >= 0) and (X < FFloorplanW) and (Y >= 0) and (Y < FFloorplanH) then
+    Result := FFloorplan[Y * FFloorplanW + X]
+  else
+    Result := fcEmpty;
+end;
+
+function TForm1.GetPlanLayer(X, Y: Integer): Integer;
+begin
+  if (X >= 0) and (X < FFloorplanW) and (Y >= 0) and (Y < FFloorplanH) then
+    Result := FFloorplanLayer[Y * FFloorplanW + X]
+  else
+    Result := -1;
+end;
+
+procedure TForm1.FillPlanRect(X0, Y0, X1, Y1: Integer; Kind: TFloorplanCell;
+  ALayer: Integer);
+var
+  x, y: Integer;
+begin
+  for y := Y0 to Y1 - 1 do
+    for x := X0 to X1 - 1 do
+      SetPlanCell(x, y, Kind, ALayer);
+end;
+
+procedure TForm1.BuildFloorplan;
+
+  // Walks a row's clock distribution tree (from its tap net) and returns the
+  // total width of all subtree components. Trunk spine elements are excluded;
+  // clocked cells are leaves (counted, but their data outputs are not walked).
+  function CollectTreeWidth(const ANetName: string;
+    Visited: TDictionary<TGateInstance, Boolean>): Double;
+  var
+    Net: TNet;
+    NC: TNetConnection;
+    Conn: TPinConnection;
+  begin
+    Result := 0;
+    if FClockModel = nil then
+      Exit;
+    if not FClockModel.Nets.TryGetValue(ANetName, Net) then
+      Exit;
+    for NC in Net.Connections do
+    begin
+      if NC.IsDriver then
+        Continue;
+      if Visited.ContainsKey(NC.Gate) then
+        Continue;
+      Visited.Add(NC.Gate, True);
+      if NC.Gate.ClockTrunk then
+        Continue; // spine element, not part of the subtree
+      if NC.Gate.Cell <> nil then
+        Result := Result + NC.Gate.Cell.Width;
+      if not CellHasClock(NC.Gate.Cell) then
+        // Interior node (splitter/buffer): keep walking its output nets.
+        for Conn in NC.Gate.Connections do
+          if Conn.Port.Direction = pdOutput then
+            Result := Result + CollectTreeWidth(Conn.NetName, Visited);
+    end;
+  end;
+
+var
+  Core, DieW, DieH, RowH, Util: Double;
+  DieWBlocks, DieHBlocks, RowHBlocks: Integer;
+  Levels: TList<Integer>;
+  Gate: TGateInstance;
+  L, i, NumLayers: Integer;
+  WidthSum, AllocBlocks, ClkWidth, ClkBlocks: Double;
+  PadRec: TPadConnection;
+  RowNetName: string;
+  Visited: TDictionary<TGateInstance, Boolean>;
+  RowWidths: TArray<Integer>;
+  TotalH, TotalW, XRight, BandStart: Integer;
+  AvailableWidth, TotalBands, Band, C, ChunkCount, ChunkWidth: Integer;
+  LevelBandCount, LevelFirstBand, BandStarts: TArray<Integer>;
+  CurChunk, CurX: TArray<Integer>;
+  Idx: Integer;
+  P: TPlacedComponent;
+  RowY, BandIndex: Integer;
+begin
+  // Reset the view; the die is fitted to the canvas on the next paint.
+  FPlanPanX := 0;
+  FPlanPanY := 0;
+  FPlanZoom := 1.0;
+  FPlanNeedsFit := True;
+  ListBoxFloorplanErrors.Clear;
+  FManhattanItem := nil; // cleared listbox invalidates the diagnostic item
+  // Place the wave-pipelined (post-DFF) netlist; fall back to the splitter-
+  // inserted netlist if the pipeline has not been built yet.
+  FPlacementModel := FPipelineModel;
+  if FPlacementModel = nil then
+  begin
+    // A freshly loaded project has no pipeline model yet; build it (using the
+    // restored slider) so the post-DFF netlist is used, as on the Pipeline page.
+    if (FModel <> nil) and (FLib <> nil) and (FFlipFlopNames.Count > 0) then
+      BuildPipelineModel;
+    FPlacementModel := FPipelineModel;
+    if FPlacementModel = nil then
+      FPlacementModel := FModel;
+  end;
+  FFloorplan := nil;
+  FFloorplanW := 0;
+  FFloorplanH := 0;
+  FFloorplanValid := False;
+
+  if not (TryDimParse(EditCoreSize.Text, Core) and
+          TryDimParse(EditDieW.Text, DieW) and
+          TryDimParse(EditDieH.Text, DieH) and
+          TryDimParse(EditRowHeight.Text, RowH)) or
+     (Core <= 0) or (DieW <= 0) or (DieH <= 0) or (RowH <= 0) then
+  begin
+    AddFloorplanError('Placement configuration is incomplete or invalid; go back and fix it.');
+    RepaintFloorplanPage;
+    Exit;
+  end;
+  if not TryDimParse(EditUtilization.Text, Util) or (Util <= 0) then
+    Util := 60;
+
+  DieWBlocks := Round(DieW / Core);
+  DieHBlocks := Round(DieH / Core);
+  RowHBlocks := Round(RowH / Core);
+  if RowHBlocks < 1 then
+    RowHBlocks := 1;
+  if DieWBlocks < 1 then
+    DieWBlocks := 1;
+  if DieHBlocks < 1 then
+    DieHBlocks := 1;
+  // Guard against absurd grid sizes.
+  if DieWBlocks > 4096 then
+  begin
+    AddFloorplanError(Format('Die width of %d blocks is too large to visualise (capped at 4096).', [DieWBlocks]));
+    DieWBlocks := 4096;
+  end;
+  if DieHBlocks > 4096 then
+  begin
+    AddFloorplanError(Format('Die height of %d blocks is too large to visualise (capped at 4096).', [DieHBlocks]));
+    DieHBlocks := 4096;
+  end;
+
+  Levels := TList<Integer>.Create;
+  try
+    // All distinct clock levels (>= 0) present in the main netlist.
+    if FPlacementModel <> nil then
+      for Gate in FPlacementModel.Gates do
+        if (Gate.ClockLevel >= 0) and (Levels.IndexOf(Gate.ClockLevel) < 0) then
+          Levels.Add(Gate.ClockLevel);
+    Levels.Sort;
+    NumLayers := Levels.Count;
+
+    if NumLayers = 0 then
+    begin
+      AddFloorplanError('No clock layers found in the netlist; load a BLIF first.');
+      RepaintFloorplanPage;
+      Exit;
+    end;
+
+    // Per-layer row width, calc1: sum of gate widths at that level, buffered by
+    // the utilization.
+    SetLength(RowWidths, NumLayers);
+    for L := 0 to NumLayers - 1 do
+    begin
+      WidthSum := 0;
+      for Gate in FPlacementModel.Gates do
+        if Gate.ClockLevel = Levels[L] then
+          if Gate.Cell <> nil then
+            WidthSum := WidthSum + Gate.Cell.Width;
+      AllocBlocks := Ceil(WidthSum / (Util / 100) / Core);
+      RowWidths[L] := Round(AllocBlocks);
+      if RowWidths[L] < 1 then
+        RowWidths[L] := 1;
+    end;
+
+    // Per-layer row width, calc2: the clock subtree at that level (trunk
+    // components excluded), buffered the same way. The allocated width is
+    // the maximum of the two calculations.
+    for L := 0 to NumLayers - 1 do
+    begin
+      ClkWidth := 0;
+      if (FClockModel <> nil) and (FClockNet <> nil) and
+         (FClockNet.Rows.IndexOf(Levels[L]) >= 0) then
+      begin
+        RowNetName := Format('clk_row_%d', [Levels[L]]);
+        Visited := TDictionary<TGateInstance, Boolean>.Create;
+        try
+          ClkWidth := CollectTreeWidth(RowNetName, Visited);
+        finally
+          Visited.Free;
+        end;
+      end;
+      ClkBlocks := Ceil(ClkWidth / (Util / 100) / Core);
+      if Round(ClkBlocks) > RowWidths[L] then
+        RowWidths[L] := Round(ClkBlocks);
+    end;
+
+    // Horizontal: bias trunk (1) on the far left, rows, a bias feed column (1)
+    // for the clock trunk, then the clock trunk (rowH) on the far right. The
+    // widest a row can be is the die width minus the trunks.
+    AvailableWidth := DieWBlocks - 2 - RowHBlocks;
+    if AvailableWidth < 1 then
+    begin
+      AddFloorplanError(Format('Die is too narrow: at least %d blocks are needed for the trunks.',
+        [2 + RowHBlocks]));
+      RepaintFloorplanPage;
+      Exit;
+    end;
+    XRight := 1 + AvailableWidth;   // common right edge of the rows
+    TotalW := XRight + 1 + RowHBlocks; // = DieWBlocks
+
+    // Allocate the die-sized grid and its per-cell layer tags.
+    FFloorplanW := DieWBlocks;
+    FFloorplanH := DieHBlocks;
+    SetLength(FFloorplan, FFloorplanW * FFloorplanH);
+    SetLength(FFloorplanLayer, FFloorplanW * FFloorplanH);
+    for i := 0 to High(FFloorplan) do
+    begin
+      FFloorplan[i] := fcEmpty;
+      FFloorplanLayer[i] := -1;
+    end;
+
+    // Lay out the bands, wrapping any row wider than the die so it continues
+    // underneath in its own bias/logic/bias/clock band.
+    TotalBands := 0;
+    for L := 0 to NumLayers - 1 do
+      TotalBands := TotalBands + Max(1, Ceil(RowWidths[L] / AvailableWidth));
+    TotalH := TotalBands * (2 + 2 * RowHBlocks);
+
+    // Failure checks - report and keep whatever fits. Two extra rows are reserved
+    // for the I/O pads (top inputs, bottom outputs).
+    if TotalH + 2 > DieHBlocks then
+      AddFloorplanError(Format('Not enough height: floorplan needs %d blocks (plus 2 pad rows), die has %d.',
+        [TotalH, DieHBlocks]));
+    if TotalW > DieWBlocks then
+      AddFloorplanError(Format('Not enough width: floorplan needs %d blocks, die has %d.',
+        [TotalW, DieWBlocks]));
+
+    // Bias trunk (red) on the far left, full height of the rows (plus the two
+    // I/O pad rows at the top and bottom).
+    FillPlanRect(0, 0, 1, TotalH + 1, fcBias, -1);
+    // Vertical bias feed column (red) immediately left of the clock trunk.
+    FillPlanRect(XRight, 0, XRight + 1, TotalH + 1, fcBias, -1);
+    // Clock trunk (green) on the far right, full height of the rows.
+    FillPlanRect(XRight + 1, 0, XRight + 1 + RowHBlocks, TotalH + 1, fcClock, -1);
+
+    // Bands, top to bottom; a layer may wrap into several bands. The bands are
+    // shifted down by one row so the top row is reserved for input pads.
+    SetLength(LevelBandCount, NumLayers);
+    SetLength(LevelFirstBand, NumLayers);
+    SetLength(BandStarts, TotalBands);
+    Band := 0;
+    for L := 0 to NumLayers - 1 do
+    begin
+      ChunkCount := Max(1, Ceil(RowWidths[L] / AvailableWidth));
+      LevelFirstBand[L] := Band;
+      LevelBandCount[L] := ChunkCount;
+      for C := 0 to ChunkCount - 1 do
+      begin
+        ChunkWidth := RowWidths[L] - C * AvailableWidth;
+        if ChunkWidth > AvailableWidth then
+          ChunkWidth := AvailableWidth;
+        if ChunkWidth < 1 then
+          ChunkWidth := 1;
+        BandStart := 1 + Band * (2 + 2 * RowHBlocks);
+        BandStarts[Band] := BandStart;
+        // Bias line spanning from the bias trunk to the common right edge.
+        FillPlanRect(0, BandStart, XRight, BandStart + 1, fcBias, Levels[L]);
+        // Logic row (blue), right-aligned; remaining space is filled out to
+        // the bias line with a lighter shade.
+        FillPlanRect(XRight - ChunkWidth, BandStart + 1,
+          XRight, BandStart + 1 + RowHBlocks, fcLogic, Levels[L]);
+        FillPlanRect(1, BandStart + 1,
+          XRight - ChunkWidth, BandStart + 1 + RowHBlocks, fcLogicFill, Levels[L]);
+        // Bias line above the clock row.
+        FillPlanRect(0, BandStart + 1 + RowHBlocks,
+          XRight, BandStart + 2 + RowHBlocks, fcBias, Levels[L]);
+        // Clock row (green), right-aligned; fill the remainder lighter.
+        FillPlanRect(XRight - ChunkWidth, BandStart + 2 + RowHBlocks,
+          XRight, BandStart + 2 + 2 * RowHBlocks, fcClock, Levels[L]);
+        FillPlanRect(1, BandStart + 2 + RowHBlocks,
+          XRight - ChunkWidth, BandStart + 2 + 2 * RowHBlocks, fcClockFill, Levels[L]);
+        Inc(Band);
+      end;
+    end;
+
+    // Snapshot the layout for the ordering animation.
+    FPlanCore := Core;
+    FPlanLevels := Levels.ToArray;
+    FPlanNumLayers := NumLayers;
+    FPlanLevelFirstBand := LevelFirstBand;
+    FPlanLevelBandCount := LevelBandCount;
+    FPlanBandStarts := BandStarts;
+    FPlanXRight := XRight;
+    FPlanRowHBlocks := RowHBlocks;
+
+    // Build the immobile I/O anchor pads: primary inputs on the top row,
+    // primary outputs on the bottom row, equi-spaced in netlist order.
+    SetLength(FPads, 0);
+    FPadMap.Clear;
+    if FPlacementModel <> nil then
+    begin
+      // Inputs (top row, Y = 0).
+      for i := 0 to FPlacementModel.Inputs.Count - 1 do
+      begin
+        PadRec.NetName := FPlacementModel.Inputs[i];
+        PadRec.X := 1 + Round((i + 0.5) * Max(1, XRight - 2) /
+          Max(1, FPlacementModel.Inputs.Count));
+        PadRec.Y := 0;
+        PadRec.IsInput := True;
+        SetLength(FPads, Length(FPads) + 1);
+        FPads[High(FPads)] := PadRec;
+        FPadMap.AddOrSetValue(PadRec.NetName,
+          TPoint.Create(PadRec.X, PadRec.Y));
+      end;
+      // Outputs (bottom row, Y = last row of the die).
+      for i := 0 to FPlacementModel.Outputs.Count - 1 do
+      begin
+        PadRec.NetName := FPlacementModel.Outputs[i];
+        PadRec.X := 1 + Round((i + 0.5) * Max(1, XRight - 2) /
+          Max(1, FPlacementModel.Outputs.Count));
+        PadRec.Y := DieHBlocks - 1;
+        PadRec.IsInput := False;
+        SetLength(FPads, Length(FPads) + 1);
+        FPads[High(FPads)] := PadRec;
+        FPadMap.AddOrSetValue(PadRec.NetName,
+          TPoint.Create(PadRec.X, PadRec.Y));
+      end;
+    end;
+
+    // Place logic gates (netlist order) into their layer's logic rows, one
+    // component per cell with a one-cell gap. Clock placement and bias
+    // connections are ignored for now.
+    SetLength(FPlacedComponents, 0);
+    FGatePlacement.Clear;
+    SetLength(CurChunk, NumLayers);
+    SetLength(CurX, NumLayers);
+    for L := 0 to NumLayers - 1 do
+    begin
+      CurChunk[L] := 0;
+      CurX[L] := 1; // fill the entire row (from the bias trunk rightwards)
+    end;
+    if FPlacementModel <> nil then
+      for Idx := 0 to FPlacementModel.Gates.Count - 1 do
+      begin
+        Gate := FPlacementModel.Gates[Idx];
+        L := Levels.IndexOf(Gate.ClockLevel);
+        if L < 0 then
+          Continue; // unleveled / not a floorplan layer
+        if Gate.Cell = nil then
+          Continue;
+        // Component footprint in grid cells (widths/heights are multiples of
+        // the core block, as guaranteed by the configuration page).
+        P.W := Round(Gate.Cell.Width / Core);
+        if P.W < 1 then
+          P.W := 1;
+        P.H := Round(Gate.Cell.Height / Core);
+        if P.H < 1 then
+          P.H := 1;
+        // Advance to the next chunk of this level if the current one cannot
+        // fit the component (component + one-cell gap).
+        while (CurChunk[L] < LevelBandCount[L]) and
+              (CurX[L] + P.W > XRight) do
+        begin
+          Inc(CurChunk[L]);
+          if CurChunk[L] < LevelBandCount[L] then
+            CurX[L] := 1
+          else
+            CurX[L] := High(Integer);
+        end;
+        if CurChunk[L] >= LevelBandCount[L] then
+          Continue; // no more room for this layer
+        BandIndex := LevelFirstBand[L] + CurChunk[L];
+        RowY := BandStarts[BandIndex] + 1 + ((RowHBlocks - P.H) div 2);
+        P.Gate := Gate;
+        P.InstanceName := Format('%s_%d', [Gate.CellName, Idx + 1]);
+        P.CellName := Gate.CellName;
+        P.ClockLevel := Gate.ClockLevel;
+        P.X := CurX[L];
+        P.Y := RowY;
+        SetLength(FPlacedComponents, Length(FPlacedComponents) + 1);
+        FPlacedComponents[High(FPlacedComponents)] := P;
+        FGatePlacement.Add(Gate, TPoint.Create(P.X, P.Y));
+        CurX[L] := CurX[L] + P.W + 1; // component + one-cell gap
+      end;
+
+    FFloorplanValid := True;
+  finally
+    Levels.Free;
+  end;
+
+  BuildClockSubtreePlacements;
+  BuildSpinePlacement;
+  UpdateManhattanDiagnostic;
+  RepaintFloorplanPage;
+end;
+
+// Walks the REAL clock distribution tree of each layer (from its tap net in the
+// buffered clock model) and places every actual cell: interior splitter/buffer
+// nodes sit in the layer's clock row, horizontally balanced between their
+// children; clocked leaves stay at their placed positions. This is the real
+// netlist structure, not a virtual reconstruction.
+procedure TForm1.BuildClockSubtreePlacements;
+var
+  L, i: Integer;
+  Visited: TDictionary<TGateInstance, Boolean>;
+  ClockPlacement: TDictionary<TGateInstance, TPoint>;
+  MapPt: TPoint;
+  TreeModel: TBlifModel;
+  HasClkCell: Boolean;
+  Interior: TArray<Integer>;
+  Tmp, j, Idx, W, MinX, NextLeft, BandCount, BandHeight, s, e: Integer;
+  RootNode: Integer;
+
+  function WalkNet(const ANetName: string; ClkY: Integer): Integer;
+  var
+    Net: TNet;
+    NC: TNetConnection;
+    OutConn: TPinConnection;
+    Node, SubIdx: Integer;
+    SumX: Double;
+    Cnt: Integer;
+    Pt: TPoint;
+  begin
+    Result := -1;
+    if (TreeModel = nil) or
+       (not TreeModel.Nets.TryGetValue(ANetName, Net)) then
+      Exit;
+    for NC in Net.Connections do
+    begin
+      if NC.IsDriver then
+        Continue;
+      if Visited.ContainsKey(NC.Gate) then
+        Continue;
+      Visited.Add(NC.Gate, True);
+
+      SetLength(FClockSubtree[L], Length(FClockSubtree[L]) + 1);
+      Node := High(FClockSubtree[L]);
+      FClockSubtree[L][Node].Gate := NC.Gate;
+
+      // Real cell footprint.
+      FClockSubtree[L][Node].W := 1;
+      FClockSubtree[L][Node].H := 1;
+      if NC.Gate.Cell <> nil then
+      begin
+        FClockSubtree[L][Node].W := Round(NC.Gate.Cell.Width / FPlanCore);
+        FClockSubtree[L][Node].H := Round(NC.Gate.Cell.Height / FPlanCore);
+        if FClockSubtree[L][Node].W < 1 then
+          FClockSubtree[L][Node].W := 1;
+        if FClockSubtree[L][Node].H < 1 then
+          FClockSubtree[L][Node].H := 1;
+      end;
+
+      if CellHasClock(NC.Gate.Cell) then
+      begin
+        // Leaf: keep its placed position.
+        FClockSubtree[L][Node].IsLeaf := True;
+        if ClockPlacement.TryGetValue(NC.Gate, Pt) then
+        begin
+          FClockSubtree[L][Node].X := Pt.X;
+          FClockSubtree[L][Node].Y := Pt.Y;
+        end
+        else
+        begin
+          FClockSubtree[L][Node].X := FPlanXRight div 2;
+          FClockSubtree[L][Node].Y := ClkY;
+        end;
+      end
+      else
+      begin
+        // Interior splitter/buffer: balanced between its children.
+        FClockSubtree[L][Node].IsLeaf := False;
+        SumX := 0;
+        Cnt := 0;
+        for OutConn in NC.Gate.Connections do
+          if OutConn.Port.Direction = pdOutput then
+          begin
+            SubIdx := WalkNet(OutConn.NetName, ClkY);
+            if SubIdx >= 0 then
+            begin
+              SetLength(FClockSubtree[L][Node].Children,
+                Length(FClockSubtree[L][Node].Children) + 1);
+              FClockSubtree[L][Node].Children[
+                High(FClockSubtree[L][Node].Children)] := SubIdx;
+              SumX := SumX + (FClockSubtree[L][SubIdx].X +
+                FClockSubtree[L][SubIdx].W / 2);
+              Inc(Cnt);
+            end;
+          end;
+        if Cnt > 0 then
+        begin
+          FClockSubtree[L][Node].X :=
+            Round(SumX / Cnt - FClockSubtree[L][Node].W / 2);
+          if FClockSubtree[L][Node].X < 1 then
+            FClockSubtree[L][Node].X := 1;
+          if FClockSubtree[L][Node].X + FClockSubtree[L][Node].W > FPlanXRight then
+            FClockSubtree[L][Node].X := FPlanXRight - FClockSubtree[L][Node].W;
+          FClockSubtree[L][Node].Y := ClkY - FClockSubtree[L][Node].H div 2;
+          if FClockSubtree[L][Node].Y < 0 then
+            FClockSubtree[L][Node].Y := 0;
+        end
+        else
+        begin
+          FClockSubtree[L][Node].X := FPlanXRight div 2;
+          FClockSubtree[L][Node].Y := ClkY - FClockSubtree[L][Node].H div 2;
+        end;
+      end;
+
+      if Result < 0 then
+        Result := Node;
+    end;
+  end;
+
+  // Bottom-up band assignment: each interior node joins the band holding the
+  // majority of its descendant clocked leaves, and sits in that band's clock
+  // row (spreading a level's network across its wrapped bands). Returns the
+  // per-band descendant-leaf counts.
+  function AssignBands(NodeIdx: Integer): TArray<Integer>;
+  var
+    k, Band, Child, BestBand: Integer;
+    Counts, ChildCounts: TArray<Integer>;
+  begin
+    SetLength(Counts, BandCount);
+    if FClockSubtree[L][NodeIdx].IsLeaf then
+    begin
+      Band := (FClockSubtree[L][NodeIdx].Y - 1) div BandHeight -
+        FPlanLevelFirstBand[L];
+      if Band < 0 then
+        Band := 0;
+      if Band >= BandCount then
+        Band := BandCount - 1;
+      FClockSubtree[L][NodeIdx].Band := Band;
+      Counts[Band] := 1;
+      Result := Counts;
+      Exit;
+    end;
+    for k := 0 to High(FClockSubtree[L][NodeIdx].Children) do
+    begin
+      Child := FClockSubtree[L][NodeIdx].Children[k];
+      ChildCounts := AssignBands(Child);
+      for Band := 0 to BandCount - 1 do
+        Counts[Band] := Counts[Band] + ChildCounts[Band];
+    end;
+    BestBand := 0;
+    for Band := 1 to BandCount - 1 do
+      if Counts[Band] > Counts[BestBand] then
+        BestBand := Band;
+    FClockSubtree[L][NodeIdx].Band := BestBand;
+    FClockSubtree[L][NodeIdx].Y := FPlanBandStarts[
+      FPlanLevelFirstBand[L] + BestBand] + 2 + FPlanRowHBlocks +
+      FPlanRowHBlocks div 2 - FClockSubtree[L][NodeIdx].H div 2;
+    if FClockSubtree[L][NodeIdx].Y < 0 then
+      FClockSubtree[L][NodeIdx].Y := 0;
+    Result := Counts;
+  end;
+
+begin
+  // On a freshly loaded project the clock network may not exist yet (it is
+  // normally created when visiting the clock tab); build it on demand so the
+  // subtrees appear without a manual round-trip.
+  if FClockModel = nil then
+    BuildClockModel;
+  SetLength(FClockSubtree, FPlanNumLayers);
+  // Prefer the delay-replaced (buffered) model; fall back to the original
+  // clock model so the row trees still show if the buffered copy was dropped
+  // by a stale pipeline rebuild.
+  TreeModel := FClockBufferedModel;
+  if TreeModel = nil then
+    TreeModel := FClockModel;
+  Visited := TDictionary<TGateInstance, Boolean>.Create;
+  ClockPlacement := TDictionary<TGateInstance, TPoint>.Create;
+  try
+    if TreeModel = nil then
+      AddFloorplanError('Clock tree: no clock model available (rebuild the clock network).')
+    else if FClockBufferedModel = nil then
+      AddFloorplanError('Clock tree: using original model (buffered copy absent).');
+    if FPlacementModel = nil then
+      AddFloorplanError('Clock tree: placement model is nil.');
+    // The clock model is a deep clone, so its gate objects differ from the
+    // placement model's. The clone preserves gate order, so gate i of the
+    // clock model corresponds to gate i of the placement model (for i within
+    // the original netlist). Map those to their placed positions.
+    if (FPlacementModel <> nil) and (TreeModel <> nil) then
+      for i := 0 to FPlacementModel.Gates.Count - 1 do
+        if (i < TreeModel.Gates.Count) and
+           FGatePlacement.TryGetValue(FPlacementModel.Gates[i], MapPt) then
+          ClockPlacement.AddOrSetValue(TreeModel.Gates[i], MapPt);
+
+    for L := 0 to FPlanNumLayers - 1 do
+    begin
+      SetLength(FClockSubtree[L], 0);
+      Visited.Clear;
+      // Level 0 (and any level with no clocked cells) legitimately has no
+      // clock tree; only flag a missing tap when clocked cells exist there.
+      HasClkCell := False;
+      for i := 0 to High(FPlacedComponents) do
+        if (FPlacedComponents[i].ClockLevel = FPlanLevels[L]) and
+           (FPlacedComponents[i].Gate <> nil) and
+           CellHasClock(FPlacedComponents[i].Gate.Cell) then
+        begin
+          HasClkCell := True;
+          Break;
+        end;
+      if HasClkCell and (TreeModel <> nil) and
+         (not TreeModel.Nets.ContainsKey(Format('clk_row_%d', [FPlanLevels[L]]))) then
+        AddFloorplanError(Format('Clock tree: tap net "clk_row_%d" missing.',
+          [FPlanLevels[L]]));
+      RootNode := WalkNet(Format('clk_row_%d', [FPlanLevels[L]]),
+        FPlanBandStarts[FPlanLevelFirstBand[L]] + 2 + FPlanRowHBlocks +
+        FPlanRowHBlocks div 2);
+      // Spread the level's network across its wrapped bands: assign each node
+      // to the band holding the majority of its descendant leaves, and place
+      // interior nodes in that band's clock row. WalkNet appends the root
+      // first, so the tree root is its returned value, not the last index.
+      if RootNode >= 0 then
+      begin
+        BandCount := FPlanLevelBandCount[L];
+        if BandCount < 1 then
+          BandCount := 1;
+        BandHeight := 2 + 2 * FPlanRowHBlocks;
+        if BandHeight < 1 then
+          BandHeight := 1;
+        AssignBands(RootNode);
+      end;
+    end;
+
+    // Enforce a one-cell gap between the interior nodes of each layer. They all
+    // share the layer's clock row, so without this a chain whose leaves cluster
+    // (e.g. a small test circuit) piles its splitters on top of each other.
+    // Nodes in different bands (different Y) cannot collide, so each same-Y
+    // group is resolved independently.
+    for L := 0 to High(FClockSubtree) do
+    begin
+      SetLength(Interior, 0);
+      for i := 0 to High(FClockSubtree[L]) do
+        if not FClockSubtree[L][i].IsLeaf then
+        begin
+          SetLength(Interior, Length(Interior) + 1);
+          Interior[High(Interior)] := i;
+        end;
+      if Length(Interior) < 2 then
+        Continue;
+      // Stable sort by (Y, X) so each band's row is a contiguous run.
+      for i := 1 to High(Interior) do
+      begin
+        Tmp := Interior[i];
+        j := i - 1;
+        while (j >= 0) and
+              ((FClockSubtree[L][Interior[j]].Y > FClockSubtree[L][Tmp].Y) or
+               ((FClockSubtree[L][Interior[j]].Y = FClockSubtree[L][Tmp].Y) and
+                (FClockSubtree[L][Interior[j]].X > FClockSubtree[L][Tmp].X))) do
+        begin
+          Interior[j + 1] := Interior[j];
+          Dec(j);
+        end;
+        Interior[j + 1] := Tmp;
+      end;
+      s := 0;
+      while s < Length(Interior) do
+      begin
+        e := s;
+        while (e < Length(Interior)) and
+              (FClockSubtree[L][Interior[e]].Y = FClockSubtree[L][Interior[s]].Y) do
+          Inc(e);
+        if e - s >= 2 then
+        begin
+          // Forward pass: keep a one-cell gap, clamped within the row.
+          MinX := 1;
+          for i := s to e - 1 do
+          begin
+            Idx := Interior[i];
+            W := FClockSubtree[L][Idx].W;
+            if FClockSubtree[L][Idx].X < MinX then
+              FClockSubtree[L][Idx].X := MinX;
+            if FClockSubtree[L][Idx].X + W > FPlanXRight then
+              FClockSubtree[L][Idx].X := FPlanXRight - W;
+            if FClockSubtree[L][Idx].X < 1 then
+              FClockSubtree[L][Idx].X := 1;
+            MinX := FClockSubtree[L][Idx].X + W + 1;
+          end;
+          // Backward pass: release any forward push where there is room.
+          NextLeft := FPlanXRight;
+          for i := e - 1 downto s do
+          begin
+            Idx := Interior[i];
+            W := FClockSubtree[L][Idx].W;
+            if FClockSubtree[L][Idx].X + W > FPlanXRight then
+              FClockSubtree[L][Idx].X := FPlanXRight - W;
+            if FClockSubtree[L][Idx].X + W + 1 > NextLeft then
+              FClockSubtree[L][Idx].X := NextLeft - W - 1;
+            if FClockSubtree[L][Idx].X < 1 then
+              FClockSubtree[L][Idx].X := 1;
+            NextLeft := FClockSubtree[L][Idx].X;
+          end;
+        end;
+        s := e;
+      end;
+    end;
+  finally
+    ClockPlacement.Free;
+    Visited.Free;
+  end;
+end;
+
+// Places the clock trunk (spine): junction splitters at the base (bottom) of
+// each layer's trunk segment, and each stage's buffer chain stacked upward in
+// the trunk. If a buffer would collide with the next junction it overflows to
+// the closest band's clock row. Trunk cells are recorded as rotated 90 deg CCW
+// (cell top faces the bias line), so the placed footprint swaps width/height.
+procedure TForm1.BuildSpinePlacement;
+const
+  Gap = 1;
+var
+  TreeModel: TBlifModel;
+  CurNet: string;
+  i, j, k, L, Lv, NextJ, Cursor, BufY, BestB, TrunkX, BandHeight: Integer;
+  Net: TNet;
+  NC: TNetConnection;
+  Conn: TPinConnection;
+  Gate: TGateInstance;
+  Comp: TSpineComponent;
+  SegBottom, ClkY, BestD, D: Double;
+begin
+  SetLength(FSpine, 0);
+  TreeModel := FClockBufferedModel;
+  if TreeModel = nil then
+    TreeModel := FClockModel;
+  if (TreeModel = nil) or (FClockNet = nil) then
+    Exit;
+
+  // ---- Collect the spine in order: junction, stage buffers, next junction ----
+  CurNet := FClockNet.SourceNet;
+  while True do
+  begin
+    Gate := nil;
+    if TreeModel.Nets.TryGetValue(CurNet, Net) then
+      for NC in Net.Connections do
+        if (not NC.IsDriver) and NC.Gate.ClockTrunk then
+        begin
+          Gate := NC.Gate;
+          Break;
+        end;
+    if Gate = nil then
+      Break; // end of the spine (a row tree net, no junction)
+
+    Comp.Gate := Gate;
+    Comp.IsJunction := True;
+    Comp.Rotated := True;
+    Comp.Band := -1;
+    Comp.W := 1;
+    Comp.H := 1;
+    if Gate.Cell <> nil then
+    begin
+      Comp.W := Round(Gate.Cell.Height / FPlanCore); // rotated: W = height
+      Comp.H := Round(Gate.Cell.Width / FPlanCore);
+      if Comp.W < 1 then Comp.W := 1;
+      if Comp.H < 1 then Comp.H := 1;
+    end;
+    SetLength(FSpine, Length(FSpine) + 1);
+    FSpine[High(FSpine)] := Comp;
+
+    // The delay output net (the junction's output that is not a row tree).
+    CurNet := '';
+    for Conn in Gate.Connections do
+      if (Conn.Port <> nil) and (Conn.Port.Direction = pdOutput) and
+         (not SameText(Copy(Conn.NetName, 1, 8), 'clk_row_')) then
+      begin
+        CurNet := Conn.NetName;
+        Break;
+      end;
+    if CurNet = '' then
+      Break;
+
+    // Walk the stage buffer chain.
+    while True do
+    begin
+      if SameText(Copy(CurNet, 1, 8), 'clk_row_') then
+        Break; // reached the final row's tree
+      Gate := nil;
+      if TreeModel.Nets.TryGetValue(CurNet, Net) then
+        for NC in Net.Connections do
+          if (not NC.IsDriver) and (not NC.Gate.ClockTrunk) and
+             (not CellHasClock(NC.Gate.Cell)) then
+          begin
+            Gate := NC.Gate;
+            Break;
+          end;
+      if Gate = nil then
+        Break; // no more buffers on this spine net
+      Comp.Gate := Gate;
+      Comp.IsJunction := False;
+      Comp.Rotated := True;
+      Comp.Band := -1;
+      Comp.W := 1;
+      Comp.H := 1;
+      if Gate.Cell <> nil then
+      begin
+        Comp.W := Round(Gate.Cell.Height / FPlanCore);
+        Comp.H := Round(Gate.Cell.Width / FPlanCore);
+        if Comp.W < 1 then Comp.W := 1;
+        if Comp.H < 1 then Comp.H := 1;
+      end;
+      SetLength(FSpine, Length(FSpine) + 1);
+      FSpine[High(FSpine)] := Comp;
+      CurNet := '';
+      for Conn in Gate.Connections do
+        if (Conn.Port <> nil) and (Conn.Port.Direction = pdOutput) then
+        begin
+          CurNet := Conn.NetName;
+          Break;
+        end;
+      if CurNet = '' then
+        Break;
+    end;
+  end;
+
+  // ---- Place the junctions at the base of their layers. ---------------------
+  TrunkX := FPlanXRight + 1;
+  BandHeight := 2 + 2 * FPlanRowHBlocks;
+  if BandHeight < 1 then
+    BandHeight := 1;
+  for i := 0 to High(FSpine) do
+    if FSpine[i].IsJunction then
+    begin
+      Lv := FSpine[i].Gate.ClockLevel;
+      L := -1;
+      for j := 0 to High(FPlanLevels) do
+        if FPlanLevels[j] = Lv then
+        begin
+          L := j;
+          Break;
+        end;
+      if L < 0 then
+        Continue;
+      SegBottom := FPlanBandStarts[FPlanLevelFirstBand[L] +
+        FPlanLevelBandCount[L] - 1] + BandHeight;
+      FSpine[i].Y := Round(SegBottom - FSpine[i].H);
+      FSpine[i].X := TrunkX + (FPlanRowHBlocks - FSpine[i].W) div 2;
+      if FSpine[i].X < TrunkX then
+        FSpine[i].X := TrunkX;
+    end;
+
+  // ---- Place the stage buffers, stacked upward; overflow on collision. ------
+  i := 0;
+  while i <= High(FSpine) do
+  begin
+    if not FSpine[i].IsJunction then
+    begin
+      Inc(i);
+      Continue;
+    end;
+    NextJ := -1;
+    for j := i + 1 to High(FSpine) do
+      if FSpine[j].IsJunction then
+      begin
+        NextJ := j;
+        Break;
+      end;
+    Cursor := FSpine[i].Y; // buffers go up from the junction's top
+    for j := i + 1 to High(FSpine) do
+    begin
+      if FSpine[j].IsJunction then
+        Break;
+      BufY := Cursor - FSpine[j].H - Gap;
+      if (NextJ >= 0) and
+         (BufY < FSpine[NextJ].Y + FSpine[NextJ].H) then
+      begin
+        // Overflow to the closest band's clock row (unrotated).
+        BestB := 0;
+        BestD := MaxSingle;
+        for k := 0 to High(FPlanBandStarts) do
+        begin
+          ClkY := FPlanBandStarts[k] + 2 + FPlanRowHBlocks +
+            FPlanRowHBlocks / 2;
+          D := Abs(ClkY - BufY);
+          if D < BestD then
+          begin
+            BestD := D;
+            BestB := k;
+          end;
+        end;
+        FSpine[j].Rotated := False;
+        FSpine[j].Band := BestB;
+        FSpine[j].W := 1;
+        FSpine[j].H := 1;
+        if (FSpine[j].Gate <> nil) and (FSpine[j].Gate.Cell <> nil) then
+        begin
+          FSpine[j].W := Round(FSpine[j].Gate.Cell.Width / FPlanCore);
+          FSpine[j].H := Round(FSpine[j].Gate.Cell.Height / FPlanCore);
+          if FSpine[j].W < 1 then FSpine[j].W := 1;
+          if FSpine[j].H < 1 then FSpine[j].H := 1;
+        end;
+        FSpine[j].X := FPlanXRight - FSpine[j].W;
+        FSpine[j].Y := FPlanBandStarts[BestB] + 2 + FPlanRowHBlocks +
+          (FPlanRowHBlocks - FSpine[j].H) div 2;
+      end
+      else
+      begin
+        FSpine[j].Y := BufY;
+        FSpine[j].X := TrunkX + (FPlanRowHBlocks - FSpine[j].W) div 2;
+        if FSpine[j].X < TrunkX then
+          FSpine[j].X := TrunkX;
+        Cursor := BufY;
+      end;
+    end;
+    if NextJ < 0 then
+      Break;
+    i := NextJ;
+  end;
+end;
+
+procedure TForm1.RepaintFloorplanPage;
+var
+  i: Integer;
+begin
+  if TabControl1.TabIndex <> TabFloorplan then
+    Exit;
+  for i := 0 to Children.Count - 1 do
+    if Children[i] is TControl then
+      TControl(Children[i]).Repaint;
+end;
+
+procedure TForm1.PaintFloorplan(Sender: TObject; Canvas: TCanvas);
+const
+  GridHalf = 0.75;    // half-thickness (px) of the block grid lines
+  BorderHalf = 1.5;   // half-thickness (px) of the die boundary
+  MinBlockPx = 3.0;   // below this on-screen block size, skip the grid
+  DrawDebugNets = True; // temporary: draw data connections between placements
+var
+  R: TRectF;
+  ClipState: TCanvasSaveState;
+  DieW, DieH, Core: Double;
+  Cols, Rows, i: Integer;
+  X, Y: Single;
+  BlockPx, WorldX0, WorldX1, WorldY0, WorldY1: Single;
+  I0, I1, J0, J1: Integer;
+  BX0, BX1, BY0, BY1, RunStart, RowIdx: Integer;
+  PadPx, PadPy: Integer;
+  ClkL, ClkIdx, ClkChild, Ci: Integer;
+  ClkNode: TPlacedClockNode;
+  SpineComp: TSpineComponent;
+  SpineL: Integer;
+  Kind: TFloorplanCell;
+  P: TPlacedComponent;
+  Net: TNet;
+  NC2: TNetConnection;
+  Pair: TPair<string, TNet>;
+  Driver: TGateInstance;
+  SX1, SY1, SX2, SY2: Single;
+
+  function WX(AValue: Single): Single;
+  begin
+    Result := FPlanPanX + AValue * FPlanZoom;
+  end;
+
+  function WY(AValue: Single): Single;
+  begin
+    Result := FPlanPanY + AValue * FPlanZoom;
+  end;
+
+  // Screen centre of a placed gate (world centre transformed to screen).
+  function PlacedCenter(G: TGateInstance; out SX, SY: Single): Boolean;
+  var
+    Pt: TPoint;
+    Wb, Hb: Integer;
+  begin
+    Result := (G <> nil) and FGatePlacement.TryGetValue(G, Pt);
+    if not Result then
+      Exit;
+    Wb := 1;
+    Hb := 1;
+    if G.Cell <> nil then
+    begin
+      Wb := Round(G.Cell.Width / Core);
+      Hb := Round(G.Cell.Height / Core);
+      if Wb < 1 then
+        Wb := 1;
+      if Hb < 1 then
+        Hb := 1;
+    end;
+    SX := WX((Pt.X + Wb / 2) * Core);
+    SY := WY((Pt.Y + Hb / 2) * Core);
+  end;
+
+begin
+  R := TRectF.Create(0, 0, PaintBox3.Width, PaintBox3.Height);
+  Canvas.Fill.Color := TAlphaColorRec.White;
+  Canvas.FillRect(R, 0, 0, [], 1.0);
+
+  // Mask everything outside the paint box (D2D needs the clip while a save
+  // state is active, otherwise drawing bleeds onto the buttons).
+  ClipState := Canvas.SaveState;
+  try
+    Canvas.IntersectClipRect(R);
+
+    if not (TryDimParse(EditCoreSize.Text, Core) and
+            TryDimParse(EditDieW.Text, DieW) and
+            TryDimParse(EditDieH.Text, DieH)) or
+       (Core <= 0) or (DieW <= 0) or (DieH <= 0) then
+    begin
+      Canvas.Fill.Color := TAlphaColorRec.Dimgray;
+      Canvas.FillText(R, 'No valid floorplan - check the Placement Configuration tab.',
+        False, 1.0, [], TTextAlign.Center, TTextAlign.Center);
+      Exit;
+    end;
+
+    Cols := Round(DieW / Core);
+    Rows := Round(DieH / Core);
+
+    // Fit the whole die into the canvas the first time we paint with a real
+    // size; this is also the most zoomed-out the user can go.
+    if FPlanNeedsFit and (PaintBox3.Width > 20) and (PaintBox3.Height > 20) then
+    begin
+      FPlanZoom := (Min(PaintBox3.Width, PaintBox3.Height) - 20) / Max(DieW, DieH);
+      FPlanPanX := (PaintBox3.Width - DieW * FPlanZoom) / 2;
+      FPlanPanY := (PaintBox3.Height - DieH * FPlanZoom) / 2;
+      FPlanNeedsFit := False;
+    end;
+
+    // Die body.
+    Canvas.Fill.Color := $FFF2F2F2;
+    Canvas.FillRect(TRectF.Create(WX(0), WY(0), WX(DieW), WY(DieH)), 0, 0, [], 1.0);
+
+    // Floorplan allocation (blue logic, green clock, red bias), run-merged
+    // per row so large uniform regions draw as few rectangles. Hidden when the
+    // 'Layout colors' toggle is off.
+    if FFloorplanValid and (FPlanZoom > 0) and CheckBoxShowColors.IsChecked then
+    begin
+      BX0 := Trunc((0 - FPlanPanX) / FPlanZoom / Core);
+      if BX0 < 0 then
+        BX0 := 0;
+      BX1 := Trunc((PaintBox3.Width - FPlanPanX) / FPlanZoom / Core) + 1;
+      if BX1 > FFloorplanW then
+        BX1 := FFloorplanW;
+      BY0 := Trunc((0 - FPlanPanY) / FPlanZoom / Core);
+      if BY0 < 0 then
+        BY0 := 0;
+      BY1 := Trunc((PaintBox3.Height - FPlanPanY) / FPlanZoom / Core) + 1;
+      if BY1 > FFloorplanH then
+        BY1 := FFloorplanH;
+
+      for RowIdx := BY0 to BY1 - 1 do
+      begin
+        i := BX0;
+        while i < BX1 do
+        begin
+          Kind := GetPlanCell(i, RowIdx);
+          if Kind = fcEmpty then
+          begin
+            Inc(i);
+            Continue;
+          end;
+          RunStart := i;
+          while (i < BX1) and (GetPlanCell(i, RowIdx) = Kind) do
+            Inc(i);
+          case Kind of
+            fcLogic: Canvas.Fill.Color := $FF1565C0;
+            fcClock: Canvas.Fill.Color := $FF00C853;
+            fcBias:  Canvas.Fill.Color := $FFD50000;
+            fcLogicFill: Canvas.Fill.Color := $FF64B5F6;
+            fcClockFill: Canvas.Fill.Color := $FF81C784;
+          end;
+          Canvas.FillRect(TRectF.Create(WX(RunStart * Core), WY(RowIdx * Core),
+            WX(i * Core), WY((RowIdx + 1) * Core)), 0, 0, [], 1.0);
+        end;
+      end;
+
+      // Placed logic components (teal), culled to the visible range.
+      for i := 0 to High(FPlacedComponents) do
+      begin
+        P := FPlacedComponents[i];
+        if (P.X + P.W <= BX0) or (P.X >= BX1) or
+           (P.Y + P.H <= BY0) or (P.Y >= BY1) then
+          Continue;
+        Canvas.Fill.Color := $FF00BCD4;
+        Canvas.FillRect(TRectF.Create(WX(P.X * Core), WY(P.Y * Core),
+          WX((P.X + P.W) * Core), WY((P.Y + P.H) * Core)), 0, 0, [], 1.0);
+      end;
+
+      // Cell names (when enabled): overlay each component's instance name.
+      if CheckBoxShowNames.IsChecked then
+      begin
+        Canvas.Fill.Color := TAlphaColorRec.Black;
+        Canvas.Font.Size := 8;
+        for i := 0 to High(FPlacedComponents) do
+        begin
+          P := FPlacedComponents[i];
+          if (P.X + P.W <= BX0) or (P.X >= BX1) or
+             (P.Y + P.H <= BY0) or (P.Y >= BY1) then
+            Continue;
+          Canvas.FillText(TRectF.Create(
+            WX(P.X * Core), WY(P.Y * Core),
+            WX((P.X + P.W) * Core), WY((P.Y + P.H) * Core)),
+            P.InstanceName, False, 1.0, [], TTextAlign.Center, TTextAlign.Center);
+        end;
+      end;
+
+      // Clock cells (dark green), drawn with the logic cells so the grid
+      // overlays them. Their names show when the 'Cell names' toggle is on.
+      Canvas.Fill.Color := $FF1B5E20;
+      for ClkL := 0 to High(FClockSubtree) do
+        for ClkIdx := 0 to High(FClockSubtree[ClkL]) do
+        begin
+          ClkNode := FClockSubtree[ClkL][ClkIdx];
+          if ClkNode.IsLeaf then
+            Continue;
+          Canvas.FillRect(TRectF.Create(
+            WX(ClkNode.X * Core), WY(ClkNode.Y * Core),
+            WX((ClkNode.X + ClkNode.W) * Core),
+            WY((ClkNode.Y + ClkNode.H) * Core)), 0, 0, [], 1.0);
+        end;
+      for i := 0 to High(FSpine) do
+      begin
+        SpineComp := FSpine[i];
+        Canvas.FillRect(TRectF.Create(
+          WX(SpineComp.X * Core), WY(SpineComp.Y * Core),
+          WX((SpineComp.X + SpineComp.W) * Core),
+          WY((SpineComp.Y + SpineComp.H) * Core)), 0, 0, [], 1.0);
+      end;
+      if CheckBoxShowNames.IsChecked then
+      begin
+        Canvas.Fill.Color := TAlphaColorRec.Black;
+        Canvas.Font.Size := 8;
+        for ClkL := 0 to High(FClockSubtree) do
+          for ClkIdx := 0 to High(FClockSubtree[ClkL]) do
+          begin
+            ClkNode := FClockSubtree[ClkL][ClkIdx];
+            if ClkNode.IsLeaf then
+              Continue;
+            if ClkNode.Gate <> nil then
+              Canvas.FillText(TRectF.Create(
+                WX(ClkNode.X * Core), WY(ClkNode.Y * Core),
+                WX((ClkNode.X + ClkNode.W) * Core),
+                WY((ClkNode.Y + ClkNode.H) * Core)),
+                ClkNode.Gate.CellName, False, 1.0, [],
+                TTextAlign.Center, TTextAlign.Center);
+          end;
+        for i := 0 to High(FSpine) do
+          if FSpine[i].Gate <> nil then
+            Canvas.FillText(TRectF.Create(
+              WX(FSpine[i].X * Core), WY(FSpine[i].Y * Core),
+              WX((FSpine[i].X + FSpine[i].W) * Core),
+              WY((FSpine[i].Y + FSpine[i].H) * Core)),
+              FSpine[i].Gate.CellName, False, 1.0, [],
+              TTextAlign.Center, TTextAlign.Center);
+      end;
+
+      // Immobile I/O anchor pads (dark) with their port names.
+      for i := 0 to High(FPads) do
+      begin
+        PadPx := FPads[i].X;
+        PadPy := FPads[i].Y;
+        if (PadPx + 1 <= BX0) or (PadPx >= BX1) or
+           (PadPy + 1 <= BY0) or (PadPy >= BY1) then
+          Continue;
+        Canvas.Fill.Color := $FF455A64;
+        Canvas.FillRect(TRectF.Create(WX(PadPx * Core), WY(PadPy * Core),
+          WX((PadPx + 1) * Core), WY((PadPy + 1) * Core)), 0, 0, [], 1.0);
+        Canvas.Fill.Color := TAlphaColorRec.Black;
+        Canvas.FillText(TRectF.Create(
+          WX(PadPx * Core) + 2, WY(PadPy * Core) - 14,
+          WX(PadPx * Core) + 130, WY(PadPy * Core) + 14),
+          FPads[i].NetName, False, 1.0, [], TTextAlign.Leading, TTextAlign.Center);
+      end;
+    end;
+
+    // Grid of core-block-sized squares, drawn as thin filled rectangles
+    // (stroke rendering is unreliable on this canvas backend). Only drawn
+    // when blocks are large enough on screen, and culled to the visible
+    // area so huge dies still show cell borders when zoomed in.
+    BlockPx := Core * FPlanZoom;
+    if (BlockPx >= MinBlockPx) and (FPlanZoom > 0) then
+    begin
+      WorldX0 := (0 - FPlanPanX) / FPlanZoom;
+      WorldX1 := (PaintBox3.Width - FPlanPanX) / FPlanZoom;
+      WorldY0 := (0 - FPlanPanY) / FPlanZoom;
+      WorldY1 := (PaintBox3.Height - FPlanPanY) / FPlanZoom;
+
+      I0 := Trunc(WorldX0 / Core);
+      if I0 < 0 then I0 := 0;
+      I1 := Trunc(WorldX1 / Core) + 1;
+      if I1 > Cols then I1 := Cols;
+      J0 := Trunc(WorldY0 / Core);
+      if J0 < 0 then J0 := 0;
+      J1 := Trunc(WorldY1 / Core) + 1;
+      if J1 > Rows then J1 := Rows;
+
+      Canvas.Fill.Color := $FF909090;
+      for i := I0 to I1 do
+      begin
+        X := WX(i * Core);
+        Canvas.FillRect(TRectF.Create(X - GridHalf, WY(0), X + GridHalf, WY(DieH)),
+          0, 0, [], 1.0);
+      end;
+      for i := J0 to J1 do
+      begin
+        Y := WY(i * Core);
+        Canvas.FillRect(TRectF.Create(WX(0), Y - GridHalf, WX(DieW), Y + GridHalf),
+          0, 0, [], 1.0);
+      end;
+    end;
+
+    // Die boundary, drawn as four filled bars (thicker than the grid).
+    Canvas.Fill.Color := $FF404040;
+    Canvas.FillRect(TRectF.Create(WX(0) - BorderHalf, WY(0) - BorderHalf,
+      WX(DieW) + BorderHalf, WY(0) + BorderHalf), 0, 0, [], 1.0); // top
+    Canvas.FillRect(TRectF.Create(WX(0) - BorderHalf, WY(DieH) - BorderHalf,
+      WX(DieW) + BorderHalf, WY(DieH) + BorderHalf), 0, 0, [], 1.0); // bottom
+    Canvas.FillRect(TRectF.Create(WX(0) - BorderHalf, WY(0) - BorderHalf,
+      WX(0) + BorderHalf, WY(DieH) + BorderHalf), 0, 0, [], 1.0); // left
+    Canvas.FillRect(TRectF.Create(WX(DieW) - BorderHalf, WY(0) - BorderHalf,
+      WX(DieW) + BorderHalf, WY(DieH) + BorderHalf), 0, 0, [], 1.0); // right
+
+    // DEBUG: temporary net connections between placed components. Clock pins
+    // are skipped (the clock network is not placed yet). Remove with the
+    // DrawDebugNets flag; hidden when the 'Component wires' toggle is off.
+    if DrawDebugNets and CheckBoxShowWires.IsChecked and (FPlacementModel <> nil) then
+    begin
+      Canvas.Stroke.Kind := TBrushKind.Solid;
+      Canvas.Stroke.Color := $FF000000;
+      Canvas.Stroke.Thickness := 2;
+      for Pair in FPlacementModel.Nets do
+      begin
+        Net := Pair.Value;
+        Driver := nil;
+        for NC2 in Net.Connections do
+          if NC2.IsDriver and (not IsClockPinName(NC2.PinName)) and
+             FGatePlacement.ContainsKey(NC2.Gate) then
+          begin
+            Driver := NC2.Gate;
+            Break;
+          end;
+        if Driver = nil then
+          Continue;
+        if not PlacedCenter(Driver, SX1, SY1) then
+          Continue;
+        for NC2 in Net.Connections do
+        begin
+          if NC2.IsDriver then
+            Continue;
+          if IsClockPinName(NC2.PinName) then
+            Continue;
+          if not FGatePlacement.ContainsKey(NC2.Gate) then
+            Continue;
+          // Show the real connectivity (incl. short-path arcs) so no cell
+          // looks dangling; wave-pipelined adjacency needs the DFF model.
+          if PlacedCenter(NC2.Gate, SX2, SY2) then
+            Canvas.DrawLine(TPointF.Create(SX1, SY1), TPointF.Create(SX2, SY2), 1.0);
+        end;
+      end;
+    end;
+
+    // Clock connections (white) drawn on top; hidden by the 'Component wires'
+    // toggle. The clock cells themselves are drawn earlier, under the grid,
+    // together with the logic cells.
+    if CheckBoxShowWires.IsChecked then
+    begin
+      Canvas.Stroke.Kind := TBrushKind.Solid;
+      Canvas.Stroke.Color := TAlphaColorRec.White;
+      Canvas.Stroke.Thickness := 1.5;
+      // Subtree wires.
+      for ClkL := 0 to High(FClockSubtree) do
+        for ClkIdx := 0 to High(FClockSubtree[ClkL]) do
+          for ClkChild := 0 to High(FClockSubtree[ClkL][ClkIdx].Children) do
+          begin
+            Ci := FClockSubtree[ClkL][ClkIdx].Children[ClkChild];
+            Canvas.DrawLine(
+              TPointF.Create(WX((FClockSubtree[ClkL][ClkIdx].X +
+                FClockSubtree[ClkL][ClkIdx].W div 2) * Core),
+                WY((FClockSubtree[ClkL][ClkIdx].Y +
+                  FClockSubtree[ClkL][ClkIdx].H div 2) * Core)),
+              TPointF.Create(WX((FClockSubtree[ClkL][Ci].X +
+                FClockSubtree[ClkL][Ci].W div 2) * Core),
+                WY((FClockSubtree[ClkL][Ci].Y +
+                  FClockSubtree[ClkL][Ci].H div 2) * Core)), 1.0);
+          end;
+      // Trunk spine chain: junction -> buffers -> junction.
+      for i := 0 to High(FSpine) - 1 do
+        Canvas.DrawLine(
+          TPointF.Create(WX((FSpine[i].X + FSpine[i].W div 2) * Core),
+            WY((FSpine[i].Y + FSpine[i].H div 2) * Core)),
+          TPointF.Create(WX((FSpine[i + 1].X + FSpine[i + 1].W div 2) * Core),
+            WY((FSpine[i + 1].Y + FSpine[i + 1].H div 2) * Core)), 1.0);
+      // Each junction's tap to its layer's subtree root.
+      for i := 0 to High(FSpine) do
+        if FSpine[i].IsJunction then
+        begin
+          SpineL := -1;
+          for ClkIdx := 0 to High(FPlanLevels) do
+            if FPlanLevels[ClkIdx] = FSpine[i].Gate.ClockLevel then
+            begin
+              SpineL := ClkIdx;
+              Break;
+            end;
+          if (SpineL >= 0) and (Length(FClockSubtree[SpineL]) > 0) then
+            Canvas.DrawLine(
+              TPointF.Create(WX((FSpine[i].X + FSpine[i].W div 2) * Core),
+                WY((FSpine[i].Y + FSpine[i].H div 2) * Core)),
+              TPointF.Create(WX((FClockSubtree[SpineL][0].X +
+                FClockSubtree[SpineL][0].W div 2) * Core),
+                WY((FClockSubtree[SpineL][0].Y +
+                  FClockSubtree[SpineL][0].H div 2) * Core)), 1.0);
+        end;
+      // Final tap: the lowest clock layer (level 1) has no junction - it is fed
+      // directly by the end of the spine.
+      if High(FSpine) >= 0 then
+      begin
+        SpineL := -1;
+        for ClkIdx := 0 to High(FPlanLevels) do
+          if FPlanLevels[ClkIdx] >= 1 then
+          begin
+            SpineL := ClkIdx;
+            Break; // lowest clock layer
+          end;
+        if (SpineL >= 0) and (Length(FClockSubtree[SpineL]) > 0) then
+          Canvas.DrawLine(
+            TPointF.Create(WX((FSpine[High(FSpine)].X +
+              FSpine[High(FSpine)].W div 2) * Core),
+              WY((FSpine[High(FSpine)].Y + FSpine[High(FSpine)].H div 2) * Core)),
+            TPointF.Create(WX((FClockSubtree[SpineL][0].X +
+              FClockSubtree[SpineL][0].W div 2) * Core),
+              WY((FClockSubtree[SpineL][0].Y +
+                FClockSubtree[SpineL][0].H div 2) * Core)), 1.0);
+      end;
+    end;
+  finally
+    Canvas.RestoreState(ClipState);
+  end;
+end;
+
 procedure TForm1.FormMouseWheel(Sender: TObject; Shift: TShiftState;
   WheelDelta: Integer; var Handled: Boolean);
-const
-  MinZoom = 0.2;
-  MaxZoom = 5.0;
+var
+  Core, DieW, DieH: Double;
+  MinZ, MaxZ: Single;
 
   // Zoom around the cursor position; returns True if the zoom changed.
-  function ZoomAt(ABox: TControl; var APanX, APanY, AZoom: Single): Boolean;
+  function ZoomAt(ABox: TControl; var APanX, APanY, AZoom: Single;
+    AMinZoom, AMaxZoom: Single): Boolean;
   var
     LocalPos, WorldPos: TPointF;
     R: TRectF;
@@ -1991,10 +4085,10 @@ const
     if not R.Contains(LocalPos) then
       Exit;
     NewZoom := AZoom * Power(1.1, WheelDelta / 120.0);
-    if NewZoom < MinZoom then
-      NewZoom := MinZoom;
-    if NewZoom > MaxZoom then
-      NewZoom := MaxZoom;
+    if NewZoom < AMinZoom then
+      NewZoom := AMinZoom;
+    if NewZoom > AMaxZoom then
+      NewZoom := AMaxZoom;
     if NewZoom = AZoom then
       Exit;
     WorldPos.X := (LocalPos.X - APanX) / AZoom;
@@ -2009,7 +4103,7 @@ begin
   Handled := False;
   if TabControl1.TabIndex = TabPipeline then
   begin
-    if ZoomAt(PaintBox1, FPanX, FPanY, FZoom) then
+    if ZoomAt(PaintBox1, FPanX, FPanY, FZoom, 0.2, 5.0) then
     begin
       Handled := True;
       RepaintPipelinePage;
@@ -2017,10 +4111,33 @@ begin
   end
   else if TabControl1.TabIndex = TabClock then
   begin
-    if ZoomAt(PaintBox2, FClockPanX, FClockPanY, FClockZoom) then
+    if ZoomAt(PaintBox2, FClockPanX, FClockPanY, FClockZoom, 0.2, 5.0) then
     begin
       Handled := True;
       RepaintClockPage;
+    end;
+  end
+  else if TabControl1.TabIndex = TabFloorplan then
+  begin
+    // Zoom-out limit fits the whole die (keyed on the larger die dimension);
+    // zoom-in limit makes a single core block about as large as the canvas.
+    MinZ := 0.01;
+    MaxZ := 5.0;
+    if TryDimParse(EditCoreSize.Text, Core) and
+       TryDimParse(EditDieW.Text, DieW) and TryDimParse(EditDieH.Text, DieH) and
+       (Core > 0) and (DieW > 0) and (DieH > 0) and (PaintBox3.Height > 20) then
+    begin
+      MinZ := (Min(PaintBox3.Width, PaintBox3.Height) - 20) / Max(DieW, DieH);
+      MaxZ := (Max(PaintBox3.Width, PaintBox3.Height) - 20) / Core;
+      if MinZ < 0.01 then
+        MinZ := 0.01;
+      if MaxZ < MinZ then
+        MaxZ := MinZ;
+    end;
+    if ZoomAt(PaintBox3, FPlanPanX, FPlanPanY, FPlanZoom, MinZ, MaxZ) then
+    begin
+      Handled := True;
+      RepaintFloorplanPage;
     end;
   end;
 end;
@@ -2383,6 +4500,8 @@ procedure TForm1.FreeClockModel;
 begin
   FClockNet.Free;
   FClockNet := nil;
+  FClockBufferedModel.Free;
+  FClockBufferedModel := nil;
   FClockModel.Free;
   FClockModel := nil;
 end;
@@ -2445,6 +4564,14 @@ begin
   Errors := TStringList.Create;
   try
     FClockNet := BuildClockNetwork(FClockModel, FLib, Types, BufTypes, Errors);
+    // Keep the original clock network (with its synthetic delay blocks) intact
+    // for the clock view; build a separate copy with the delay blocks replaced
+    // by real buffer chains, to be used by the clock placement later.
+    if FClockNet <> nil then
+    begin
+      FClockBufferedModel := FClockModel.Clone;
+      ReplaceClockDelaysWithBuffers(FClockBufferedModel, FLib, BufTypes, Errors);
+    end;
     Memo1.Lines.AddStrings(Errors); // diagnostics incl. per-stage seeds
   finally
     Errors.Free;
@@ -2495,6 +4622,10 @@ var
     OutConn: TPinConnection;
     Node: TClockTreeNode;
   begin
+    // The spine's delay/buffer chain (clk_delay_*) belongs to no row tree.
+    if (Length(ANetName) >= 10) and
+       SameText(Copy(ANetName, 1, 10), 'clk_delay_') then
+      Exit;
     if not FClockModel.Nets.TryGetValue(ANetName, Net) then
       Exit;
     for NC in Net.Connections do
@@ -2541,7 +4672,7 @@ var
   RootYs: TArray<Single>;
   RowHeights: TArray<Single>;
   MaxDepths: TArray<Integer>;
-  Node, RootSplitter: TClockTreeNode;
+  Node, TrunkNode: TClockTreeNode;
   ClipState: TCanvasSaveState;
   LevelCols: TList<Integer>;
   ClkY: Single;
@@ -2606,36 +4737,9 @@ var
   // demonstrably render in this view). Handles vertical, horizontal and
   // diagonal hops.
   procedure DrawSeg(X1, Y1, X2, Y2: Single);
-  const
-    THICK = 1.6;
-  var
-    Steps, i: Integer;
-    t, X, Y: Single;
   begin
-    Canvas.Fill.Color := $FF555555;
-    if Abs(X2 - X1) < 0.5 then
-      Canvas.FillRect(TRectF.Create(
-        WX(X1) - WLen(THICK) / 2, WY(Min(Y1, Y2)),
-        WX(X1) + WLen(THICK) / 2, WY(Max(Y1, Y2))), 0, 0, [], 1.0)
-    else if Abs(Y2 - Y1) < 0.5 then
-      Canvas.FillRect(TRectF.Create(
-        WX(Min(X1, X2)) - WLen(THICK) / 2, WY(Y1) - WLen(THICK) / 2,
-        WX(Max(X1, X2)) + WLen(THICK) / 2, WY(Y1) + WLen(THICK) / 2), 0, 0, [], 1.0)
-    else
-    begin
-      Steps := Ceil(Max(Abs(X2 - X1), Abs(Y2 - Y1)) / 2);
-      if Steps < 1 then
-        Steps := 1;
-      for i := 0 to Steps do
-      begin
-        t := i / Steps;
-        X := X1 + (X2 - X1) * t;
-        Y := Y1 + (Y2 - Y1) * t;
-        Canvas.FillRect(TRectF.Create(WX(X) - WLen(THICK) / 2,
-          WY(Y) - WLen(THICK) / 2, WX(X) + WLen(THICK) / 2,
-          WY(Y) + WLen(THICK) / 2), 0, 0, [], 1.0);
-      end;
-    end;
+    Canvas.DrawLine(TPointF.Create(WX(X1), WY(Y1)),
+      TPointF.Create(WX(X2), WY(Y2)), 1.0);
   end;
 
   // Returns this gate's clock input pin name using the configured clock
@@ -2746,8 +4850,9 @@ begin
       RootYs[rIdx] := -1;
     end;
 
-    Canvas.Stroke.Color := $FF9E9E9E;
-    Canvas.Stroke.Thickness := 1;
+    Canvas.Stroke.Kind := TBrushKind.Solid;
+    Canvas.Stroke.Color := $FF555555;
+    Canvas.Stroke.Thickness := 1.6;
 
     TrunkX := 110;
     TreeX0 := 210;
@@ -2775,36 +4880,46 @@ begin
         Node := Roots[rIdx];
         if Node.Children.Count > 0 then
         begin
-          // The tree root must be the row's root SPLITTER, not whichever
-          // gate happens to sit first on the tap net.
-          RootSplitter := nil;
+          // The trunk (junction splitter) is tagged; everything else is
+          // subtree and must sprout to the right of the trunk.
+          TrunkNode := nil;
           for i := 0 to Node.Children.Count - 1 do
-            if Node.Children[i].Children.Count > 0 then
+            if (Node.Children[i].Gate <> nil) and
+               Node.Children[i].Gate.ClockTrunk then
             begin
-              RootSplitter := Node.Children[i];
+              TrunkNode := Node.Children[i];
               Break;
             end;
-          if RootSplitter = nil then
-            RootSplitter := Node.Children[0];
 
-          RootSplitter.X := TrunkX;
-          RootSplitter.Y := RootYs[rIdx];
-          RootSplitter.Depth := 0;
           LevelCols.Clear;
-          // Junction's outA child (the row tree root / lone gate) grows
-          // right of the trunk; LayoutSubtree floors it at the junction's
-          // own column via the BaseCol=0 start.
-          for i := 0 to RootSplitter.Children.Count - 1 do
-            LayoutSubtree(RootSplitter.Children[i], 1, 0, RootYs[rIdx]);
-          DrawEdges(RootSplitter);
-          DrawNodes(RootSplitter);
+          if TrunkNode <> nil then
+          begin
+            // Pin the trunk junction on the spine; its children (this row's
+            // distribution tree) grow right from the first subtree column.
+            TrunkNode.X := TrunkX;
+            TrunkNode.Y := RootYs[rIdx];
+            TrunkNode.Depth := 0;
+            for i := 0 to TrunkNode.Children.Count - 1 do
+              LayoutSubtree(TrunkNode.Children[i], 1, 0, RootYs[rIdx]);
+            DrawEdges(TrunkNode);
+            DrawNodes(TrunkNode);
+          end
+          else
+          begin
+            // No junction on this row (the topmost band): the whole tree is
+            // subtree, so it sprouts right of the trunk from column 0.
+            for i := 0 to Node.Children.Count - 1 do
+            begin
+              LayoutSubtree(Node.Children[i], 0, 0, RootYs[rIdx]);
+              DrawEdges(Node.Children[i]);
+              DrawNodes(Node.Children[i]);
+            end;
+          end;
         end;
       end;
     finally
       LevelCols.Free;
     end;
-
-    Canvas.Stroke.Color := $FF9E9E9E;
 
     // Trunk: splitter -> delay -> splitter ... straight up the left edge.
     for rIdx := 0 to Roots.Count - 2 do
@@ -2827,6 +4942,16 @@ begin
       Canvas.FillText(TRectF.Create(WX(TrunkX) - WLen(46), WY(YMid) - WLen(15),
         WX(TrunkX) + WLen(46), WY(YMid) + WLen(15)), DelayTxt, False, 1.0,
         [], TTextAlign.Center, TTextAlign.Center);
+    end;
+
+    // Final (topmost) band has no junction splitter, so the trunk's wire
+    // taps horizontally into that row's tree to the right.
+    if Roots.Count > 0 then
+    begin
+      Node := Roots[Roots.Count - 1];
+      for i := 0 to Node.Children.Count - 1 do
+        if Node.Children[i].X > TrunkX then
+          DrawSeg(TrunkX, Node.Children[i].Y, Node.Children[i].X, Node.Children[i].Y);
     end;
 
     // Layer labels: to the LEFT of each row's junction splitter.
@@ -2886,6 +5011,8 @@ begin
     else
       ValidatePlacement;
   end;
+  if TabControl1.TabIndex = TabFloorplan then
+    BuildFloorplan;
   if TabControl1.TabIndex = TabPipeline then
   begin
     FPanX := 0;

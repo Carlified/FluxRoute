@@ -1,0 +1,794 @@
+object Form1: TForm1
+  Left = 0
+  Top = 0
+  Caption = 'FluxRoute'
+  ClientHeight = 480
+  ClientWidth = 640
+  Constraints.MinWidth = 640.000000000000000000
+  Constraints.MinHeight = 480.000000000000000000
+  FormFactor.Devices = [Desktop]
+  OnCreate = FormCreate
+  OnDestroy = FormDestroy
+  OnKeyDown = FormKeyDown
+  OnCloseQuery = FormCloseQuery
+  DesignerMasterStyle = 0
+  object TabControl1: TTabControl
+    Align = Client
+    Size.Width = 640.000000000000000000
+    Size.Height = 408.000000000000000000
+    Size.PlatformDefault = False
+    TabIndex = 0
+    TabOrder = 2
+    TabPosition = None
+    Sizes = (
+      640s
+      408s
+      640s
+      408s
+      640s
+      408s
+      640s
+      408s
+      640s
+      408s
+      640s
+      408s
+      640s
+      408s
+      640s
+      408s)
+    object TabItemStart: TTabItem
+      CustomIcon = <
+        item
+        end>
+      TextSettings.Trimming = None
+      IsSelected = True
+      Size.Width = 8.000000000000000000
+      Size.Height = 8.000000000000000000
+      Size.PlatformDefault = False
+      StyleLookup = ''
+      TabOrder = 0
+      Text = 'Start'
+      ExplicitSize.cx = 640.000000000000000000
+      ExplicitSize.cy = 408.000000000000000000
+      object LabelStartTitle: TLabel
+        Align = Top
+        Margins.Left = 16.000000000000000000
+        Margins.Top = 16.000000000000000000
+        Size.Height = 28.000000000000000000
+        Size.PlatformDefault = False
+        Text = 'FluxRoute'
+        TabOrder = 1
+      end
+      object LabelStartHint: TLabel
+        Align = Top
+        Margins.Left = 16.000000000000000000
+        Margins.Top = 8.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = 
+          'Open a previous project to pick up where you left off, or start ' +
+          'a new one.'
+        TabOrder = 2
+      end
+      object GridStartButtons: TGridLayout
+        Align = Top
+        Margins.Left = 16.000000000000000000
+        Margins.Top = 16.000000000000000000
+        Margins.Right = 16.000000000000000000
+        Orientation = Horizontal
+        ItemWidth = -1.000000000000000000
+        ItemHeight = -1.000000000000000000
+        Size.Height = 32.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 3
+        object ButtonNewProject: TButton
+          Margins.Right = 4.000000000000000000
+          Size.PlatformDefault = False
+          TabOrder = 1
+          Text = 'New Project'
+          TextSettings.Trimming = None
+          OnClick = ButtonNewProjectClick
+        end
+        object ButtonOpenProject: TButton
+          Margins.Left = 4.000000000000000000
+          Size.PlatformDefault = False
+          TabOrder = 2
+          Text = 'Open Project...'
+          TextSettings.Trimming = None
+          OnClick = ButtonOpenProjectClick
+        end
+      end
+      object LabelRecent: TLabel
+        Align = Top
+        Margins.Left = 16.000000000000000000
+        Margins.Top = 24.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = 'Recent projects (double-click to open):'
+        TabOrder = 5
+      end
+      object ListBoxRecent: TListBox
+        Align = Client
+        Margins.Left = 16.000000000000000000
+        Margins.Top = 8.000000000000000000
+        Margins.Right = 16.000000000000000000
+        Margins.Bottom = 16.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 6
+        DisableFocusEffect = True
+        DefaultItemStyles.ItemStyle = ''
+        DefaultItemStyles.GroupHeaderStyle = ''
+        DefaultItemStyles.GroupFooterStyle = ''
+      end
+    end
+    object TabItem1: TTabItem
+      CustomIcon = <
+        item
+        end>
+      TextSettings.Trimming = None
+      IsSelected = False
+      Size.Width = 8.000000000000000000
+      Size.Height = 8.000000000000000000
+      Size.PlatformDefault = False
+      StyleLookup = ''
+      TabOrder = 0
+      Text = 'Library'
+      ExplicitSize.cx = 640.000000000000000000
+      ExplicitSize.cy = 408.000000000000000000
+      object WelcomeLabel: TLabel
+        Align = Top
+        Margins.Left = 16.000000000000000000
+        Margins.Top = 12.000000000000000000
+        Size.Height = 28.000000000000000000
+        Size.PlatformDefault = False
+        Text = 
+          'Load a LEF file, then a library folder. Double-click a cell to v' +
+          'iew it.'
+        TabOrder = 1
+      end
+      object GridLibraryButtons: TGridLayout
+        Align = Top
+        Margins.Left = 16.000000000000000000
+        Margins.Top = 12.000000000000000000
+        Margins.Right = 16.000000000000000000
+        Orientation = Horizontal
+        ItemWidth = -1.000000000000000000
+        ItemHeight = -1.000000000000000000
+        Size.Height = 32.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 2
+        object Button1: TButton
+          Margins.Right = 4.000000000000000000
+          Size.PlatformDefault = False
+          TabOrder = 2
+          Text = 'Load LEF file'
+          TextSettings.Trimming = None
+          OnClick = Button1Click
+        end
+        object Button3: TButton
+          Enabled = False
+          Margins.Left = 4.000000000000000000
+          Size.PlatformDefault = False
+          TabOrder = 4
+          Text = 'Load Library'
+          TextSettings.Trimming = None
+          OnClick = Button3Click
+        end
+      end
+      object ListBox1: TListBox
+        Align = Client
+        Margins.Left = 16.000000000000000000
+        Margins.Top = 12.000000000000000000
+        Margins.Right = 16.000000000000000000
+        Margins.Bottom = 16.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 6
+        DisableFocusEffect = True
+        DefaultItemStyles.ItemStyle = ''
+        DefaultItemStyles.GroupHeaderStyle = ''
+        DefaultItemStyles.GroupFooterStyle = ''
+      end
+    end
+    object TabItem3: TTabItem
+      CustomIcon = <
+        item
+        end>
+      TextSettings.Trimming = None
+      IsSelected = False
+      Size.Width = 8.000000000000000000
+      Size.Height = 8.000000000000000000
+      Size.PlatformDefault = False
+      StyleLookup = ''
+      TabOrder = 0
+      Text = 'Cells'
+      ExplicitSize.cx = 640.000000000000000000
+      ExplicitSize.cy = 408.000000000000000000
+      object Label2: TLabel
+        Align = Top
+        Margins.Left = 16.000000000000000000
+        Margins.Top = 12.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = 
+          'Double-click a cell on the left to add it, or double-click it in t' +
+          'he list on the right to remove it.'
+        TabOrder = 1
+      end
+      object GridCells: TGridLayout
+        Align = Client
+        Margins.Left = 16.000000000000000000
+        Margins.Top = 12.000000000000000000
+        Margins.Right = 16.000000000000000000
+        Margins.Bottom = 16.000000000000000000
+        Orientation = Horizontal
+        ItemWidth = -1.000000000000000000
+        ItemHeight = -1.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 2
+        object SubTabControl: TTabControl
+          Margins.Right = 4.000000000000000000
+          Size.PlatformDefault = False
+          TabOrder = 2
+          object SubTabSplitters: TTabItem
+            CustomIcon = <
+              item
+              end>
+            TextSettings.Trimming = None
+            IsSelected = False
+            Size.Width = 8.000000000000000000
+            Size.Height = 8.000000000000000000
+            Size.PlatformDefault = False
+            StyleLookup = ''
+            TabOrder = 0
+            Text = 'Splitters'
+            object ListBoxSplitters: TListBox
+              Align = Client
+              Size.PlatformDefault = False
+              DisableFocusEffect = True
+              DefaultItemStyles.ItemStyle = ''
+              DefaultItemStyles.GroupHeaderStyle = ''
+              DefaultItemStyles.GroupFooterStyle = ''
+            end
+          end
+          object SubTabDFF: TTabItem
+            CustomIcon = <
+              item
+              end>
+            TextSettings.Trimming = None
+            IsSelected = False
+            Size.Width = 8.000000000000000000
+            Size.Height = 8.000000000000000000
+            Size.PlatformDefault = False
+            StyleLookup = ''
+            TabOrder = 0
+            Text = 'DFF'
+            object ListBoxDFF: TListBox
+              Align = Client
+              Size.PlatformDefault = False
+              DisableFocusEffect = True
+              DefaultItemStyles.ItemStyle = ''
+              DefaultItemStyles.GroupHeaderStyle = ''
+              DefaultItemStyles.GroupFooterStyle = ''
+            end
+          end
+          object SubTabBuffers: TTabItem
+            CustomIcon = <
+              item
+              end>
+            TextSettings.Trimming = None
+            IsSelected = False
+            Size.Width = 8.000000000000000000
+            Size.Height = 8.000000000000000000
+            Size.PlatformDefault = False
+            StyleLookup = ''
+            TabOrder = 0
+            Text = 'Buffers'
+            object ListBoxBuffers: TListBox
+              Align = Client
+              Size.PlatformDefault = False
+              DisableFocusEffect = True
+              DefaultItemStyles.ItemStyle = ''
+              DefaultItemStyles.GroupHeaderStyle = ''
+              DefaultItemStyles.GroupFooterStyle = ''
+            end
+          end
+        end
+        object ListBoxSelected: TListBox
+          Margins.Left = 4.000000000000000000
+          Size.PlatformDefault = False
+          TabOrder = 3
+          DisableFocusEffect = True
+          DefaultItemStyles.ItemStyle = ''
+          DefaultItemStyles.GroupHeaderStyle = ''
+          DefaultItemStyles.GroupFooterStyle = ''
+        end
+      end
+    end
+    object TabItem2: TTabItem
+      CustomIcon = <
+        item
+        end>
+      TextSettings.Trimming = None
+      IsSelected = False
+      Size.Width = 8.000000000000000000
+      Size.Height = 8.000000000000000000
+      Size.PlatformDefault = False
+      StyleLookup = ''
+      TabOrder = 0
+      Text = 'BLIF'
+      ExplicitSize.cx = 640.000000000000000000
+      ExplicitSize.cy = 408.000000000000000000
+      object Button5: TButton
+        Enabled = False
+        Align = Top
+        Margins.Left = 16.000000000000000000
+        Margins.Top = 12.000000000000000000
+        Margins.Right = 16.000000000000000000
+        Size.Height = 32.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 1
+        Text = 'Load BLIF file'
+        TextSettings.Trimming = None
+        OnClick = Button5Click
+      end
+      object Memo1: TMemo
+        Align = Client
+        Margins.Left = 16.000000000000000000
+        Margins.Top = 12.000000000000000000
+        Margins.Right = 16.000000000000000000
+        Margins.Bottom = 16.000000000000000000
+        Touch.InteractiveGestures = [Pan, LongTap, DoubleTap]
+        DataDetectorTypes = []
+        ReadOnly = True
+        Size.PlatformDefault = False
+        TabOrder = 3
+      end
+    end
+    object TabItem5: TTabItem
+      CustomIcon = <
+        item
+        end>
+      TextSettings.Trimming = None
+      IsSelected = False
+      Size.Width = 8.000000000000000000
+      Size.Height = 8.000000000000000000
+      Size.PlatformDefault = False
+      StyleLookup = ''
+      TabOrder = 0
+      Text = 'Pipeline view'
+      ExplicitSize.cx = 640.000000000000000000
+      ExplicitSize.cy = 408.000000000000000000
+      object LayoutLabels: TLayout
+        Align = Top
+        Margins.Bottom = 6.000000000000000000
+        Size.Width = 640.000000000000000000
+        Size.Height = 22.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 0
+        object LabelCompact: TLabel
+          Align = Left
+          Size.Width = 150.000000000000000000
+          Size.Height = 22.000000000000000000
+          Size.PlatformDefault = False
+          TextSettings.HorzAlign = Center
+          Text = 'Most compact'
+          TabOrder = 0
+        end
+        object LabelMaxSpeed: TLabel
+          Align = Right
+          Position.X = 490.000000000000000000
+          Size.Width = 150.000000000000000000
+          Size.Height = 22.000000000000000000
+          Size.PlatformDefault = False
+          TextSettings.HorzAlign = Center
+          Text = 'Highest frequency'
+          TabOrder = 2
+        end
+        object LabelMode: TLabel
+          Align = Client
+          Size.Width = 340.000000000000000000
+          Size.Height = 22.000000000000000000
+          Size.PlatformDefault = False
+          TextSettings.HorzAlign = Center
+          Text = 'Mode: compact'
+          TabOrder = 1
+        end
+      end
+      object LayoutSlider: TLayout
+        Align = Top
+        Margins.Left = 8.000000000000000000
+        Margins.Top = 2.000000000000000000
+        Margins.Right = 8.000000000000000000
+        Margins.Bottom = 4.000000000000000000
+        Position.X = 8.000000000000000000
+        Position.Y = 30.000000000000000000
+        Size.Width = 624.000000000000000000
+        Size.Height = 32.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 1
+        object LabelFreqLeft: TLabel
+          Align = Left
+          Size.Width = 90.000000000000000000
+          Size.Height = 32.000000000000000000
+          Size.PlatformDefault = False
+          TextSettings.HorzAlign = Trailing
+          Text = '-'
+          TabOrder = 0
+        end
+        object TrackBar1: TTrackBar
+          Align = Client
+          CanParentFocus = True
+          Orientation = Horizontal
+          Size.Width = 444.000000000000000000
+          Size.Height = 19.000000000000000000
+          Size.PlatformDefault = False
+          TabOrder = 1
+          OnChange = TrackBar1Change
+        end
+        object LabelFreqRight: TLabel
+          Align = Right
+          Position.X = 534.000000000000000000
+          Size.Width = 90.000000000000000000
+          Size.Height = 32.000000000000000000
+          Size.PlatformDefault = False
+          Text = '-'
+          TabOrder = 2
+        end
+      end
+      object LayoutCanvas: TLayout
+        Align = Client
+        Size.Width = 640.000000000000000000
+        Size.Height = 342.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 2
+        object PaintBox1: TPaintBox
+          Align = Client
+          Size.Width = 640.000000000000000000
+          Size.Height = 342.000000000000000000
+          Size.PlatformDefault = False
+        end
+      end
+    end
+    object TabItem6: TTabItem
+      CustomIcon = <
+        item
+        end>
+      TextSettings.Trimming = None
+      IsSelected = False
+      Size.Width = 8.000000000000000000
+      Size.Height = 8.000000000000000000
+      Size.PlatformDefault = False
+      StyleLookup = ''
+      TabOrder = 0
+      Text = 'Clock network'
+      ExplicitSize.cx = 640.000000000000000000
+      ExplicitSize.cy = 408.000000000000000000
+      object Label8: TLabel
+        Position.X = 24.000000000000000000
+        Position.Y = 12.000000000000000000
+        Size.Width = 592.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = 'Clock network'
+        TabOrder = 1
+      end
+      object PaintBox2: TPaintBox
+        Align = Client
+        Size.Width = 640.000000000000000000
+        Size.Height = 408.000000000000000000
+        Size.PlatformDefault = False
+      end
+    end
+    object TabItem4: TTabItem
+      CustomIcon = <
+        item
+        end>
+      TextSettings.Trimming = None
+      IsSelected = False
+      Size.Width = 8.000000000000000000
+      Size.Height = 8.000000000000000000
+      Size.PlatformDefault = False
+      StyleLookup = ''
+      TabOrder = 0
+      Text = 'Placement Configuration'
+      ExplicitSize.cx = 640.000000000000000000
+      ExplicitSize.cy = 408.000000000000000000
+      object LayoutPlacementTop: TLayout
+        Align = Top
+        Size.Height = 272.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 1
+        object LabelPlacementTitle: TLabel
+        Position.X = 24.000000000000000000
+        Position.Y = 12.000000000000000000
+        Size.Width = 592.000000000000000000
+        Size.Height = 22.000000000000000000
+        Size.PlatformDefault = False
+        Text = 'Placement Configuration'
+        TabOrder = 1
+      end
+      object LabelCoreSize: TLabel
+        Position.X = 24.000000000000000000
+        Position.Y = 44.000000000000000000
+        Size.Width = 170.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = 'Core block size:'
+        TabOrder = 2
+      end
+      object EditCoreSize: TEdit
+        Position.X = 200.000000000000000000
+        Position.Y = 40.000000000000000000
+        Size.Width = 70.000000000000000000
+        Size.Height = 26.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 3
+        OnChange = EditPlacementChanged
+        OnKeyDown = EditPlacementKeyDown
+      end
+      object LabelCoreDim: TLabel
+        Position.X = 278.000000000000000000
+        Position.Y = 44.000000000000000000
+        Size.Width = 160.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = ' x 0.00 um'
+        TabOrder = 6
+      end
+      object LabelRowHeight: TLabel
+        Position.X = 24.000000000000000000
+        Position.Y = 76.000000000000000000
+        Size.Width = 170.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = 'Row height:'
+        TabOrder = 4
+      end
+      object EditRowHeight: TEdit
+        Position.X = 200.000000000000000000
+        Position.Y = 72.000000000000000000
+        Size.Width = 70.000000000000000000
+        Size.Height = 26.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 5
+        OnChange = EditPlacementChanged
+        OnKeyDown = EditPlacementKeyDown
+      end
+      object LabelRowCells: TLabel
+        Position.X = 278.000000000000000000
+        Position.Y = 76.000000000000000000
+        Size.Width = 160.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = ' - cells'
+        TabOrder = 7
+      end
+      object LabelDieArea: TLabel
+        Position.X = 24.000000000000000000
+        Position.Y = 108.000000000000000000
+        Size.Width = 170.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = 'Core die size:'
+        TabOrder = 11
+      end
+      object EditDieW: TEdit
+        Position.X = 200.000000000000000000
+        Position.Y = 104.000000000000000000
+        Size.Width = 70.000000000000000000
+        Size.Height = 26.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 12
+        OnChange = EditPlacementChanged
+        OnKeyDown = EditPlacementKeyDown
+      end
+      object LabelDieX: TLabel
+        Position.X = 276.000000000000000000
+        Position.Y = 108.000000000000000000
+        Size.Width = 12.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = 'x'
+        TabOrder = 13
+      end
+      object EditDieH: TEdit
+        Position.X = 286.000000000000000000
+        Position.Y = 104.000000000000000000
+        Size.Width = 70.000000000000000000
+        Size.Height = 26.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 14
+        OnChange = EditPlacementChanged
+        OnKeyDown = EditPlacementKeyDown
+      end
+      object LabelDieUm: TLabel
+        Position.X = 362.000000000000000000
+        Position.Y = 108.000000000000000000
+        Size.Width = 30.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = 'um,'
+        TabOrder = 15
+      end
+      object LabelDieAreaText: TLabel
+        Position.X = 396.000000000000000000
+        Position.Y = 108.000000000000000000
+        Size.Width = 180.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = '0.00 um2'
+        TabOrder = 16
+      end
+      object LabelUtilization: TLabel
+        Position.X = 24.000000000000000000
+        Position.Y = 140.000000000000000000
+        Size.Width = 170.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = 'Target utilization (%):'
+        TabOrder = 17
+      end
+      object EditUtilization: TEdit
+        Position.X = 200.000000000000000000
+        Position.Y = 136.000000000000000000
+        Size.Width = 70.000000000000000000
+        Size.Height = 26.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 18
+        OnChange = EditPlacementChanged
+        OnKeyDown = EditPlacementKeyDown
+      end
+      object LabelUtilSuffix: TLabel
+        Position.X = 278.000000000000000000
+        Position.Y = 140.000000000000000000
+        Size.Width = 20.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = '%'
+        TabOrder = 19
+      end
+      object LabelBiasCurrent: TLabel
+        Position.X = 24.000000000000000000
+        Position.Y = 188.000000000000000000
+        Size.Width = 170.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = 'Max bias current (uA):'
+        TabOrder = 20
+      end
+      object EditBiasCurrent: TEdit
+        Position.X = 200.000000000000000000
+        Position.Y = 184.000000000000000000
+        Size.Width = 70.000000000000000000
+        Size.Height = 26.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 21
+        OnChange = EditPlacementChanged
+        OnKeyDown = EditPlacementKeyDown
+      end
+      object LabelPTLLength: TLabel
+        Position.X = 24.000000000000000000
+        Position.Y = 220.000000000000000000
+        Size.Width = 170.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = 'Max PTL length (um):'
+        TabOrder = 22
+      end
+      object EditPTLLength: TEdit
+        Position.X = 200.000000000000000000
+        Position.Y = 216.000000000000000000
+        Size.Width = 70.000000000000000000
+        Size.Height = 26.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 23
+        OnChange = EditPlacementChanged
+        OnKeyDown = EditPlacementKeyDown
+      end
+      object LabelPlacementErrors: TLabel
+        Position.X = 24.000000000000000000
+        Position.Y = 252.000000000000000000
+        Size.Width = 592.000000000000000000
+        Size.Height = 20.000000000000000000
+        Size.PlatformDefault = False
+        Text = 'Errors & Warnings:'
+        TabOrder = 9
+      end
+      end
+      object ListBoxPlacementErrors: TListBox
+        Align = Client
+        Margins.Left = 24.000000000000000000
+        Margins.Right = 24.000000000000000000
+        Margins.Top = 4.000000000000000000
+        Margins.Bottom = 16.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 10
+        DisableFocusEffect = True
+        DefaultItemStyles.ItemStyle = ''
+        DefaultItemStyles.GroupHeaderStyle = ''
+        DefaultItemStyles.GroupFooterStyle = ''
+      end
+    end
+    object TabItem7: TTabItem
+      CustomIcon = <
+        item
+        end>
+      TextSettings.Trimming = None
+      IsSelected = False
+      Size.Width = 8.000000000000000000
+      Size.Height = 8.000000000000000000
+      Size.PlatformDefault = False
+      StyleLookup = ''
+      TabOrder = 0
+      Text = 'Floorplan'
+      ExplicitSize.cx = 640.000000000000000000
+      ExplicitSize.cy = 408.000000000000000000
+      object MemoFloorplan: TMemo
+        Align = Bottom
+        Margins.Left = 8.000000000000000000
+        Margins.Right = 8.000000000000000000
+        Margins.Bottom = 8.000000000000000000
+        Size.Height = 120.000000000000000000
+        Size.PlatformDefault = False
+        ReadOnly = True
+        TabOrder = 1
+      end
+      object PaintBox3: TPaintBox
+        Align = Client
+        Size.PlatformDefault = False
+      end
+    end
+  end
+  object LayoutBottom: TLayout
+    Align = Bottom
+    Size.Height = 56.000000000000000000
+    Size.PlatformDefault = False
+    TabOrder = 10
+    object Label1: TLabel
+      Align = Client
+      Margins.Left = 12.000000000000000000
+      Margins.Top = 12.000000000000000000
+      Margins.Bottom = 12.000000000000000000
+      Size.PlatformDefault = False
+      Text = 'Load a LEF file to begin.'
+      TabOrder = 1
+    end
+    object ButtonBack: TButton
+      Align = Right
+      Margins.Top = 12.000000000000000000
+      Margins.Right = 8.000000000000000000
+      Margins.Bottom = 12.000000000000000000
+      Size.Width = 70.000000000000000000
+      Size.Height = 32.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 8
+      Text = '< Back'
+      TextSettings.Trimming = None
+      OnClick = ButtonBackClick
+    end
+    object ButtonNext: TButton
+      Align = Right
+      Margins.Top = 12.000000000000000000
+      Margins.Right = 12.000000000000000000
+      Margins.Bottom = 12.000000000000000000
+      Size.Width = 70.000000000000000000
+      Size.Height = 32.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 9
+      Text = 'Next >'
+      TextSettings.Trimming = None
+      OnClick = ButtonNextClick
+    end
+  end
+  object OpenDialog1: TOpenDialog
+    Left = 592
+    Top = 8
+  end
+  object SaveDialog1: TSaveDialog
+    DefaultExt = '.fluxroute'
+    Filter = 'FluxRoute projects (*.fluxroute)|*.fluxroute|All files (*.*)|*.*'
+    Left = 552
+    Top = 8
+  end
+end

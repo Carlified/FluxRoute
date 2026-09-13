@@ -1,4 +1,4 @@
-unit ClockNetwork;
+﻿unit ClockNetwork;
 
 {
   Counter-flow clock network construction for the wave-pipelined netlist.
@@ -78,6 +78,13 @@ function BuildClockNetwork(AModel: TBlifModel; Lib: TLibrary;
   const SplitterTypes: TArray<TSplitterType>;
   const BufferTypes: TArray<TBufferType>;
   Errors: TStrings): TClockNetworkInfo;
+
+// Replaces the synthetic CLOCK_DELAY spine elements with real buffer chains
+// (minimum length meeting each element's seeded delay; removed entirely when
+// the delay requirement is zero). Run after BuildClockNetwork, once the stage
+// delays are known. The spine buffer gates keep the stage's clock level.
+procedure ReplaceClockDelaysWithBuffers(AModel: TBlifModel; Lib: TLibrary;
+  const BufferTypes: TArray<TBufferType>; Errors: TStrings);
 
 implementation
 
@@ -812,6 +819,7 @@ begin
       Gate.CellName := JunctionCell.Name;
       Gate.Cell := JunctionCell;
       Gate.ClockLevel := Info.Rows[RowIdx];
+      Gate.ClockTrunk := True; // spine element: fans into row tree + delay
 
       Conn := TPinConnection.Create;
       Conn.Port := InPort;
@@ -869,6 +877,7 @@ begin
         Gate.CellName := CLOCK_DELAY_CELL_NAME;
         Gate.Cell := Lib.FindCell(CLOCK_DELAY_CELL_NAME);
         Gate.ClockLevel := Info.Rows[RowIdx];
+        Gate.ClockTrunk := True; // spine element: delays to the next junction
 
         Conn := TPinConnection.Create;
         Conn.Port := Gate.Cell.FindPort('clk');
@@ -982,6 +991,165 @@ begin
     SplitterDelays.Free;
     TreeDly.Free;
     Info.Free;
+  end;
+end;
+
+// Replaces every synthetic CLOCK_DELAY spine element with a real buffer chain
+// that meets its seeded delay, or (zero delay requirement) removes the element
+// and merges its nets. The minimum-length chain uses the highest-delay buffer
+// type (count = ceil(D / max delay)). Buffers keep the stage's clock level so
+// they can be placed on that row's subtree layer.
+procedure ReplaceClockDelaysWithBuffers(AModel: TBlifModel; Lib: TLibrary;
+  const BufferTypes: TArray<TBufferType>; Errors: TStrings);
+var
+  GatesToProcess: TList<TGateInstance>;
+  i, k, Count, BufIdx: Integer;
+  Gate, BufGate: TGateInstance;
+  Conn: TPinConnection;
+  InConn, OutConn: TPinConnection;
+  InNetName, OutNetName, PrevNet, NewNet: string;
+  InNet, OutNet: TNet;
+  NC: TNetConnection;
+  BCell: TCell;
+  MaxBufDelay, ReqDelay: Double;
+  GateLevel: Integer;
+begin
+  if AModel = nil then
+    Exit;
+  MaxBufDelay := 0;
+  BufIdx := -1;
+  for i := 0 to High(BufferTypes) do
+    if BufferTypes[i].DelayPs > MaxBufDelay then
+    begin
+      MaxBufDelay := BufferTypes[i].DelayPs;
+      BufIdx := i;
+    end;
+
+  GatesToProcess := TList<TGateInstance>.Create;
+  try
+    for i := 0 to AModel.Gates.Count - 1 do
+      if IsClockDelayGate(AModel.Gates[i]) then
+        GatesToProcess.Add(AModel.Gates[i]);
+
+    for i := 0 to GatesToProcess.Count - 1 do
+    begin
+      Gate := GatesToProcess[i];
+      InConn := nil;
+      OutConn := nil;
+      for k := 0 to Gate.Connections.Count - 1 do
+      begin
+        Conn := Gate.Connections[k];
+        if SameText(Conn.PinName, 'clk') then
+          InConn := Conn
+        else if SameText(Conn.PinName, 'clkout') then
+          OutConn := Conn;
+      end;
+      if (InConn = nil) or (OutConn = nil) then
+      begin
+        Errors.Add('Clock network: delay block missing clk/clkout pins.');
+        Continue;
+      end;
+      InNetName := InConn.NetName;
+      OutNetName := OutConn.NetName;
+      ReqDelay := Gate.DelayPs;
+      GateLevel := Gate.ClockLevel;
+
+      // Detach the delay element from both nets and the model (Gates owns the
+      // gate, so all reads above are done first).
+      if AModel.Nets.TryGetValue(InNetName, InNet) then
+        for k := InNet.Connections.Count - 1 downto 0 do
+          if InNet.Connections[k].Gate = Gate then
+            InNet.Connections.Delete(k);
+      if AModel.Nets.TryGetValue(OutNetName, OutNet) then
+        for k := OutNet.Connections.Count - 1 downto 0 do
+          if OutNet.Connections[k].Gate = Gate then
+            OutNet.Connections.Delete(k);
+      AModel.Gates.Remove(Gate);
+
+      if (ReqDelay > 0) and (BufIdx >= 0) then
+      begin
+        // Minimum-length chain of the highest-delay buffer.
+        Count := Trunc(Ceil(ReqDelay / MaxBufDelay));
+        if Count < 1 then
+          Count := 1;
+        BCell := Lib.FindCell(BufferTypes[BufIdx].CellName);
+        if BCell = nil then
+        begin
+          Errors.Add('Clock network: buffer cell not found for delay replacement.');
+          Continue;
+        end;
+        PrevNet := InNetName;
+        for k := 1 to Count do
+        begin
+          if k < Count then
+          begin
+            NewNet := Format('clk_delay_%d_buf_%d', [i, k]);
+            AModel.FindOrCreateNet(NewNet);
+          end
+          else
+            NewNet := OutNetName; // final buffer drives the original output net
+
+          BufGate := TGateInstance.Create;
+          BufGate.CellName := BCell.Name;
+          BufGate.Cell := BCell;
+          BufGate.ClockLevel := GateLevel;
+
+          Conn := TPinConnection.Create;
+          Conn.Port := BCell.FindPort(BufferTypes[BufIdx].InputPin);
+          Conn.PinName := BufferTypes[BufIdx].InputPin;
+          Conn.NetName := PrevNet;
+          BufGate.Connections.Add(Conn);
+          NC.Gate := BufGate;
+          NC.PinName := BufferTypes[BufIdx].InputPin;
+          NC.IsDriver := False;
+          AModel.Nets[PrevNet].Connections.Add(NC);
+
+          Conn := TPinConnection.Create;
+          Conn.Port := BCell.FindPort(BufferTypes[BufIdx].OutputPin);
+          Conn.PinName := BufferTypes[BufIdx].OutputPin;
+          Conn.NetName := NewNet;
+          BufGate.Connections.Add(Conn);
+          AModel.FindOrCreateNet(NewNet);
+          NC.Gate := BufGate;
+          NC.PinName := BufferTypes[BufIdx].OutputPin;
+          NC.IsDriver := True;
+          AModel.Nets[NewNet].Connections.Add(NC);
+
+          AModel.Gates.Add(BufGate);
+          PrevNet := NewNet;
+        end;
+        Errors.Add(Format(
+          'Clock network: replaced %.1f ps delay with %d x %s.',
+          [ReqDelay, Count, BCell.Name]));
+      end
+      else
+      begin
+        // Zero delay (or no buffers): remove the element and point the input
+        // net's driver straight at the output net, merging the two.
+        if AModel.Nets.TryGetValue(InNetName, InNet) then
+        begin
+          for k := InNet.Connections.Count - 1 downto 0 do
+          begin
+            NC := InNet.Connections[k];
+            if not NC.IsDriver then
+              Continue;
+            for Conn in NC.Gate.Connections do
+              if SameText(Conn.NetName, InNetName) and
+                 SameText(Conn.PinName, NC.PinName) then
+              begin
+                Conn.NetName := OutNetName;
+                Break;
+              end;
+            InNet.Connections.Delete(k);
+            AModel.Nets[OutNetName].Connections.Add(NC);
+          end;
+          AModel.Nets.Remove(InNetName);
+        end;
+        Errors.Add('Clock network: removed delay block (no delay requirement).');
+      end;
+    end;
+  finally
+    GatesToProcess.Free;
   end;
 end;
 

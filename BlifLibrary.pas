@@ -26,6 +26,8 @@ type
     ClockLevel: Integer; // pipeline depth: -1 = not computed (see PipelineAnalysis)
     DelayPs: Double; // continuous delay parameter; only used by synthetic
                      // cells (e.g. CLOCK_DELAY). Discretized at export.
+    ClockTrunk: Boolean; // True if this gate is part of the clock network's
+                         // trunk spine (junction splitter or CLOCK_DELAY).
     Connections: TObjectList<TPinConnection>;
     constructor Create;
     destructor Destroy; override;
@@ -88,6 +90,7 @@ constructor TGateInstance.Create;
 begin
   ClockLevel := -1;
   DelayPs := 0;
+  ClockTrunk := False;
   Connections := TObjectList<TPinConnection>.Create(True);
 end;
 
@@ -163,6 +166,7 @@ begin
       NewGate.Cell := OldGate.Cell;
       NewGate.ClockLevel := OldGate.ClockLevel;
       NewGate.DelayPs := OldGate.DelayPs;
+      NewGate.ClockTrunk := OldGate.ClockTrunk;
       for OldConn in OldGate.Connections do
       begin
         NewConn := TPinConnection.Create;
