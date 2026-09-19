@@ -1,4 +1,4 @@
-unit CellViewer;
+﻿unit CellViewer;
 
 interface
 
@@ -506,7 +506,7 @@ var
   i, j: Integer;
   Port: TPort;
   Shape: TPortShape;
-  Inputs, Outputs, Inouts, Other, Section: TStringList;
+  Inputs, Outputs, Inouts, Other, Power, Section: TStringList;
   VFile: string;
   Timing: TCellTiming;
   Arc: TArcDelay;
@@ -526,6 +526,7 @@ begin
   Outputs := TStringList.Create;
   Inouts := TStringList.Create;
   Other := TStringList.Create;
+  Power := TStringList.Create;
   try
     for i := 0 to Cell.Ports.Count - 1 do
     begin
@@ -550,16 +551,35 @@ begin
         end;
     end;
 
+    for i := 0 to Cell.PowerPorts.Count - 1 do
+    begin
+      Port := Cell.PowerPorts[i];
+      if Port.Shapes.Count = 0 then
+        Power.Add(Format('  %s (no geometry in LEF)', [Port.Name]))
+      else
+        for j := 0 to Port.Shapes.Count - 1 do
+        begin
+          Shape := Port.Shapes[j];
+          Power.Add(Format('  %s [%s] %.3f x %.3f um at (%.3f, %.3f)',
+            [Port.Name, Shape.Layer,
+             Abs(Shape.x2 - Shape.x1), Abs(Shape.y2 - Shape.y1),
+             Shape.x1, Shape.y1], Inv));
+        end;
+    end;
+
     AppendPortGroup(Lines, 'Inputs:', Inputs);
     AppendPortGroup(Lines, 'Outputs:', Outputs);
     AppendPortGroup(Lines, 'Inouts:', Inouts);
     if Other.Count > 0 then
       AppendPortGroup(Lines, 'Direction unknown:', Other);
+    if Power.Count > 0 then
+      AppendPortGroup(Lines, 'Power:', Power);
   finally
     Inputs.Free;
     Outputs.Free;
     Inouts.Free;
     Other.Free;
+    Power.Free;
   end;
 
   Lines.Add('');

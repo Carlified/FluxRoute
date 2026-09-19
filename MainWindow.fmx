@@ -853,24 +853,13 @@
         Size.PlatformDefault = False
         TabOrder = 2
         object ButtonOptimize: TButton
-          Align = Left
-          Size.Width = 200.000000000000000000
+          Align = Client
+          Size.Width = 624.000000000000000000
           Size.Height = 32.000000000000000000
           Size.PlatformDefault = False
-          Text = 'Optimize ordering'
+          Text = 'Optimize Placement'
           TextSettings.Trimming = None
           OnClick = ButtonOptimizeClick
-        end
-        object ButtonExport: TButton
-          Align = Left
-          Margins.Left = 8.000000000000000000
-          Position.X = 208.000000000000000000
-          Size.Width = 130.000000000000000000
-          Size.Height = 32.000000000000000000
-          Size.PlatformDefault = False
-          Text = 'Export placement'
-          TextSettings.Trimming = None
-          OnClick = ButtonExportClick
         end
       end
       object LayoutToggles: TLayout
@@ -947,9 +936,9 @@
         Margins.Right = 8.000000000000000000
         Margins.Bottom = 8.000000000000000000
         Position.X = 8.000000000000000000
-        Position.Y = 296.000000000000000000
+        Position.Y = 356.000000000000000000
         Size.Width = 624.000000000000000000
-        Size.Height = 120.000000000000000000
+        Size.Height = 60.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 1
         DisableFocusEffect = True
@@ -957,13 +946,13 @@
         DefaultItemStyles.GroupHeaderStyle = ''
         DefaultItemStyles.GroupFooterStyle = ''
         Viewport.Width = 200.000000000000000000
-        Viewport.Height = 120.000000000000000000
+        Viewport.Height = 60.000000000000000000
       end
       object SplitterErrors: TSplitter
         Align = Bottom
         Cursor = crVSplit
         MinSize = 20.000000000000000000
-        Position.Y = 291.000000000000000000
+        Position.Y = 351.000000000000000000
         Size.Width = 640.000000000000000000
         Size.Height = 5.000000000000000000
         Size.PlatformDefault = False
@@ -971,7 +960,65 @@
       object PaintBox3: TPaintBox
         Align = Client
         Size.Width = 640.000000000000000000
-        Size.Height = 223.000000000000000000
+        Size.Height = 283.000000000000000000
+        Size.PlatformDefault = False
+      end
+    end
+    object TabItem8: TTabItem
+      CustomIcon = <
+        item
+        end>
+      TextSettings.Trimming = None
+      IsSelected = False
+      Size.Width = 8.000000000000000000
+      Size.Height = 8.000000000000000000
+      Size.PlatformDefault = False
+      StyleLookup = ''
+      TabOrder = 0
+      Text = 'Routing'
+      ExplicitSize.cx = 640.000000000000000000
+      ExplicitSize.cy = 408.000000000000000000
+      object LayoutRoutingLeft: TLayout
+        Align = Left
+        Margins.Left = 8.000000000000000000
+        Margins.Top = 8.000000000000000000
+        Margins.Bottom = 8.000000000000000000
+        Size.Width = 192.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 0
+        object ButtonRunRouting: TButton
+          Align = Top
+          Size.Width = 192.000000000000000000
+          Size.Height = 32.000000000000000000
+          Size.PlatformDefault = False
+          Text = 'Run Routing'
+          TextSettings.Trimming = None
+          OnClick = ButtonRunRoutingClick
+        end
+        object MemoRouting: TMemo
+          Touch.InteractiveGestures = [Pan, LongTap, DoubleTap]
+          DataDetectorTypes = []
+          Align = Client
+          Margins.Top = 8.000000000000000000
+          Size.Width = 192.000000000000000000
+          Size.Height = 360.000000000000000000
+          Size.PlatformDefault = False
+          TabOrder = 1
+          ReadOnly = True
+        end
+      end
+      object SplitterRouting: TSplitter
+        Align = Left
+        Cursor = crHSplit
+        MinSize = 20.000000000000000000
+        Size.Width = 5.000000000000000000
+        Size.Height = 408.000000000000000000
+        Size.PlatformDefault = False
+      end
+      object PaintBox4: TPaintBox
+        Align = Client
+        Size.Width = 435.000000000000000000
+        Size.Height = 408.000000000000000000
         Size.PlatformDefault = False
       end
     end

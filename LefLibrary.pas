@@ -13,17 +13,27 @@ uses
 type
   TPinDirection = (pdUnknown, pdInput, pdOutput, pdInOut); //Delphi version of enum
 
-  TLefLayerType = (ltUnknown, ltRouting, ltCut, ltOverlap);
+  // The LEF USE keyword on a port: what the pin is for. Power/ground pins are
+  // kept out of the signal-pin lists (see TCell.PowerPorts) because nothing
+  // before the routing stage should have to care about them.
+  TPinUse = (puUnknown, puSignal, puClock, puPower, puGround, puAnalog);
+
+  // The LEF TYPE of a top-level layer: what the layer is for. Masterslice
+  // layers (M0, M2, M4, M5, M6, M7 here) are the fixed ground/power planes,
+  // cut layers are vias, routing layers carry tracks.
+  TLefLayerType = (ltUnknown, ltRouting, ltCut, ltMasterslice, ltOverlap);
 
   // One top-level LAYER definition from the LEF (a routing metal, a via cut,
-  // or the overlap layer). Layers are assumed to be listed in stack order.
+  // a masterslice plane, or the overlap layer). Layers are assumed to be
+  // listed in stack order (bottom to top).
   TLefLayer = class
   public
     Name: string;
     LayerType: TLefLayerType;
-    Direction: string; // 'HORIZONTAL' / 'VERTICAL' / '' for cut/overlap
+    Direction: string; // 'HORIZONTAL' / 'VERTICAL' / '' for cut/masterslice
     Width: Double;
     Pitch: Double;
+    Offset: Double; // first-track offset for routing layers
   end;
 
   TPortShape = class //assumes port is a rect - no reason to think otherwise
@@ -36,6 +46,7 @@ type
   public
     Name: string;
     Direction: TPinDirection;
+    Use: TPinUse; // signal/clock vs power/ground (see TCell.PowerPorts)
     Shapes: TObjectList<TPortShape>; // allows multi layer ports (only used with pads)
     constructor Create;
     destructor Destroy; override;
@@ -48,11 +59,17 @@ type
     Height: Double;
     Ports: TObjectList<TPort>;
     PortsByName: TDictionary<string, TPort>; //for quick lookup with blif parser
+    // VDD/GND bias ports (USE POWER / USE GROUND in the LEF). Kept separate
+    // from Ports so the placement/clock pipeline never sees them; read them
+    // only when the power grid is routed.
+    PowerPorts: TObjectList<TPort>;
     SourceFiles: TStringList; // linked source files matching this cell (see FindCellSourceFiles)
     constructor Create;
     destructor Destroy; override;
     // Returns nil if the pin doesn't exist on this cell.
     function FindPort(const PinName: string): TPort;
+    // Returns nil if there is no power/ground pin with this name (e.g. 'VDD').
+    function FindPowerPort(const PinName: string): TPort;
   end;
 
   TLibrary = class
@@ -91,6 +108,7 @@ implementation
 constructor TPort.Create;
 begin
   Direction := pdUnknown;
+  Use := puUnknown;
   Shapes := TObjectList<TPortShape>.Create(True);
 end;
 
@@ -106,6 +124,7 @@ constructor TCell.Create;
 begin
   Ports := TObjectList<TPort>.Create(True);
   PortsByName := TDictionary<string, TPort>.Create(TIStringComparer.Ordinal);
+  PowerPorts := TObjectList<TPort>.Create(True);
   SourceFiles := TStringList.Create;
 end;
 
@@ -113,6 +132,7 @@ destructor TCell.Destroy;
 begin
   SourceFiles.Free;
   Ports.Free;
+  PowerPorts.Free;
   PortsByName.Free; // does not own the TPort objects -- Ports does
   inherited;
 end;
@@ -121,6 +141,16 @@ function TCell.FindPort(const PinName: string): TPort;
 begin
   if not PortsByName.TryGetValue(PinName, Result) then
     Result := nil;
+end;
+
+function TCell.FindPowerPort(const PinName: string): TPort;
+var
+  P: TPort;
+begin
+  for P in PowerPorts do
+    if SameText(P.Name, PinName) then
+      Exit(P);
+  Result := nil;
 end;
 
 { TLibrary }
@@ -196,6 +226,22 @@ begin
     Result := pdUnknown;
 end;
 
+function ParsePinUse(const Token: string): TPinUse;
+begin
+  if SameText(Token, 'SIGNAL') then
+    Result := puSignal
+  else if SameText(Token, 'CLOCK') then
+    Result := puClock
+  else if SameText(Token, 'POWER') then
+    Result := puPower
+  else if SameText(Token, 'GROUND') then
+    Result := puGround
+  else if SameText(Token, 'ANALOG') then
+    Result := puAnalog
+  else
+    Result := puUnknown;
+end;
+
 function LoadLefLibrary(const FileName: string): TLibrary;
 var
   i: Integer;
@@ -236,6 +282,7 @@ begin
         CurrentLefLayer.Direction := '';
         CurrentLefLayer.Width := 0;
         CurrentLefLayer.Pitch := 0;
+        CurrentLefLayer.Offset := 0;
         Result.Layers.Add(CurrentLefLayer);
       end
 
@@ -246,6 +293,8 @@ begin
           CurrentLefLayer.LayerType := ltRouting
         else if SameText(Parts[1], 'CUT') then
           CurrentLefLayer.LayerType := ltCut
+        else if SameText(Parts[1], 'MASTERSLICE') then
+          CurrentLefLayer.LayerType := ltMasterslice
         else if SameText(Parts[1], 'OVERLAP') then
           CurrentLefLayer.LayerType := ltOverlap
         else
@@ -273,6 +322,13 @@ begin
         Parts := Line.Split([' '], TStringSplitOptions.ExcludeEmpty);
         if Length(Parts) > 1 then
           CurrentLefLayer.Pitch := StrToFloat(Parts[1], Inv);
+      end
+
+      else if (CurrentLefLayer <> nil) and StartsText('OFFSET', Line) then
+      begin
+        Parts := Line.Split([' '], TStringSplitOptions.ExcludeEmpty);
+        if Length(Parts) > 1 then
+          CurrentLefLayer.Offset := StrToFloat(Parts[1], Inv);
       end
 
       else if (CurrentCell = nil) and StartsText('VIA', Line) then
@@ -309,6 +365,21 @@ begin
       begin
         Parts := Line.Split([' '], TStringSplitOptions.ExcludeEmpty);
         CurrentPort.Direction := ParseDirection(Parts[1]);
+      end
+
+      else if (CurrentCell <> nil) and (CurrentPort <> nil) and
+        StartsText('USE', Line) then
+      begin
+        Parts := Line.Split([' '], TStringSplitOptions.ExcludeEmpty);
+        CurrentPort.Use := ParsePinUse(Parts[1]);
+        // Power/ground pins (e.g. VDD) are bias ports: keep them out of the
+        // signal-port lists so the rest of the pipeline never sees them.
+        if (CurrentPort.Use = puPower) or (CurrentPort.Use = puGround) then
+        begin
+          CurrentCell.Ports.Extract(CurrentPort); // detach without freeing
+          CurrentCell.PortsByName.Remove(CurrentPort.Name);
+          CurrentCell.PowerPorts.Add(CurrentPort);
+        end;
       end
 
       else if (CurrentCell <> nil) and (CurrentPort <> nil) and

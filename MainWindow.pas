@@ -24,7 +24,7 @@ uses
 const
   // Top-level wizard page indexes. A Start/project page is at the front.
   // Order: Start, Library, Cell selection, BLIF loading, Pipeline, Clock,
-  // Placement configuration, Floorplan.
+  // Placement configuration, Floorplan, Routing.
   TabStart = 0;
   TabLibrary = 1;
   TabComponents = 2; // cell selection (splitters/FF/buffers)
@@ -33,6 +33,7 @@ const
   TabClock = 5;
   TabPlacement = 6;  // floorplanning / placement configuration
   TabFloorplan = 7;  // floorplan visualisation
+  TabRouting = 8;    // final routing
 
 type
   // One block of the floorplanning grid (for future maze routing).
@@ -134,7 +135,6 @@ type
     PaintBox2: TPaintBox;
     PaintBox3: TPaintBox;
     ButtonOptimize: TButton;
-    ButtonExport: TButton;
     CheckBoxShowNames: TCheckBox;
     CheckBoxShowLogicWires: TCheckBox;
     CheckBoxShowClockWires: TCheckBox;
@@ -142,6 +142,10 @@ type
     CheckBoxShowCells: TCheckBox;
     ListBoxFloorplanErrors: TListBox;
     SplitterErrors: TSplitter;
+    ButtonRunRouting: TButton;
+    MemoRouting: TMemo;
+    SplitterRouting: TSplitter;
+    PaintBox4: TPaintBox;
     ButtonBack: TButton;
     ButtonNext: TButton;
     OpenDialog1: TOpenDialog;
@@ -169,9 +173,9 @@ type
     procedure EditPlacementChanged(Sender: TObject);
     procedure EditPlacementKeyDown(Sender: TObject; var Key: Word;
       var KeyChar: WideChar; Shift: TShiftState);
-    procedure ButtonOptimizeClick(Sender: TObject);
-    procedure ButtonExportClick(Sender: TObject);
+procedure ButtonOptimizeClick(Sender: TObject);
     procedure CheckBoxToggleChange(Sender: TObject);
+    procedure ButtonRunRoutingClick(Sender: TObject);
     procedure PaintBox1MouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Single);
     procedure PaintBox1MouseMove(Sender: TObject; Shift: TShiftState; X, Y: Single);
     procedure PaintBox1MouseUp(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Single);
@@ -223,7 +227,14 @@ type
     FPlanDragging: Boolean;
     FPlanZoom: Single;
     FPlanNeedsFit: Boolean;
+    FRoutePanX, FRoutePanY: Single;
+    FRouteZoom: Single;
+    FRouteNeedsFit: Boolean;
+    FRouteDragX, FRouteDragY: Single;
+    FRouteDragging: Boolean;
     FPlacementErrorCount: Integer;
+    FFloorplanErrorCount: Integer;
+    FSwitchingTab: Boolean;
     FFloorplan: TArray<TFloorplanCell>;
     FFloorplanLayer: TArray<SmallInt>; // clock level per cell, -1 = none
     FFloorplanW, FFloorplanH: Integer;
@@ -323,6 +334,13 @@ type
     procedure PaintBox3MouseMove(Sender: TObject; Shift: TShiftState; X, Y: Single);
     procedure PaintBox3MouseUp(Sender: TObject; Button: TMouseButton;
       Shift: TShiftState; X, Y: Single);
+    procedure PaintRouting(Sender: TObject; Canvas: TCanvas);
+    procedure RepaintRoutingPage;
+    procedure PaintBox4MouseDown(Sender: TObject; Button: TMouseButton;
+      Shift: TShiftState; X, Y: Single);
+    procedure PaintBox4MouseMove(Sender: TObject; Shift: TShiftState; X, Y: Single);
+    procedure PaintBox4MouseUp(Sender: TObject; Button: TMouseButton;
+      Shift: TShiftState; X, Y: Single);
     procedure OrderLayer(L: Integer; CrossOnly: Boolean);
     procedure ResolvePlacementOverlaps;
   public
@@ -405,19 +423,22 @@ begin
   end;
 
   FLib := Lib;
-  // Show the parsed layer stack (routing metals, via cuts, overlap).
+  // Show the parsed layer stack with each layer's purpose.
   MemoLayers.Lines.BeginUpdate;
   try
     MemoLayers.Lines.Clear;
     for i := 0 to FLib.Layers.Count - 1 do
       case FLib.Layers[i].LayerType of
         ltRouting:
-          MemoLayers.Lines.Add(Format('%s: routing %s, W %.1f, P %.1f',
+          MemoLayers.Lines.Add(Format('%s: routing %s, W %.1f, P %.1f, O %.1f',
             [FLib.Layers[i].Name, LowerCase(FLib.Layers[i].Direction),
-             FLib.Layers[i].Width, FLib.Layers[i].Pitch]));
+             FLib.Layers[i].Width, FLib.Layers[i].Pitch,
+             FLib.Layers[i].Offset]));
         ltCut:
           MemoLayers.Lines.Add(Format('%s: via cut, W %.1f',
             [FLib.Layers[i].Name, FLib.Layers[i].Width]));
+        ltMasterslice:
+          MemoLayers.Lines.Add(Format('%s: masterslice', [FLib.Layers[i].Name]));
         ltOverlap:
           MemoLayers.Lines.Add(Format('%s: overlap', [FLib.Layers[i].Name]));
       else
@@ -552,6 +573,9 @@ begin
   if TabControl1.TabIndex = TabPlacement then
     ButtonNext.Enabled := ButtonNext.Enabled and FPlacementInitialized and
       (FPlacementErrorCount = 0);
+  if TabControl1.TabIndex = TabFloorplan then
+    ButtonNext.Enabled := ButtonNext.Enabled and
+      (FFloorplanErrorCount = 0);
 end;
 
 procedure TForm1.UpdateRecentList;
@@ -1115,10 +1139,15 @@ begin
   PaintBox3.OnMouseDown := PaintBox3MouseDown;
   PaintBox3.OnMouseMove := PaintBox3MouseMove;
   PaintBox3.OnMouseUp := PaintBox3MouseUp;
+  PaintBox4.OnPaint := PaintRouting;
+  PaintBox4.OnMouseDown := PaintBox4MouseDown;
+  PaintBox4.OnMouseMove := PaintBox4MouseMove;
+  PaintBox4.OnMouseUp := PaintBox4MouseUp;
   OnMouseWheel := FormMouseWheel;
   FZoom := 1.0;
   FClockZoom := 1.0;
   FPlanZoom := 1.0;
+  FRouteZoom := 1.0;
   TabControl1.OnChange := TabControl1Change;
   FSliderPos := 0;
   FSliderTimer := TTimer.Create(Self);
@@ -2521,6 +2550,7 @@ begin
   // Clear the previous diagnostics so the listbox shows only the CURRENT
   // (post-optimize) overlaps/coverage, not the ones from the initial build.
   ListBoxFloorplanErrors.Clear;
+  FFloorplanErrorCount := 0;
   FManhattanItem := nil;
   // Phase 1 - untangle: order cells only by their neighbours on other layers,
   // alternating the sweep direction, so layer-to-layer wires align and stop
@@ -2557,108 +2587,6 @@ begin
   ValidateFloorplanLayout;
   UpdateManhattanDiagnostic;
   RepaintFloorplanPage;
-end;
-
-// Debug helper: dumps the current placement (positions, barycentres, and each
-// cell's placed connection targets) to placement_dump.txt in the working
-// directory so the layout can be inspected numerically.
-procedure TForm1.ButtonExportClick(Sender: TObject);
-var
-  SL: TStringList;
-  Item: TListBoxItem;
-  i: Integer;
-  Conn: TPinConnection;
-  Net: TNet;
-  NC: TNetConnection;
-  Pt: TPoint;
-  Path: string;
-  Bx, By, SumX, SumY: Double;
-  Count, Wb, Hb: Integer;
-begin
-  if Length(FPlacedComponents) = 0 then
-    Exit;
-  SL := TStringList.Create;
-  try
-    SL.Add(Format('Total wire length: %.0f um', [TotalManhattanDistance]));
-    SL.Add(Format('Core=%.3f  XRight=%d  Layers=%d  RowH=%d',
-      [FPlanCore, FPlanXRight, FPlanNumLayers, FPlanRowHBlocks]));
-    SL.Add('');
-    for i := 0 to High(FPlacedComponents) do
-    begin
-      // Recompute the X/Y barycentre from the placed neighbours.
-      SumX := 0;
-      SumY := 0;
-      Count := 0;
-      if FPlacedComponents[i].Gate <> nil then
-        for Conn in FPlacedComponents[i].Gate.Connections do
-        begin
-          if IsClockPinName(Conn.PinName) then
-            Continue;
-          if (FPlacementModel = nil) or
-             (not FPlacementModel.Nets.TryGetValue(Conn.NetName, Net)) then
-            Continue;
-          for NC in Net.Connections do
-          begin
-            if NC.Gate = FPlacedComponents[i].Gate then
-              Continue;
-            if not FGatePlacement.TryGetValue(NC.Gate, Pt) then
-              Continue;
-            Wb := 1;
-            Hb := 1;
-            if NC.Gate.Cell <> nil then
-            begin
-              Wb := Round(NC.Gate.Cell.Width / FPlanCore);
-              Hb := Round(NC.Gate.Cell.Height / FPlanCore);
-              if Wb < 1 then
-                Wb := 1;
-              if Hb < 1 then
-                Hb := 1;
-            end;
-            SumX := SumX + (Pt.X + Wb / 2);
-            SumY := SumY + (Pt.Y + Hb / 2);
-            Inc(Count);
-          end;
-        end;
-      if Count > 0 then
-      begin
-        Bx := SumX / Count;
-        By := SumY / Count;
-      end
-      else
-      begin
-        Bx := FPlacedComponents[i].X + FPlacedComponents[i].W / 2;
-        By := FPlacedComponents[i].Y + FPlacedComponents[i].H / 2;
-      end;
-      SL.Add(Format('P%4d %-20s [L%2d] X=%4d Y=%4d W=%2d H=%2d  bary=(%6.1f,%6.1f)',
-        [i, FPlacedComponents[i].InstanceName, FPlacedComponents[i].ClockLevel,
-         FPlacedComponents[i].X, FPlacedComponents[i].Y,
-         FPlacedComponents[i].W, FPlacedComponents[i].H, Bx, By]));
-      if FPlacedComponents[i].Gate <> nil then
-        for Conn in FPlacedComponents[i].Gate.Connections do
-        begin
-          if IsClockPinName(Conn.PinName) then
-            Continue;
-          if (FPlacementModel = nil) or
-             (not FPlacementModel.Nets.TryGetValue(Conn.NetName, Net)) then
-            Continue;
-          for NC in Net.Connections do
-          begin
-            if NC.Gate = FPlacedComponents[i].Gate then
-              Continue;
-            if FGatePlacement.TryGetValue(NC.Gate, Pt) then
-              SL.Add(Format('      -> %-20s [L%2d] @ (%d,%d)',
-                [NC.Gate.CellName, NC.Gate.ClockLevel, Pt.X, Pt.Y]));
-          end;
-        end;
-    end;
-    Path := GetCurrentDir + '\placement_dump.txt';
-    SL.SaveToFile(Path);
-  finally
-    SL.Free;
-  end;
-  Item := TListBoxItem.Create(ListBoxFloorplanErrors);
-  Item.Parent := ListBoxFloorplanErrors;
-  Item.Text := 'Placement dumped to ' + Path;
 end;
 
 procedure TForm1.CheckBoxToggleChange(Sender: TObject);
@@ -2735,6 +2663,7 @@ begin
   Item.Text := '[ERROR] ' + Text;
   Item.StyledSettings := Item.StyledSettings - [TStyledSetting.FontColor];
   Item.TextSettings.FontColor := $FFFF0000;
+  Inc(FFloorplanErrorCount);
 end;
 
 // World-space (um) centre of a placed gate. Mirrors PlacedCenter but in the
@@ -3031,6 +2960,7 @@ var
   Visited: TDictionary<TGateInstance, Boolean>;
   RowWidths: TArray<Integer>;
   TotalH, TotalW, XRight, BandStart: Integer;
+  TopPad: Integer;
   AvailableWidth, TotalBands, Band, C, ChunkCount, ChunkWidth: Integer;
   LevelBandCount, LevelFirstBand, BandStarts: TArray<Integer>;
   CurChunk, CurX: TArray<Integer>;
@@ -3045,6 +2975,7 @@ begin
   FPlanNeedsFit := True;
   ListBoxFloorplanErrors.Clear;
   FManhattanItem := nil; // cleared listbox invalidates the diagnostic item
+  FFloorplanErrorCount := 0;
   // Place the wave-pipelined (post-DFF) netlist; fall back to the splitter-
   // inserted netlist if the pipeline has not been built yet.
   FPlacementModel := FPipelineModel;
@@ -3153,18 +3084,19 @@ begin
     end;
 
     // Horizontal: bias trunk (1) on the far left, rows, a bias feed column (1)
-    // for the clock trunk, then the clock trunk (rowH) on the far right. The
-    // widest a row can be is the die width minus the trunks.
-    AvailableWidth := DieWBlocks - 2 - RowHBlocks;
+    // for the clock trunk, then the clock trunk (rowH), then a far-right bias
+    // lane (1) fed from the topmost bias row. The widest a row can be is the
+    // die width minus the trunks.
+    AvailableWidth := DieWBlocks - 3 - RowHBlocks;
     if AvailableWidth < 1 then
     begin
       AddFloorplanError(Format('Die is too narrow: at least %d blocks are needed for the trunks.',
-        [2 + RowHBlocks]));
+        [3 + RowHBlocks]));
       RepaintFloorplanPage;
       Exit;
     end;
     XRight := 1 + AvailableWidth;   // common right edge of the rows
-    TotalW := XRight + 1 + RowHBlocks; // = DieWBlocks
+    TotalW := XRight + 2 + RowHBlocks; // = DieWBlocks (+1 far-right bias lane)
 
     // Allocate the die-sized grid and its per-cell layer tags.
     FFloorplanW := DieWBlocks;
@@ -3182,7 +3114,11 @@ begin
     TotalBands := 0;
     for L := 0 to NumLayers - 1 do
       TotalBands := TotalBands + Max(1, Ceil(RowWidths[L] / AvailableWidth));
-    TotalH := TotalBands * (2 + 2 * RowHBlocks);
+    // +1 for the bias line allocated BELOW the bottom-most cell row, so every
+    // cell row (logic and clock) has a bias line both above and below it.
+    // Interior rows already share one line (the line above a row is the line
+    // below the previous row); only the last band has no row beneath it.
+    TotalH := TotalBands * (2 + 2 * RowHBlocks) + 1;
 
     // Failure checks - report and keep whatever fits. Two extra rows are reserved
     // for the I/O pads (top inputs, bottom outputs).
@@ -3193,13 +3129,25 @@ begin
       AddFloorplanError(Format('Not enough width: floorplan needs %d blocks, die has %d.',
         [TotalW, DieWBlocks]));
 
-    // Bias trunk (red) on the far left, full height of the rows (plus the two
-    // I/O pad rows at the top and bottom).
-    FillPlanRect(0, 0, 1, TotalH + 1, fcBias, -1);
-    // Vertical bias feed column (red) immediately left of the clock trunk.
-    FillPlanRect(XRight, 0, XRight + 1, TotalH + 1, fcBias, -1);
-    // Clock trunk (green) on the far right, full height of the rows.
-    FillPlanRect(XRight + 1, 0, XRight + 1 + RowHBlocks, TotalH + 1, fcClock, -1);
+    // Vertically center the stack in the die: the same number of reserved rows
+    // above (input pads + routing) and below (output pads + routing), instead
+    // of hugging the top edge with a single pad row.
+    TopPad := (DieHBlocks - TotalH) div 2;
+    if TopPad < 1 then
+      TopPad := 1;
+
+    // Bias trunk (red) on the far left, and the vertical bias feed column (red)
+    // immediately left of the clock trunk, both spanning the stack height
+    // (the reserved rows above and below stay clear for the I/O pads).
+    FillPlanRect(0, TopPad, 1, TopPad + TotalH, fcBias, -1);
+    FillPlanRect(XRight, TopPad, XRight + 1, TopPad + TotalH, fcBias, -1);
+    // Clock trunk (green), spanning the stack height. It is enclosed by bias:
+    // the feed column and far-right lane on its sides, and the full-width
+    // topmost and bottom-most bias rows above and below it.
+    FillPlanRect(XRight + 1, TopPad, XRight + 1 + RowHBlocks, TopPad + TotalH, fcClock, -1);
+    // Far-right bias lane (red), spanning the stack height; the top-right
+    // corner (the input-pin row) stays empty.
+    FillPlanRect(XRight + 1 + RowHBlocks, TopPad, TotalW, TopPad + TotalH, fcBias, -1);
 
     // Bands, top to bottom; a layer may wrap into several bands. The bands are
     // shifted down by one row so the top row is reserved for input pads.
@@ -3219,10 +3167,15 @@ begin
           ChunkWidth := AvailableWidth;
         if ChunkWidth < 1 then
           ChunkWidth := 1;
-        BandStart := 1 + Band * (2 + 2 * RowHBlocks);
+        BandStart := TopPad + Band * (2 + 2 * RowHBlocks);
         BandStarts[Band] := BandStart;
-        // Bias line spanning from the bias trunk to the common right edge.
-        FillPlanRect(0, BandStart, XRight, BandStart + 1, fcBias, Levels[L]);
+        // Bias line spanning from the bias trunk to the common right edge. The
+        // topmost one (band 0) runs the full die width, reaching the far-right
+        // bias lane so it encloses the top of the clock trunk.
+        if Band = 0 then
+          FillPlanRect(0, BandStart, TotalW, BandStart + 1, fcBias, Levels[L])
+        else
+          FillPlanRect(0, BandStart, XRight, BandStart + 1, fcBias, Levels[L]);
         // Logic row (blue), right-aligned; remaining space is filled out to
         // the bias line with a lighter shade.
         FillPlanRect(XRight - ChunkWidth, BandStart + 1,
@@ -3240,6 +3193,11 @@ begin
         Inc(Band);
       end;
     end;
+
+    // Bias line below the very bottom cell row (the last band's clock row),
+    // stretching the full die width far-left to far-right, unbroken, so it
+    // encloses the bottom of the clock trunk.
+    FillPlanRect(0, TopPad + TotalH - 1, TotalW, TopPad + TotalH, fcBias, -1);
 
     // Snapshot the layout for the ordering animation.
     FPlanCore := Core;
@@ -4485,6 +4443,332 @@ begin
   end;
 end;
 
+procedure TForm1.RepaintRoutingPage;
+var
+  i: Integer;
+begin
+  if TabControl1.TabIndex <> TabRouting then
+    Exit;
+  for i := 0 to Children.Count - 1 do
+    if Children[i] is TControl then
+      TControl(Children[i]).Repaint;
+end;
+
+procedure TForm1.PaintRouting(Sender: TObject; Canvas: TCanvas);
+const
+  GridHalf = 0.75;    // half-thickness (px) of the block grid lines
+  BorderHalf = 1.5;   // half-thickness (px) of the die boundary
+  MinBlockPx = 3.0;   // below this on-screen block size, skip the grid
+  CellAlpha = $50;   // placed cells: semi-transparent grey
+  PortAlpha = 0.55;   // port shapes: semi-transparent
+  HueShift = 30.0;    // constant hue shift between successive layers
+var
+  R: TRectF;
+  ClipState: TCanvasSaveState;
+  DieW, DieH, Core: Double;
+  Cols, Rows, i: Integer;
+  X, Y: Single;
+  BlockPx, WorldX0, WorldX1, WorldY0, WorldY1: Single;
+  I0, I1, J0, J1: Integer;
+  LayerColors: TDictionary<string, TAlphaColor>;
+  LayerIdx: Integer;
+  P: TPlacedComponent;
+  ClkL, ClkIdx: Integer;
+  ClkNode: TPlacedClockNode;
+  Sp: TSpineComponent;
+
+  function WX(AValue: Single): Single;
+  begin
+    Result := FRoutePanX + AValue * FRouteZoom;
+  end;
+
+  function WY(AValue: Single): Single;
+  begin
+    Result := FRoutePanY + AValue * FRouteZoom;
+  end;
+
+  // HSV -> TAlphaColor. H in degrees [0..360], S/L/A in [0..1]. The FMX
+  // TAlphaColorF.CreateHSL helper is not available on this toolchain, so the
+  // conversion is done by hand.
+  function HslColor(H, S, L, A: Single): TAlphaColor;
+  var
+    C, X, M: Single;
+    R, G, B: Single;
+    Hh: Single;
+  begin
+    if S <= 0 then
+    begin
+      R := L;
+      G := L;
+      B := L;
+    end
+    else
+    begin
+      Hh := H / 360.0;
+      C := (1 - Abs(2 * L - 1)) * S;
+      X := C * (1 - Abs(Frac(Hh * 6.0) * 2 - 1));
+      M := L - C / 2;
+      case Trunc(Hh * 6.0) mod 6 of
+        0: begin R := C; G := X; B := 0; end;
+        1: begin R := X; G := C; B := 0; end;
+        2: begin R := 0; G := C; B := X; end;
+        3: begin R := 0; G := X; B := C; end;
+        4: begin R := X; G := 0; B := C; end;
+      else
+        begin R := C; G := 0; B := X; end;
+      end;
+      R := R + M;
+      G := G + M;
+      B := B + M;
+    end;
+    Result := TAlphaColorF.Create(R, G, B, A).ToAlphaColor;
+  end;
+
+  // Per-layer colour from HSV: a constant hue shift per new layer (colour
+  // assigned on first sight, so the map is stable within one paint).
+  function LayerColor(const ALayer: string): TAlphaColor;
+  var
+    Hue: Single;
+  begin
+    if not LayerColors.TryGetValue(ALayer, Result) then
+    begin
+      Hue := LayerIdx * HueShift;
+      Result := HslColor(Hue, 0.65, 0.55, PortAlpha);
+      LayerColors.Add(ALayer, Result);
+      Inc(LayerIdx);
+    end;
+  end;
+
+  // Draws every port shape of one cell, translated to its placed origin (and
+  // rotated 90 deg CCW for trunk cells). AWidth/AHeight are the cell's own
+  // dimensions in um; AX/AY are the placed top-left grid cell.
+  procedure DrawCellPorts(ACell: TCell; AX, AY: Integer;
+    AWidth, AHeight: Double; Rotated: Boolean);
+  var
+    Port: TPort;
+    Shape: TPortShape;
+    Wx1, Wy1, Wx2, Wy2: Double;
+  begin
+    if ACell = nil then
+      Exit;
+    for Port in ACell.Ports do
+      for Shape in Port.Shapes do
+      begin
+        Canvas.Fill.Color := LayerColor(Shape.Layer);
+        if Rotated then
+        begin
+          Wx1 := AX * Core + (AHeight - Shape.y2);
+          Wx2 := AX * Core + (AHeight - Shape.y1);
+          Wy1 := AY * Core + Shape.x1;
+          Wy2 := AY * Core + Shape.x2;
+        end
+        else
+        begin
+          Wx1 := AX * Core + Shape.x1;
+          Wx2 := AX * Core + Shape.x2;
+          Wy1 := AY * Core + Shape.y1;
+          Wy2 := AY * Core + Shape.y2;
+        end;
+        Canvas.FillRect(TRectF.Create(WX(Wx1), WY(Wy1), WX(Wx2), WY(Wy2)),
+          0, 0, [], 1.0);
+      end;
+    for Port in ACell.PowerPorts do
+      for Shape in Port.Shapes do
+      begin
+        Canvas.Fill.Color := LayerColor(Shape.Layer);
+        if Rotated then
+        begin
+          Wx1 := AX * Core + (AHeight - Shape.y2);
+          Wx2 := AX * Core + (AHeight - Shape.y1);
+          Wy1 := AY * Core + Shape.x1;
+          Wy2 := AY * Core + Shape.x2;
+        end
+        else
+        begin
+          Wx1 := AX * Core + Shape.x1;
+          Wx2 := AX * Core + Shape.x2;
+          Wy1 := AY * Core + Shape.y1;
+          Wy2 := AY * Core + Shape.y2;
+        end;
+        Canvas.FillRect(TRectF.Create(WX(Wx1), WY(Wy1), WX(Wx2), WY(Wy2)),
+          0, 0, [], 1.0);
+      end;
+  end;
+
+begin
+  R := TRectF.Create(0, 0, PaintBox4.Width, PaintBox4.Height);
+  Canvas.Fill.Color := TAlphaColorRec.White;
+  Canvas.FillRect(R, 0, 0, [], 1.0);
+
+  ClipState := Canvas.SaveState;
+  try
+    Canvas.IntersectClipRect(R);
+
+    if not (TryDimParse(EditCoreSize.Text, Core) and
+            TryDimParse(EditDieW.Text, DieW) and
+            TryDimParse(EditDieH.Text, DieH)) or
+       (Core <= 0) or (DieW <= 0) or (DieH <= 0) then
+    begin
+      Canvas.Fill.Color := TAlphaColorRec.Dimgray;
+      Canvas.FillText(R, 'No valid placement - check the Placement Configuration tab.',
+        False, 1.0, [], TTextAlign.Center, TTextAlign.Center);
+      Exit;
+    end;
+
+    Cols := Round(DieW / Core);
+    Rows := Round(DieH / Core);
+
+    if FRouteNeedsFit and (PaintBox4.Width > 20) and (PaintBox4.Height > 20) then
+    begin
+      FRouteZoom := (Min(PaintBox4.Width, PaintBox4.Height) - 20) / Max(DieW, DieH);
+      FRoutePanX := (PaintBox4.Width - DieW * FRouteZoom) / 2;
+      FRoutePanY := (PaintBox4.Height - DieH * FRouteZoom) / 2;
+      FRouteNeedsFit := False;
+    end;
+
+    LayerColors := TDictionary<string, TAlphaColor>.Create;
+    try
+      LayerIdx := 0;
+
+      // Die body.
+      Canvas.Fill.Color := $FFF2F2F2;
+      Canvas.FillRect(TRectF.Create(WX(0), WY(0), WX(DieW), WY(DieH)), 0, 0, [], 1.0);
+
+      // Placed logic cells (semi-transparent grey), then their ports.
+Canvas.Fill.Color := HslColor(0, 0, 0.6, CellAlpha / 255);
+      for i := 0 to High(FPlacedComponents) do
+      begin
+        P := FPlacedComponents[i];
+        Canvas.FillRect(TRectF.Create(WX(P.X * Core), WY(P.Y * Core),
+          WX((P.X + P.W) * Core), WY((P.Y + P.H) * Core)), 0, 0, [], 1.0);
+      end;
+      for i := 0 to High(FPlacedComponents) do
+      begin
+        P := FPlacedComponents[i];
+        if (P.Gate <> nil) and (P.Gate.Cell <> nil) then
+          DrawCellPorts(P.Gate.Cell, P.X, P.Y,
+            P.Gate.Cell.Width, P.Gate.Cell.Height, False);
+      end;
+
+      // Clock tree cells (interior nodes), unrotated.
+Canvas.Fill.Color := HslColor(0, 0, 0.6, CellAlpha / 255);
+      for ClkL := 0 to High(FClockSubtree) do
+        for ClkIdx := 0 to High(FClockSubtree[ClkL]) do
+        begin
+          ClkNode := FClockSubtree[ClkL][ClkIdx];
+          if ClkNode.IsLeaf then
+            Continue;
+          Canvas.FillRect(TRectF.Create(WX(ClkNode.X * Core), WY(ClkNode.Y * Core),
+            WX((ClkNode.X + ClkNode.W) * Core),
+            WY((ClkNode.Y + ClkNode.H) * Core)), 0, 0, [], 1.0);
+        end;
+      for ClkL := 0 to High(FClockSubtree) do
+        for ClkIdx := 0 to High(FClockSubtree[ClkL]) do
+        begin
+          ClkNode := FClockSubtree[ClkL][ClkIdx];
+          if ClkNode.IsLeaf or (ClkNode.Gate = nil) or (ClkNode.Gate.Cell = nil) then
+            Continue;
+          DrawCellPorts(ClkNode.Gate.Cell, ClkNode.X, ClkNode.Y,
+            ClkNode.Gate.Cell.Width, ClkNode.Gate.Cell.Height, False);
+        end;
+
+      // Trunk spine cells; trunk cells are rotated 90 deg CCW.
+Canvas.Fill.Color := HslColor(0, 0, 0.6, CellAlpha / 255);
+      for i := 0 to High(FSpine) do
+      begin
+        Sp := FSpine[i];
+        Canvas.FillRect(TRectF.Create(WX(Sp.X * Core), WY(Sp.Y * Core),
+          WX((Sp.X + Sp.W) * Core), WY((Sp.Y + Sp.H) * Core)), 0, 0, [], 1.0);
+      end;
+      for i := 0 to High(FSpine) do
+      begin
+        Sp := FSpine[i];
+        if (Sp.Gate <> nil) and (Sp.Gate.Cell <> nil) then
+          DrawCellPorts(Sp.Gate.Cell, Sp.X, Sp.Y,
+            Sp.Gate.Cell.Width, Sp.Gate.Cell.Height, Sp.Rotated);
+      end;
+
+      // Grid of core-block-sized squares (culled to the visible area).
+      BlockPx := Core * FRouteZoom;
+      if (BlockPx >= MinBlockPx) and (FRouteZoom > 0) then
+      begin
+        WorldX0 := (0 - FRoutePanX) / FRouteZoom;
+        WorldX1 := (PaintBox4.Width - FRoutePanX) / FRouteZoom;
+        WorldY0 := (0 - FRoutePanY) / FRouteZoom;
+        WorldY1 := (PaintBox4.Height - FRoutePanY) / FRouteZoom;
+
+        I0 := Trunc(WorldX0 / Core);
+        if I0 < 0 then I0 := 0;
+        I1 := Trunc(WorldX1 / Core) + 1;
+        if I1 > Cols then I1 := Cols;
+        J0 := Trunc(WorldY0 / Core);
+        if J0 < 0 then J0 := 0;
+        J1 := Trunc(WorldY1 / Core) + 1;
+        if J1 > Rows then J1 := Rows;
+
+        Canvas.Fill.Color := $FF909090;
+        for i := I0 to I1 do
+        begin
+          X := WX(i * Core);
+          Canvas.FillRect(TRectF.Create(X - GridHalf, WY(0), X + GridHalf, WY(DieH)),
+            0, 0, [], 1.0);
+        end;
+        for i := J0 to J1 do
+        begin
+          Y := WY(i * Core);
+          Canvas.FillRect(TRectF.Create(WX(0), Y - GridHalf, WX(DieW), Y + GridHalf),
+            0, 0, [], 1.0);
+        end;
+      end;
+
+      // Die boundary.
+      Canvas.Fill.Color := $FF404040;
+      Canvas.FillRect(TRectF.Create(WX(0) - BorderHalf, WY(0) - BorderHalf,
+        WX(DieW) + BorderHalf, WY(0) + BorderHalf), 0, 0, [], 1.0); // top
+      Canvas.FillRect(TRectF.Create(WX(0) - BorderHalf, WY(DieH) - BorderHalf,
+        WX(DieW) + BorderHalf, WY(DieH) + BorderHalf), 0, 0, [], 1.0); // bottom
+      Canvas.FillRect(TRectF.Create(WX(0) - BorderHalf, WY(0) - BorderHalf,
+        WX(0) + BorderHalf, WY(DieH) + BorderHalf), 0, 0, [], 1.0); // left
+      Canvas.FillRect(TRectF.Create(WX(DieW) - BorderHalf, WY(0) - BorderHalf,
+        WX(DieW) + BorderHalf, WY(DieH) + BorderHalf), 0, 0, [], 1.0); // right
+    finally
+      LayerColors.Free;
+    end;
+  finally
+    Canvas.RestoreState(ClipState);
+  end;
+end;
+
+procedure TForm1.PaintBox4MouseDown(Sender: TObject; Button: TMouseButton;
+  Shift: TShiftState; X, Y: Single);
+begin
+  if Button = TMouseButton.mbLeft then
+  begin
+    FRouteDragging := True;
+    FRouteDragX := X;
+    FRouteDragY := Y;
+  end;
+end;
+
+procedure TForm1.PaintBox4MouseMove(Sender: TObject; Shift: TShiftState;
+  X, Y: Single);
+begin
+  if FRouteDragging then
+  begin
+    FRoutePanX := FRoutePanX + (X - FRouteDragX);
+    FRoutePanY := FRoutePanY + (Y - FRouteDragY);
+    FRouteDragX := X;
+    FRouteDragY := Y;
+    RepaintRoutingPage;
+  end;
+end;
+
+procedure TForm1.PaintBox4MouseUp(Sender: TObject; Button: TMouseButton;
+  Shift: TShiftState; X, Y: Single);
+begin
+  FRouteDragging := False;
+end;
+
 procedure TForm1.FormMouseWheel(Sender: TObject; Shift: TShiftState;
   WheelDelta: Integer; var Handled: Boolean);
 var
@@ -4558,6 +4842,28 @@ begin
     begin
       Handled := True;
       RepaintFloorplanPage;
+    end;
+  end
+  else if TabControl1.TabIndex = TabRouting then
+  begin
+    // Zoom-out limit fits the whole die; zoom-in makes a block fill the canvas.
+    MinZ := 0.01;
+    MaxZ := 5.0;
+    if TryDimParse(EditCoreSize.Text, Core) and
+       TryDimParse(EditDieW.Text, DieW) and TryDimParse(EditDieH.Text, DieH) and
+       (Core > 0) and (DieW > 0) and (DieH > 0) and (PaintBox4.Height > 20) then
+    begin
+      MinZ := (Min(PaintBox4.Width, PaintBox4.Height) - 20) / Max(DieW, DieH);
+      MaxZ := (Max(PaintBox4.Width, PaintBox4.Height) - 20) / Core;
+      if MinZ < 0.01 then
+        MinZ := 0.01;
+      if MaxZ < MinZ then
+        MaxZ := MinZ;
+    end;
+    if ZoomAt(PaintBox4, FRoutePanX, FRoutePanY, FRouteZoom, MinZ, MaxZ) then
+    begin
+      Handled := True;
+      RepaintRoutingPage;
     end;
   end;
 end;
@@ -5417,6 +5723,23 @@ procedure TForm1.TabControl1Change(Sender: TObject);
 var
   Dummy: TStringList;
 begin
+  // Re-entrancy guard: bouncing back from the Routing tab to the Floorplan tab
+  // re-fires this handler; the Floorplan branch below does the rebuild.
+  if FSwitchingTab then
+    Exit;
+  // The Routing tab is only reachable once the placement is clean: reject the
+  // switch and bounce back to the Floorplan tab while it still has errors.
+  if (TabControl1.TabIndex = TabRouting) and (FFloorplanErrorCount > 0) then
+  begin
+    FSwitchingTab := True;
+    try
+      TabControl1.TabIndex := TabFloorplan;
+    finally
+      FSwitchingTab := False;
+    end;
+    UpdateUI;
+    Exit;
+  end;
   if TabControl1.TabIndex = TabComponents then
   begin
     SubTabControl.TabIndex := 0; // default to the Splitters sub-tab
@@ -5433,6 +5756,14 @@ begin
   end;
   if TabControl1.TabIndex = TabFloorplan then
     BuildFloorplan;
+  if TabControl1.TabIndex = TabRouting then
+  begin
+    FRoutePanX := 0;
+    FRoutePanY := 0;
+    FRouteZoom := 1.0;
+    FRouteNeedsFit := True;
+    RepaintRoutingPage;
+  end;
   if TabControl1.TabIndex = TabPipeline then
   begin
     FPanX := 0;
@@ -5654,6 +5985,11 @@ begin
   if TabControl1.TabIndex < TabControl1.TabCount - 1 then
     TabControl1.TabIndex := TabControl1.TabIndex + 1;
   UpdateUI;
+end;
+
+procedure TForm1.ButtonRunRoutingClick(Sender: TObject);
+begin
+  MemoRouting.Lines.Add('Routing not yet implemented.');
 end;
 
 end.
