@@ -98,6 +98,7 @@ type
     TabItem2: TTabItem;
     Button3: TButton;
     ListBox1: TListBox;
+    MemoLayers: TMemo;
     Label1: TLabel;
     Button5: TButton;
     Memo1: TMemo;
@@ -135,9 +136,12 @@ type
     ButtonOptimize: TButton;
     ButtonExport: TButton;
     CheckBoxShowNames: TCheckBox;
-    CheckBoxShowColors: TCheckBox;
-    CheckBoxShowWires: TCheckBox;
+    CheckBoxShowLogicWires: TCheckBox;
+    CheckBoxShowClockWires: TCheckBox;
+    CheckBoxShowFloorplan: TCheckBox;
+    CheckBoxShowCells: TCheckBox;
     ListBoxFloorplanErrors: TListBox;
+    SplitterErrors: TSplitter;
     ButtonBack: TButton;
     ButtonNext: TButton;
     OpenDialog1: TOpenDialog;
@@ -228,6 +232,13 @@ type
     FGatePlacement: TDictionary<TGateInstance, TPoint>; // gate -> grid cell
     FPadMap: TDictionary<string, TPoint>; // primary net -> immobile pad cell
     FPads: TArray<TPadConnection>; // ordered pads, for rendering
+    FPadOrderInput: TArray<Integer>; // display order of input pad indices
+    FPadOrderOutput: TArray<Integer>; // display order of output pad indices
+    FPadDragging: Boolean; // dragging a pad to reorder it
+    FPadDragIdx: Integer; // FPads index of the dragged pad
+    FPadDragX: Single; // dragged pad's current X (grid blocks)
+    FClockPadIdx: Integer; // FPads index of the clock input (-1 if none)
+    FDroppedCells: Integer; // logic cells that did not fit during placement
     FClockSubtree: TArray<TArray<TPlacedClockNode>>; // balanced subtree per layer
     FSpine: TArray<TSpineComponent>; // placed clock trunk (splitters + buffers)
     FPlacementModel: TBlifModel; // model used for floorplan (post-DFF pipeline)
@@ -254,7 +265,7 @@ type
     procedure UpdateRecentList;
     procedure RemoveRecentProject(const Path: string);
     procedure InitializePlacementConfig;
-    procedure ValidatePlacement;
+    procedure ValidateFloorplanLayout;
     procedure FormatPlacementFields;
     procedure AddPlacementMsg(const Text: string; Color: TAlphaColor; IsError: Boolean);
     procedure UpdateUI;
@@ -291,14 +302,20 @@ type
     function TotalManhattanDistance: Double;
     procedure UpdateManhattanDiagnostic;
     function GetPad(const ANetName: string; var P: TPoint): Boolean;
+    function PadSlotX(k, N, Right: Integer): Single;
+    function NearestPadSlot(DragX: Single; N, Right: Integer): Integer;
+    function PreviewPadOrder(const Ord: TArray<Integer>;
+      DragIdx, Slot: Integer): TArray<Integer>;
+    procedure ReapplyPadOrder;
+    function PadDisplayX(Idx: Integer): Integer;
     procedure BuildClockSubtreePlacements;
     procedure BuildSpinePlacement;
+    procedure ValidatePlacement;
     function NetManhattan(Net: TNet): Double;
     function CellCenterUm(G: TGateInstance; Core: Double;
       var UX, UY: Double): Boolean;
     procedure SetPlanCell(X, Y: Integer; Kind: TFloorplanCell; ALayer: Integer);
     function GetPlanCell(X, Y: Integer): TFloorplanCell;
-    function GetPlanLayer(X, Y: Integer): Integer;
     procedure FillPlanRect(X0, Y0, X1, Y1: Integer; Kind: TFloorplanCell;
       ALayer: Integer);
     procedure PaintBox3MouseDown(Sender: TObject; Button: TMouseButton;
@@ -388,6 +405,27 @@ begin
   end;
 
   FLib := Lib;
+  // Show the parsed layer stack (routing metals, via cuts, overlap).
+  MemoLayers.Lines.BeginUpdate;
+  try
+    MemoLayers.Lines.Clear;
+    for i := 0 to FLib.Layers.Count - 1 do
+      case FLib.Layers[i].LayerType of
+        ltRouting:
+          MemoLayers.Lines.Add(Format('%s: routing %s, W %.1f, P %.1f',
+            [FLib.Layers[i].Name, LowerCase(FLib.Layers[i].Direction),
+             FLib.Layers[i].Width, FLib.Layers[i].Pitch]));
+        ltCut:
+          MemoLayers.Lines.Add(Format('%s: via cut, W %.1f',
+            [FLib.Layers[i].Name, FLib.Layers[i].Width]));
+        ltOverlap:
+          MemoLayers.Lines.Add(Format('%s: overlap', [FLib.Layers[i].Name]));
+      else
+        MemoLayers.Lines.Add(FLib.Layers[i].Name);
+      end;
+  finally
+    MemoLayers.Lines.EndUpdate;
+  end;
   for i := 0 to FLib.Cells.Count - 1 do
     ListBox1.Items.Add(FLib.Cells[i].Name);
   Label1.Text := Format('Loaded %d cell(s) from %s',
@@ -484,9 +522,24 @@ begin
 end;
 
 procedure TForm1.UpdateUI;
+var
+  LibReady: Boolean;
 begin
+  LibReady := (FLib <> nil) and (FCellFolder <> '');
   Button3.Enabled := (FLib <> nil);
   Button5.Enabled := (FLib <> nil);
+  ListBox1.Enabled := LibReady;
+  MemoLayers.Enabled := LibReady;
+  if LibReady then
+  begin
+    ListBox1.Opacity := 1.0;
+    MemoLayers.Opacity := 1.0;
+  end
+  else
+  begin
+    ListBox1.Opacity := 0.5;
+    MemoLayers.Opacity := 0.5;
+  end;
   ButtonBack.Enabled := (TabControl1.TabIndex > 0);
   ButtonNext.Enabled := (FLib <> nil) and
     (TabControl1.TabIndex < TabControl1.TabCount - 1);
@@ -2110,9 +2163,27 @@ end;
 
 procedure TForm1.PaintBox3MouseDown(Sender: TObject; Button: TMouseButton;
   Shift: TShiftState; X, Y: Single);
+var
+  i, BlockX, BlockY: Integer;
 begin
   if Button = TMouseButton.mbLeft then
   begin
+    // Try to grab a pad cell first; otherwise pan the floorplan.
+    if FPlanZoom > 0 then
+    begin
+      BlockX := Trunc((X - FPlanPanX) / FPlanZoom / FPlanCore);
+      BlockY := Trunc((Y - FPlanPanY) / FPlanZoom / FPlanCore);
+      for i := 0 to High(FPads) do
+        if (i <> FClockPadIdx) and
+           (BlockX = FPads[i].X) and (BlockY = FPads[i].Y) then
+        begin
+          FPadDragging := True;
+          FPadDragIdx := i;
+          FPadDragX := (X - FPlanPanX) / FPlanZoom / FPlanCore;
+          RepaintFloorplanPage;
+          Exit;
+        end;
+    end;
     FPlanDragging := True;
     FPlanDragX := X;
     FPlanDragY := Y;
@@ -2121,8 +2192,20 @@ end;
 
 procedure TForm1.PaintBox3MouseMove(Sender: TObject; Shift: TShiftState;
   X, Y: Single);
+var
+  BlockX: Single;
 begin
-  if FPlanDragging then
+  if FPadDragging then
+  begin
+    BlockX := (X - FPlanPanX) / FPlanZoom / FPlanCore;
+    if BlockX < 1 then
+      BlockX := 1;
+    if BlockX > FPlanXRight - 1 then
+      BlockX := FPlanXRight - 1;
+    FPadDragX := BlockX;
+    RepaintFloorplanPage;
+  end
+  else if FPlanDragging then
   begin
     FPlanPanX := FPlanPanX + (X - FPlanDragX);
     FPlanPanY := FPlanPanY + (Y - FPlanDragY);
@@ -2134,7 +2217,29 @@ end;
 
 procedure TForm1.PaintBox3MouseUp(Sender: TObject; Button: TMouseButton;
   Shift: TShiftState; X, Y: Single);
+var
+  N, Slot: Integer;
 begin
+  if FPadDragging then
+  begin
+    // Snap to the nearest slot and commit the new order (persists across
+    // optimize, since only the pad-order arrays are changed).
+    if FPads[FPadDragIdx].IsInput then
+    begin
+      N := Length(FPadOrderInput);
+      Slot := NearestPadSlot(FPadDragX, N, FPlanXRight);
+      FPadOrderInput := PreviewPadOrder(FPadOrderInput, FPadDragIdx, Slot);
+    end
+    else
+    begin
+      N := Length(FPadOrderOutput);
+      Slot := NearestPadSlot(FPadDragX, N, FPlanXRight + 1 + FPlanRowHBlocks);
+      FPadOrderOutput := PreviewPadOrder(FPadOrderOutput, FPadDragIdx, Slot);
+    end;
+    ReapplyPadOrder;
+    FPadDragging := False;
+    RepaintFloorplanPage;
+  end;
   FPlanDragging := False;
 end;
 
@@ -2413,6 +2518,10 @@ begin
     Exit;
   if Length(FPlacedComponents) = 0 then
     Exit;
+  // Clear the previous diagnostics so the listbox shows only the CURRENT
+  // (post-optimize) overlaps/coverage, not the ones from the initial build.
+  ListBoxFloorplanErrors.Clear;
+  FManhattanItem := nil;
   // Phase 1 - untangle: order cells only by their neighbours on other layers,
   // alternating the sweep direction, so layer-to-layer wires align and stop
   // crossing before the full optimisation runs.
@@ -2445,6 +2554,7 @@ begin
   ResolvePlacementOverlaps; // guarantee cells never overlap
   BuildClockSubtreePlacements; // rebuild the balanced clock subtrees
   BuildSpinePlacement;
+  ValidateFloorplanLayout;
   UpdateManhattanDiagnostic;
   RepaintFloorplanPage;
 end;
@@ -2728,6 +2838,121 @@ begin
   Result := (FPadMap <> nil) and FPadMap.TryGetValue(ANetName, P);
 end;
 
+// X (grid blocks) of display slot k in a row of N pads, evenly spaced from
+// the left edge to Right (Right = row right for inputs, clock trunk right for
+// outputs).
+function TForm1.PadSlotX(k, N, Right: Integer): Single;
+begin
+  Result := 1 + (k + 0.5) * (Right - 2) / Max(1, N);
+end;
+
+// The slot (0..N-1) whose X is closest to DragX within [1, Right).
+function TForm1.NearestPadSlot(DragX: Single; N, Right: Integer): Integer;
+var
+  k: Integer;
+  BestD, D: Single;
+begin
+  Result := 0;
+  BestD := Abs(PadSlotX(0, N, Right) - DragX);
+  for k := 1 to N - 1 do
+  begin
+    D := Abs(PadSlotX(k, N, Right) - DragX);
+    if D < BestD then
+    begin
+      BestD := D;
+      Result := k;
+    end;
+  end;
+end;
+
+// Copy of the order array with DragIdx moved to display Slot (others shift).
+function TForm1.PreviewPadOrder(const Ord: TArray<Integer>;
+  DragIdx, Slot: Integer): TArray<Integer>;
+var
+  i, k: Integer;
+begin
+  Result := Copy(Ord);
+  k := -1;
+  for i := 0 to High(Result) do
+    if Result[i] = DragIdx then
+    begin
+      k := i;
+      Break;
+    end;
+  if k < 0 then
+    Exit;
+  for i := k to High(Result) - 1 do
+    Result[i] := Result[i + 1];
+  SetLength(Result, Length(Result) - 1);
+  SetLength(Result, Length(Result) + 1);
+  for i := High(Result) downto Slot + 1 do
+    Result[i] := Result[i - 1];
+  Result[Slot] := DragIdx;
+end;
+
+// Recomputes every pad's X position and FPadMap from the display orders.
+procedure TForm1.ReapplyPadOrder;
+var
+  N, M, k, Idx, X: Integer;
+begin
+  N := Length(FPadOrderInput);
+  M := Length(FPadOrderOutput);
+  for k := 0 to N - 1 do
+  begin
+    Idx := FPadOrderInput[k];
+    if (Idx >= 0) and (Idx < Length(FPads)) then
+    begin
+      X := Round(PadSlotX(k, N, FPlanXRight));
+      FPads[Idx].X := X;
+      FPadMap.AddOrSetValue(FPads[Idx].NetName, TPoint.Create(X, FPads[Idx].Y));
+    end;
+  end;
+  for k := 0 to M - 1 do
+  begin
+    Idx := FPadOrderOutput[k];
+    if (Idx >= 0) and (Idx < Length(FPads)) then
+    begin
+      X := Round(PadSlotX(k, M, FPlanXRight + 1 + FPlanRowHBlocks));
+      FPads[Idx].X := X;
+      FPadMap.AddOrSetValue(FPads[Idx].NetName, TPoint.Create(X, FPads[Idx].Y));
+    end;
+  end;
+end;
+
+// The X (grid blocks) at which a pad should be drawn. During a drag the dragged
+// pad follows the mouse and the rest of its set shift to the preview slots.
+function TForm1.PadDisplayX(Idx: Integer): Integer;
+var
+  N, k, Slot, Right: Integer;
+  Order: TArray<Integer>;
+begin
+  if not FPadDragging then
+    Exit(FPads[Idx].X);
+  if Idx = FPadDragIdx then
+    Exit(Round(FPadDragX));
+  if FPads[Idx].IsInput then
+  begin
+    N := Length(FPadOrderInput);
+    Right := FPlanXRight;
+    Slot := NearestPadSlot(FPadDragX, N, Right);
+    Order := PreviewPadOrder(FPadOrderInput, FPadDragIdx, Slot);
+    for k := 0 to High(Order) do
+      if Order[k] = Idx then
+        Exit(Round(PadSlotX(k, N, Right)));
+  end
+  else
+  begin
+    N := Length(FPadOrderOutput);
+    Right := FPlanXRight + 1 + FPlanRowHBlocks;
+    Slot := NearestPadSlot(FPadDragX, N, Right);
+    Order := PreviewPadOrder(FPadOrderOutput, FPadDragIdx, Slot);
+    for k := 0 to High(Order) do
+      if Order[k] = Idx then
+        Exit(Round(PadSlotX(k, N, Right)));
+  end;
+  Result := FPads[Idx].X;
+end;
+
 procedure TForm1.SetPlanCell(X, Y: Integer; Kind: TFloorplanCell; ALayer: Integer);
 begin
   if (X >= 0) and (X < FFloorplanW) and (Y >= 0) and (Y < FFloorplanH) then
@@ -2743,14 +2968,6 @@ begin
     Result := FFloorplan[Y * FFloorplanW + X]
   else
     Result := fcEmpty;
-end;
-
-function TForm1.GetPlanLayer(X, Y: Integer): Integer;
-begin
-  if (X >= 0) and (X < FFloorplanW) and (Y >= 0) and (Y < FFloorplanH) then
-    Result := FFloorplanLayer[Y * FFloorplanW + X]
-  else
-    Result := -1;
 end;
 
 procedure TForm1.FillPlanRect(X0, Y0, X1, Y1: Integer; Kind: TFloorplanCell;
@@ -2807,6 +3024,9 @@ var
   L, i, NumLayers: Integer;
   WidthSum, AllocBlocks, ClkWidth, ClkBlocks: Double;
   PadRec: TPadConnection;
+  ClockNetName: string;
+  ClockIsInput: Boolean;
+  InputPadIdx, OutputPadIdx: TArray<Integer>;
   RowNetName: string;
   Visited: TDictionary<TGateInstance, Boolean>;
   RowWidths: TArray<Integer>;
@@ -3031,43 +3251,86 @@ begin
     FPlanXRight := XRight;
     FPlanRowHBlocks := RowHBlocks;
 
-    // Build the immobile I/O anchor pads: primary inputs on the top row,
-    // primary outputs on the bottom row, equi-spaced in netlist order.
+    // Build the immobile I/O anchor pads. Inputs go on the top row; the clock
+    // input is placed on its own at the bottom of the die, in the middle of the
+    // clock trunk, where it feeds the base of the clock tree. Outputs go on the
+    // bottom row, spaced from the left edge to the clock trunk's right edge.
     SetLength(FPads, 0);
     FPadMap.Clear;
+    FClockPadIdx := -1;
     if FPlacementModel <> nil then
     begin
-      // Inputs (top row, Y = 0).
+      ClockNetName := '';
+      if FClockNet <> nil then
+        ClockNetName := FClockNet.SourceNet;
+      if ClockNetName = '' then
+        ClockNetName := ClockNetFor(FPlacementModel);
+      ClockIsInput := (ClockNetName <> '') and
+        (FPlacementModel.Inputs.IndexOf(ClockNetName) >= 0);
+
+      // Inputs (top row, Y = 0), excluding the clock input.
+      SetLength(InputPadIdx, 0);
       for i := 0 to FPlacementModel.Inputs.Count - 1 do
       begin
+        if ClockIsInput and
+           SameText(FPlacementModel.Inputs[i], ClockNetName) then
+          Continue;
         PadRec.NetName := FPlacementModel.Inputs[i];
-        PadRec.X := 1 + Round((i + 0.5) * Max(1, XRight - 2) /
-          Max(1, FPlacementModel.Inputs.Count));
+        PadRec.X := 0;
         PadRec.Y := 0;
+        PadRec.IsInput := True;
+        SetLength(FPads, Length(FPads) + 1);
+        FPads[High(FPads)] := PadRec;
+        SetLength(InputPadIdx, Length(InputPadIdx) + 1);
+        InputPadIdx[High(InputPadIdx)] := High(FPads);
+      end;
+      // Outputs (bottom row, Y = last row of the die).
+      SetLength(OutputPadIdx, 0);
+      for i := 0 to FPlacementModel.Outputs.Count - 1 do
+      begin
+        PadRec.NetName := FPlacementModel.Outputs[i];
+        PadRec.X := 0;
+        PadRec.Y := DieHBlocks - 1;
+        PadRec.IsInput := False;
+        SetLength(FPads, Length(FPads) + 1);
+        FPads[High(FPads)] := PadRec;
+        SetLength(OutputPadIdx, Length(OutputPadIdx) + 1);
+        OutputPadIdx[High(OutputPadIdx)] := High(FPads);
+      end;
+      // The clock input: bottom of the die, middle of the clock trunk.
+      if ClockIsInput then
+      begin
+        PadRec.NetName := ClockNetName;
+        PadRec.X := XRight + 1 + RowHBlocks div 2;
+        PadRec.Y := DieHBlocks - 1;
         PadRec.IsInput := True;
         SetLength(FPads, Length(FPads) + 1);
         FPads[High(FPads)] := PadRec;
         FPadMap.AddOrSetValue(PadRec.NetName,
           TPoint.Create(PadRec.X, PadRec.Y));
+        FClockPadIdx := High(FPads);
       end;
-      // Outputs (bottom row, Y = last row of the die).
-      for i := 0 to FPlacementModel.Outputs.Count - 1 do
+      // Initialize/preserve the display orders (FPads indices). A user
+      // reordering persists across rebuilds and optimise.
+      if Length(FPadOrderInput) <> Length(InputPadIdx) then
       begin
-        PadRec.NetName := FPlacementModel.Outputs[i];
-        PadRec.X := 1 + Round((i + 0.5) * Max(1, XRight - 2) /
-          Max(1, FPlacementModel.Outputs.Count));
-        PadRec.Y := DieHBlocks - 1;
-        PadRec.IsInput := False;
-        SetLength(FPads, Length(FPads) + 1);
-        FPads[High(FPads)] := PadRec;
-        FPadMap.AddOrSetValue(PadRec.NetName,
-          TPoint.Create(PadRec.X, PadRec.Y));
+        SetLength(FPadOrderInput, Length(InputPadIdx));
+        for i := 0 to High(FPadOrderInput) do
+          FPadOrderInput[i] := InputPadIdx[i];
       end;
+      if Length(FPadOrderOutput) <> Length(OutputPadIdx) then
+      begin
+        SetLength(FPadOrderOutput, Length(OutputPadIdx));
+        for i := 0 to High(FPadOrderOutput) do
+          FPadOrderOutput[i] := OutputPadIdx[i];
+      end;
+      ReapplyPadOrder;
     end;
 
     // Place logic gates (netlist order) into their layer's logic rows, one
     // component per cell with a one-cell gap. Clock placement and bias
     // connections are ignored for now.
+    FDroppedCells := 0;
     SetLength(FPlacedComponents, 0);
     FGatePlacement.Clear;
     SetLength(CurChunk, NumLayers);
@@ -3106,7 +3369,10 @@ begin
             CurX[L] := High(Integer);
         end;
         if CurChunk[L] >= LevelBandCount[L] then
+        begin
+          Inc(FDroppedCells);
           Continue; // no more room for this layer
+        end;
         BandIndex := LevelFirstBand[L] + CurChunk[L];
         RowY := BandStarts[BandIndex] + 1 + ((RowHBlocks - P.H) div 2);
         P.Gate := Gate;
@@ -3128,6 +3394,7 @@ begin
 
   BuildClockSubtreePlacements;
   BuildSpinePlacement;
+  ValidateFloorplanLayout;
   UpdateManhattanDiagnostic;
   RepaintFloorplanPage;
 end;
@@ -3646,6 +3913,103 @@ begin
   end;
 end;
 
+// Validates the finished placement: reports cross-set overlaps (logic cells,
+// clock cells, trunk cells, pads), dropped logic cells, and clock-tree
+// coverage gaps (clocked cells the placed tree failed to reach).
+procedure TForm1.ValidateFloorplanLayout;
+var
+  Occ: TDictionary<Int64, string>;
+  i, ClkL, ClkIdx, OverlapCount: Integer;
+  Expected, Actual: Integer;
+  Label_: string;
+
+  procedure MarkRect(X, Y, W, H: Integer; const ALabel: string);
+  var
+    dx, dy: Integer;
+    Key: Int64;
+  begin
+    for dy := 0 to H - 1 do
+      for dx := 0 to W - 1 do
+      begin
+        Key := Int64(Y + dy) * FFloorplanW + (X + dx);
+        if Occ.ContainsKey(Key) then
+        begin
+          Inc(OverlapCount);
+          if OverlapCount <= 8 then
+            AddFloorplanError(Format('Placement overlap: %s vs %s at (%d,%d).',
+              [Occ[Key], ALabel, X + dx, Y + dy]));
+        end
+        else
+          Occ.Add(Key, ALabel);
+      end;
+  end;
+
+begin
+  if (not FFloorplanValid) or (FFloorplanW <= 0) then
+    Exit;
+  Occ := TDictionary<Int64, string>.Create;
+  try
+    OverlapCount := 0;
+
+    // Logic cells.
+    for i := 0 to High(FPlacedComponents) do
+      MarkRect(FPlacedComponents[i].X, FPlacedComponents[i].Y,
+        FPlacedComponents[i].W, FPlacedComponents[i].H,
+        'logic ' + FPlacedComponents[i].InstanceName);
+    // Clock subtree cells (interior only; leaves are the logic cells).
+    for ClkL := 0 to High(FClockSubtree) do
+      for ClkIdx := 0 to High(FClockSubtree[ClkL]) do
+        if not FClockSubtree[ClkL][ClkIdx].IsLeaf then
+          MarkRect(FClockSubtree[ClkL][ClkIdx].X, FClockSubtree[ClkL][ClkIdx].Y,
+            FClockSubtree[ClkL][ClkIdx].W, FClockSubtree[ClkL][ClkIdx].H,
+            'clock cell');
+    // Trunk (spine) cells.
+    for i := 0 to High(FSpine) do
+    begin
+      if FSpine[i].IsJunction then
+        Label_ := 'junction'
+      else
+        Label_ := 'buffer';
+      MarkRect(FSpine[i].X, FSpine[i].Y, FSpine[i].W, FSpine[i].H, Label_);
+    end;
+    // Pads.
+    for i := 0 to High(FPads) do
+      MarkRect(FPads[i].X, FPads[i].Y, 1, 1, 'pad ' + FPads[i].NetName);
+
+    if OverlapCount > 0 then
+      AddFloorplanError(Format('Placement: %d overlapping grid cell(s).',
+        [OverlapCount]));
+
+    // Clock-tree coverage: every clocked cell in the model must be a leaf of
+    // the placed tree.
+    for ClkL := 0 to High(FClockSubtree) do
+    begin
+      Expected := 0;
+      if FPlacementModel <> nil then
+        for i := 0 to FPlacementModel.Gates.Count - 1 do
+          if (FPlacementModel.Gates[i].ClockLevel = FPlanLevels[ClkL]) and
+             CellHasClock(FPlacementModel.Gates[i].Cell) then
+            Inc(Expected);
+      Actual := 0;
+      for ClkIdx := 0 to High(FClockSubtree[ClkL]) do
+        if FClockSubtree[ClkL][ClkIdx].IsLeaf then
+          Inc(Actual);
+      if Actual < Expected then
+        AddFloorplanError(Format(
+          'Clock tree L%d: only %d of %d clocked cells covered by the tree.',
+          [FPlanLevels[ClkL], Actual, Expected]));
+    end;
+
+    // Dropped logic cells (could not fit their layer's rows).
+    if FDroppedCells > 0 then
+      AddFloorplanError(Format(
+        'Placement: %d logic cell(s) did not fit and were dropped.',
+        [FDroppedCells]));
+  finally
+    Occ.Free;
+  end;
+end;
+
 procedure TForm1.RepaintFloorplanPage;
 var
   i: Integer;
@@ -3760,8 +4124,8 @@ begin
 
     // Floorplan allocation (blue logic, green clock, red bias), run-merged
     // per row so large uniform regions draw as few rectangles. Hidden when the
-    // 'Layout colors' toggle is off.
-    if FFloorplanValid and (FPlanZoom > 0) and CheckBoxShowColors.IsChecked then
+    // 'Floorplan' toggle is off.
+    if FFloorplanValid and (FPlanZoom > 0) then
     begin
       BX0 := Trunc((0 - FPlanPanX) / FPlanZoom / Core);
       if BX0 < 0 then
@@ -3776,43 +4140,50 @@ begin
       if BY1 > FFloorplanH then
         BY1 := FFloorplanH;
 
-      for RowIdx := BY0 to BY1 - 1 do
+      // Region fills, hidden when the 'Floorplan' toggle is off. The cells,
+      // names, and pads below still draw (gated by their own toggles).
+      if CheckBoxShowFloorplan.IsChecked then
       begin
-        i := BX0;
-        while i < BX1 do
+        for RowIdx := BY0 to BY1 - 1 do
         begin
-          Kind := GetPlanCell(i, RowIdx);
-          if Kind = fcEmpty then
+          i := BX0;
+          while i < BX1 do
           begin
-            Inc(i);
-            Continue;
+            Kind := GetPlanCell(i, RowIdx);
+            if Kind = fcEmpty then
+            begin
+              Inc(i);
+              Continue;
+            end;
+            RunStart := i;
+            while (i < BX1) and (GetPlanCell(i, RowIdx) = Kind) do
+              Inc(i);
+            case Kind of
+              fcLogic: Canvas.Fill.Color := $FF2563C4;
+              fcClock: Canvas.Fill.Color := $FF6BA839;
+              fcBias:  Canvas.Fill.Color := $FFFF6251;
+              fcLogicFill: Canvas.Fill.Color := $FFE8F0FF;
+              fcClockFill: Canvas.Fill.Color := $FFF0F7E8;
+            end;
+            Canvas.FillRect(TRectF.Create(WX(RunStart * Core), WY(RowIdx * Core),
+              WX(i * Core), WY((RowIdx + 1) * Core)), 0, 0, [], 1.0);
           end;
-          RunStart := i;
-          while (i < BX1) and (GetPlanCell(i, RowIdx) = Kind) do
-            Inc(i);
-          case Kind of
-            fcLogic: Canvas.Fill.Color := $FF1565C0;
-            fcClock: Canvas.Fill.Color := $FF00C853;
-            fcBias:  Canvas.Fill.Color := $FFD50000;
-            fcLogicFill: Canvas.Fill.Color := $FF64B5F6;
-            fcClockFill: Canvas.Fill.Color := $FF81C784;
-          end;
-          Canvas.FillRect(TRectF.Create(WX(RunStart * Core), WY(RowIdx * Core),
-            WX(i * Core), WY((RowIdx + 1) * Core)), 0, 0, [], 1.0);
         end;
       end;
 
-      // Placed logic components (teal), culled to the visible range.
-      for i := 0 to High(FPlacedComponents) do
-      begin
-        P := FPlacedComponents[i];
-        if (P.X + P.W <= BX0) or (P.X >= BX1) or
-           (P.Y + P.H <= BY0) or (P.Y >= BY1) then
-          Continue;
-        Canvas.Fill.Color := $FF00BCD4;
-        Canvas.FillRect(TRectF.Create(WX(P.X * Core), WY(P.Y * Core),
-          WX((P.X + P.W) * Core), WY((P.Y + P.H) * Core)), 0, 0, [], 1.0);
-      end;
+      // Placed logic components (teal), culled to the visible range; hidden when the
+      // 'Cells' toggle is off.
+      if CheckBoxShowCells.IsChecked then
+        for i := 0 to High(FPlacedComponents) do
+        begin
+          P := FPlacedComponents[i];
+          if (P.X + P.W <= BX0) or (P.X >= BX1) or
+             (P.Y + P.H <= BY0) or (P.Y >= BY1) then
+            Continue;
+          Canvas.Fill.Color := $FF3A88FE;
+          Canvas.FillRect(TRectF.Create(WX(P.X * Core), WY(P.Y * Core),
+            WX((P.X + P.W) * Core), WY((P.Y + P.H) * Core)), 0, 0, [], 1.0);
+        end;
 
       // Cell names (when enabled): overlay each component's instance name.
       if CheckBoxShowNames.IsChecked then
@@ -3833,26 +4204,30 @@ begin
       end;
 
       // Clock cells (dark green), drawn with the logic cells so the grid
-      // overlays them. Their names show when the 'Cell names' toggle is on.
-      Canvas.Fill.Color := $FF1B5E20;
-      for ClkL := 0 to High(FClockSubtree) do
-        for ClkIdx := 0 to High(FClockSubtree[ClkL]) do
-        begin
-          ClkNode := FClockSubtree[ClkL][ClkIdx];
-          if ClkNode.IsLeaf then
-            Continue;
-          Canvas.FillRect(TRectF.Create(
-            WX(ClkNode.X * Core), WY(ClkNode.Y * Core),
-            WX((ClkNode.X + ClkNode.W) * Core),
-            WY((ClkNode.Y + ClkNode.H) * Core)), 0, 0, [], 1.0);
-        end;
-      for i := 0 to High(FSpine) do
+      // overlays them (hidden with the 'Cells' toggle). Their names show when
+      // the 'Cell names' toggle is on.
+      if CheckBoxShowCells.IsChecked then
       begin
-        SpineComp := FSpine[i];
-        Canvas.FillRect(TRectF.Create(
-          WX(SpineComp.X * Core), WY(SpineComp.Y * Core),
-          WX((SpineComp.X + SpineComp.W) * Core),
-          WY((SpineComp.Y + SpineComp.H) * Core)), 0, 0, [], 1.0);
+        Canvas.Fill.Color := $FF96D35F;
+        for ClkL := 0 to High(FClockSubtree) do
+          for ClkIdx := 0 to High(FClockSubtree[ClkL]) do
+          begin
+            ClkNode := FClockSubtree[ClkL][ClkIdx];
+            if ClkNode.IsLeaf then
+              Continue;
+            Canvas.FillRect(TRectF.Create(
+              WX(ClkNode.X * Core), WY(ClkNode.Y * Core),
+              WX((ClkNode.X + ClkNode.W) * Core),
+              WY((ClkNode.Y + ClkNode.H) * Core)), 0, 0, [], 1.0);
+          end;
+        for i := 0 to High(FSpine) do
+        begin
+          SpineComp := FSpine[i];
+          Canvas.FillRect(TRectF.Create(
+            WX(SpineComp.X * Core), WY(SpineComp.Y * Core),
+            WX((SpineComp.X + SpineComp.W) * Core),
+            WY((SpineComp.Y + SpineComp.H) * Core)), 0, 0, [], 1.0);
+        end;
       end;
       if CheckBoxShowNames.IsChecked then
       begin
@@ -3882,10 +4257,11 @@ begin
               TTextAlign.Center, TTextAlign.Center);
       end;
 
-      // Immobile I/O anchor pads (dark) with their port names.
+      // Immobile I/O anchor pads (dark) with their port names. During a drag the
+      // dragged pad follows the mouse and its set shifts to the preview slots.
       for i := 0 to High(FPads) do
       begin
-        PadPx := FPads[i].X;
+        PadPx := PadDisplayX(i);
         PadPy := FPads[i].Y;
         if (PadPx + 1 <= BX0) or (PadPx >= BX1) or
            (PadPy + 1 <= BY0) or (PadPy >= BY1) then
@@ -3894,10 +4270,17 @@ begin
         Canvas.FillRect(TRectF.Create(WX(PadPx * Core), WY(PadPy * Core),
           WX((PadPx + 1) * Core), WY((PadPy + 1) * Core)), 0, 0, [], 1.0);
         Canvas.Fill.Color := TAlphaColorRec.Black;
-        Canvas.FillText(TRectF.Create(
-          WX(PadPx * Core) + 2, WY(PadPy * Core) - 14,
-          WX(PadPx * Core) + 130, WY(PadPy * Core) + 14),
-          FPads[i].NetName, False, 1.0, [], TTextAlign.Leading, TTextAlign.Center);
+        // Input labels sit above the block, output labels below it.
+        if FPads[i].IsInput then
+          Canvas.FillText(TRectF.Create(
+            WX(PadPx * Core) + 2, WY(PadPy * Core) - 16,
+            WX(PadPx * Core) + 130, WY(PadPy * Core) - 2),
+            FPads[i].NetName, False, 1.0, [], TTextAlign.Leading, TTextAlign.Center)
+        else
+          Canvas.FillText(TRectF.Create(
+            WX(PadPx * Core) + 2, WY((PadPy + 1) * Core) + 2,
+            WX(PadPx * Core) + 130, WY((PadPy + 1) * Core) + 16),
+            FPads[i].NetName, False, 1.0, [], TTextAlign.Leading, TTextAlign.Center);
       end;
     end;
 
@@ -3950,11 +4333,11 @@ begin
 
     // DEBUG: temporary net connections between placed components. Clock pins
     // are skipped (the clock network is not placed yet). Remove with the
-    // DrawDebugNets flag; hidden when the 'Component wires' toggle is off.
-    if DrawDebugNets and CheckBoxShowWires.IsChecked and (FPlacementModel <> nil) then
+    // DrawDebugNets flag; hidden when the 'Logic connections' toggle is off.
+    if DrawDebugNets and CheckBoxShowLogicWires.IsChecked and (FPlacementModel <> nil) then
     begin
       Canvas.Stroke.Kind := TBrushKind.Solid;
-      Canvas.Stroke.Color := $FF000000;
+      Canvas.Stroke.Color := $FF7BA8FF;
       Canvas.Stroke.Thickness := 2;
       for Pair in FPlacementModel.Nets do
       begin
@@ -3985,15 +4368,44 @@ begin
             Canvas.DrawLine(TPointF.Create(SX1, SY1), TPointF.Create(SX2, SY2), 1.0);
         end;
       end;
+      // Pad wires: connect every data input/output pad to its net's gates (the
+      // clock input pad is drawn with the clock wires instead).
+      for i := 0 to High(FPads) do
+      begin
+        if i = FClockPadIdx then
+          Continue;
+        if not FPlacementModel.Nets.TryGetValue(FPads[i].NetName, Net) then
+          Continue;
+        SX1 := WX((FPads[i].X + 0.5) * Core);
+        SY1 := WY((FPads[i].Y + 0.5) * Core);
+        if FPads[i].IsInput then
+        begin
+          for NC2 in Net.Connections do
+            if (not NC2.IsDriver) and
+               FGatePlacement.ContainsKey(NC2.Gate) and
+               PlacedCenter(NC2.Gate, SX2, SY2) then
+              Canvas.DrawLine(TPointF.Create(SX1, SY1),
+                TPointF.Create(SX2, SY2), 1.0);
+        end
+        else
+        begin
+          for NC2 in Net.Connections do
+            if NC2.IsDriver and
+               FGatePlacement.ContainsKey(NC2.Gate) and
+               PlacedCenter(NC2.Gate, SX2, SY2) then
+              Canvas.DrawLine(TPointF.Create(SX1, SY1),
+                TPointF.Create(SX2, SY2), 1.0);
+        end;
+      end;
     end;
 
-    // Clock connections (white) drawn on top; hidden by the 'Component wires'
+    // Clock connections (white) drawn on top; hidden by the 'Clock connections'
     // toggle. The clock cells themselves are drawn earlier, under the grid,
     // together with the logic cells.
-    if CheckBoxShowWires.IsChecked then
+    if CheckBoxShowClockWires.IsChecked then
     begin
       Canvas.Stroke.Kind := TBrushKind.Solid;
-      Canvas.Stroke.Color := TAlphaColorRec.White;
+      Canvas.Stroke.Color := $FFB8E68E;
       Canvas.Stroke.Thickness := 1.5;
       // Subtree wires.
       for ClkL := 0 to High(FClockSubtree) do
@@ -4059,6 +4471,14 @@ begin
               WY((FClockSubtree[SpineL][0].Y +
                 FClockSubtree[SpineL][0].H div 2) * Core)), 1.0);
       end;
+      // Clock input pad: connect it to the base of the clock tree (the first
+      // spine cell), where it feeds the counter-flow network.
+      if (FClockPadIdx >= 0) and (High(FSpine) >= 0) then
+        Canvas.DrawLine(
+          TPointF.Create(WX((FPads[FClockPadIdx].X + 0.5) * Core),
+            WY((FPads[FClockPadIdx].Y + 0.5) * Core)),
+          TPointF.Create(WX((FSpine[0].X + FSpine[0].W div 2) * Core),
+            WY((FSpine[0].Y + FSpine[0].H div 2) * Core)), 1.0);
     end;
   finally
     Canvas.RestoreState(ClipState);

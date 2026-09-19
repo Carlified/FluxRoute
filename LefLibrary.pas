@@ -1,4 +1,4 @@
-unit LefLibrary;
+﻿unit LefLibrary;
 
 interface
 
@@ -12,6 +12,19 @@ uses
 
 type
   TPinDirection = (pdUnknown, pdInput, pdOutput, pdInOut); //Delphi version of enum
+
+  TLefLayerType = (ltUnknown, ltRouting, ltCut, ltOverlap);
+
+  // One top-level LAYER definition from the LEF (a routing metal, a via cut,
+  // or the overlap layer). Layers are assumed to be listed in stack order.
+  TLefLayer = class
+  public
+    Name: string;
+    LayerType: TLefLayerType;
+    Direction: string; // 'HORIZONTAL' / 'VERTICAL' / '' for cut/overlap
+    Width: Double;
+    Pitch: Double;
+  end;
 
   TPortShape = class //assumes port is a rect - no reason to think otherwise
   public
@@ -46,6 +59,7 @@ type
   public
     Cells: TObjectList<TCell>;
     CellsByName: TDictionary<string, TCell>; //used for verifying blif files
+    Layers: TObjectList<TLefLayer>; // routing/via/overlap layers, in stack order
     constructor Create;
     destructor Destroy; override;
     // Returns nil if the cell doesn't exist in the library.
@@ -115,10 +129,12 @@ constructor TLibrary.Create;
 begin
   Cells := TObjectList<TCell>.Create(True);
   CellsByName := TDictionary<string, TCell>.Create(TIStringComparer.Ordinal);
+  Layers := TObjectList<TLefLayer>.Create(True);
 end;
 
 destructor TLibrary.Destroy;
 begin
+  Layers.Free;
   Cells.Free;
   CellsByName.Free; // does not own the TCell objects -- Cells does
   inherited;
@@ -188,6 +204,8 @@ var
   Parts: TArray<string>;
   CurrentCell: TCell;
   CurrentPort: TPort;
+  CurrentLefLayer: TLefLayer;
+  InVia: Boolean;
   Shape: TPortShape;
   CurrentLayer: string;
   Inv: TFormatSettings;
@@ -201,13 +219,66 @@ begin
     Lines.LoadFromFile(FileName);
     CurrentCell := nil;
     CurrentPort := nil;
+    CurrentLefLayer := nil;
     CurrentLayer := '';
+    InVia := False;
 
     for i := 0 to Lines.Count - 1 do
     begin
       Line := Trim(Lines[i]);
 
-      if StartsText('MACRO', Line) then
+      if (CurrentCell = nil) and (not InVia) and StartsText('LAYER', Line) then
+      begin
+        // Top-level layer definition (a routing metal, a via cut, or overlap).
+        Parts := Line.Split([' '], TStringSplitOptions.ExcludeEmpty);
+        CurrentLefLayer := TLefLayer.Create;
+        CurrentLefLayer.Name := Parts[1];
+        CurrentLefLayer.Direction := '';
+        CurrentLefLayer.Width := 0;
+        CurrentLefLayer.Pitch := 0;
+        Result.Layers.Add(CurrentLefLayer);
+      end
+
+      else if (CurrentLefLayer <> nil) and StartsText('TYPE', Line) then
+      begin
+        Parts := Line.Split([' '], TStringSplitOptions.ExcludeEmpty);
+        if SameText(Parts[1], 'ROUTING') then
+          CurrentLefLayer.LayerType := ltRouting
+        else if SameText(Parts[1], 'CUT') then
+          CurrentLefLayer.LayerType := ltCut
+        else if SameText(Parts[1], 'OVERLAP') then
+          CurrentLefLayer.LayerType := ltOverlap
+        else
+          CurrentLefLayer.LayerType := ltUnknown;
+      end
+
+      else if (CurrentLefLayer <> nil) and StartsText('DIRECTION', Line) then
+      begin
+        Parts := Line.Split([' '], TStringSplitOptions.ExcludeEmpty);
+        if Length(Parts) > 1 then
+          CurrentLefLayer.Direction := Parts[1];
+      end
+
+      else if (CurrentLefLayer <> nil) and StartsText('WIDTH', Line) then
+      begin
+        // The layer width is a single value followed by ';'; spacing-table
+        // widths (multiple values) are ignored.
+        Parts := Line.Split([' '], TStringSplitOptions.ExcludeEmpty);
+        if (Length(Parts) = 3) and SameText(Parts[2], ';') then
+          CurrentLefLayer.Width := StrToFloat(Parts[1], Inv);
+      end
+
+      else if (CurrentLefLayer <> nil) and StartsText('PITCH', Line) then
+      begin
+        Parts := Line.Split([' '], TStringSplitOptions.ExcludeEmpty);
+        if Length(Parts) > 1 then
+          CurrentLefLayer.Pitch := StrToFloat(Parts[1], Inv);
+      end
+
+      else if (CurrentCell = nil) and StartsText('VIA', Line) then
+        InVia := True // VIA sections describe via geometry; skip their internals
+
+      else if StartsText('MACRO', Line) then
       begin
         Parts := Line.Split([' '], TStringSplitOptions.ExcludeEmpty);
         CurrentCell := TCell.Create;
@@ -262,10 +333,14 @@ begin
 
       else if StartsText('END', Line) then
       begin
-        if Assigned(CurrentCell) then
+        Parts := Line.Split([' '], TStringSplitOptions.ExcludeEmpty);
+        if Length(Parts) > 1 then //if line not just a single end statement
         begin
-          Parts := Line.Split([' '], TStringSplitOptions.ExcludeEmpty);
-          if Length(Parts) > 1 then //if line not just a single end statement
+          if InVia then
+            InVia := False // end of a VIA section
+          else if (CurrentLefLayer <> nil) and SameText(Parts[1], CurrentLefLayer.Name) then
+            CurrentLefLayer := nil // end of a top-level LAYER
+          else if Assigned(CurrentCell) then
           begin
             if SameText(Parts[1], CurrentCell.Name) then
             begin

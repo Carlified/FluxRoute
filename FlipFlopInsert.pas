@@ -1,4 +1,4 @@
-unit FlipFlopInsert;
+﻿unit FlipFlopInsert;
 
 interface
 
@@ -165,7 +165,7 @@ var
   InsertedFFs: TDictionary<TGateInstance, Boolean>;
   Count, i, j, jj, N, LA, Expected, NetCounter: Integer;
   B, Gate, S, FF_br: TGateInstance;
-  Conn, CC: TPinConnection;
+  Conn: TPinConnection;
   Net, PrevNet, NewNet, OutNet, OutNet2, Nin, Nin2: TNet;
   NC: TNetConnection;
   ChildName: string;
@@ -181,7 +181,6 @@ var
     NC2: TNetConnection;
     LoadCount, OutCount: Integer;
   begin
-    Result := False;
     OutCount := 0;
     for Conn2 in S.Connections do
       if Conn2.Port.Direction = pdOutput then
@@ -874,7 +873,6 @@ var
     FF_Gate: TGateInstance;
     OutConn: TPinConnection;
   begin
-    Result := False;
     OutCount := 0;
     SplitterDelay := CellDelayOfLocal(S.Cell);
     MaxPath := 0;

@@ -210,13 +210,32 @@
           OnClick = Button3Click
         end
       end
+      object MemoLayers: TMemo
+        Touch.InteractiveGestures = [Pan, LongTap, DoubleTap]
+        DataDetectorTypes = []
+        ReadOnly = True
+        Enabled = False
+        Align = Right
+        Margins.Top = 12.000000000000000000
+        Margins.Right = 16.000000000000000000
+        Margins.Bottom = 16.000000000000000000
+        Position.X = 424.000000000000000000
+        Position.Y = 96.000000000000000000
+        Size.Width = 200.000000000000000000
+        Size.Height = 312.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 5
+        Viewport.Width = 200.000000000000000000
+        Viewport.Height = 312.000000000000000000
+      end
       object ListBox1: TListBox
         Align = Client
+        Enabled = False
         Margins.Left = 16.000000000000000000
         Margins.Top = 12.000000000000000000
         Margins.Right = 16.000000000000000000
         Margins.Bottom = 16.000000000000000000
-        Size.Width = 608.000000000000000000
+        Size.Width = 392.000000000000000000
         Size.Height = 312.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 6
@@ -827,6 +846,9 @@
         Margins.Left = 8.000000000000000000
         Margins.Top = 8.000000000000000000
         Margins.Right = 8.000000000000000000
+        Position.X = 8.000000000000000000
+        Position.Y = 8.000000000000000000
+        Size.Width = 624.000000000000000000
         Size.Height = 32.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 2
@@ -842,6 +864,7 @@
         object ButtonExport: TButton
           Align = Left
           Margins.Left = 8.000000000000000000
+          Position.X = 208.000000000000000000
           Size.Width = 130.000000000000000000
           Size.Height = 32.000000000000000000
           Size.PlatformDefault = False
@@ -854,39 +877,67 @@
         Align = Top
         Margins.Left = 8.000000000000000000
         Margins.Right = 8.000000000000000000
+        Position.X = 8.000000000000000000
+        Position.Y = 40.000000000000000000
+        Size.Width = 624.000000000000000000
         Size.Height = 28.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 3
         object CheckBoxShowNames: TCheckBox
           Align = Left
-          Size.Width = 100.000000000000000000
+          Size.Width = 90.000000000000000000
           Size.Height = 28.000000000000000000
           Size.PlatformDefault = False
           TabOrder = 0
-          IsChecked = True
           Text = 'Cell names'
           OnChange = CheckBoxToggleChange
         end
-        object CheckBoxShowColors: TCheckBox
+        object CheckBoxShowLogicWires: TCheckBox
           Align = Left
+          IsChecked = True
           Margins.Left = 8.000000000000000000
+          Position.X = 98.000000000000000000
           Size.Width = 110.000000000000000000
           Size.Height = 28.000000000000000000
           Size.PlatformDefault = False
           TabOrder = 1
-          IsChecked = True
-          Text = 'Layout colors'
+          Text = 'Logic connections'
           OnChange = CheckBoxToggleChange
         end
-        object CheckBoxShowWires: TCheckBox
+        object CheckBoxShowClockWires: TCheckBox
           Align = Left
+          IsChecked = True
           Margins.Left = 8.000000000000000000
-          Size.Width = 120.000000000000000000
+          Position.X = 216.000000000000000000
+          Size.Width = 115.000000000000000000
           Size.Height = 28.000000000000000000
           Size.PlatformDefault = False
           TabOrder = 2
+          Text = 'Clock connections'
+          OnChange = CheckBoxToggleChange
+        end
+        object CheckBoxShowFloorplan: TCheckBox
+          Align = Left
           IsChecked = True
-          Text = 'Component wires'
+          Margins.Left = 8.000000000000000000
+          Position.X = 339.000000000000000000
+          Size.Width = 90.000000000000000000
+          Size.Height = 28.000000000000000000
+          Size.PlatformDefault = False
+          TabOrder = 3
+          Text = 'Floorplan'
+          OnChange = CheckBoxToggleChange
+        end
+        object CheckBoxShowCells: TCheckBox
+          Align = Left
+          IsChecked = True
+          Margins.Left = 8.000000000000000000
+          Position.X = 437.000000000000000000
+          Size.Width = 70.000000000000000000
+          Size.Height = 28.000000000000000000
+          Size.PlatformDefault = False
+          TabOrder = 4
+          Text = 'Cells'
           OnChange = CheckBoxToggleChange
         end
       end
@@ -895,6 +946,9 @@
         Margins.Left = 8.000000000000000000
         Margins.Right = 8.000000000000000000
         Margins.Bottom = 8.000000000000000000
+        Position.X = 8.000000000000000000
+        Position.Y = 296.000000000000000000
+        Size.Width = 624.000000000000000000
         Size.Height = 120.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 1
@@ -902,11 +956,22 @@
         DefaultItemStyles.ItemStyle = ''
         DefaultItemStyles.GroupHeaderStyle = ''
         DefaultItemStyles.GroupFooterStyle = ''
+        Viewport.Width = 200.000000000000000000
+        Viewport.Height = 120.000000000000000000
+      end
+      object SplitterErrors: TSplitter
+        Align = Bottom
+        Cursor = crVSplit
+        MinSize = 20.000000000000000000
+        Position.Y = 291.000000000000000000
+        Size.Width = 640.000000000000000000
+        Size.Height = 5.000000000000000000
+        Size.PlatformDefault = False
       end
       object PaintBox3: TPaintBox
         Align = Client
         Size.Width = 640.000000000000000000
-        Size.Height = 296.000000000000000000
+        Size.Height = 223.000000000000000000
         Size.PlatformDefault = False
       end
     end
