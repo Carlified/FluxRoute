@@ -1,4 +1,4 @@
-﻿object Form1: TForm1
+object Form1: TForm1
   Left = 0
   Top = 0
   Caption = 'FluxRoute'
@@ -23,6 +23,8 @@
     TabOrder = 2
     TabPosition = None
     Sizes = (
+      640s
+      424s
       640s
       424s
       640s
@@ -214,8 +216,8 @@
         Touch.InteractiveGestures = [Pan, LongTap, DoubleTap]
         DataDetectorTypes = []
         ReadOnly = True
-        Enabled = False
         Align = Right
+        Enabled = False
         Margins.Top = 12.000000000000000000
         Margins.Right = 16.000000000000000000
         Margins.Bottom = 16.000000000000000000
@@ -243,8 +245,8 @@
         DefaultItemStyles.ItemStyle = ''
         DefaultItemStyles.GroupHeaderStyle = ''
         DefaultItemStyles.GroupFooterStyle = ''
-        Viewport.Width = 200.000000000000000000
-        Viewport.Height = 200.000000000000000000
+        Viewport.Width = 388.000000000000000000
+        Viewport.Height = 308.000000000000000000
       end
     end
     object TabItem3: TTabItem
@@ -326,8 +328,8 @@
               DefaultItemStyles.ItemStyle = ''
               DefaultItemStyles.GroupHeaderStyle = ''
               DefaultItemStyles.GroupFooterStyle = ''
-              Viewport.Width = 200.000000000000000000
-              Viewport.Height = 200.000000000000000000
+              Viewport.Width = 296.000000000000000000
+              Viewport.Height = 334.000000000000000000
             end
           end
           object SubTabDFF: TTabItem
@@ -354,8 +356,8 @@
               DefaultItemStyles.ItemStyle = ''
               DefaultItemStyles.GroupHeaderStyle = ''
               DefaultItemStyles.GroupFooterStyle = ''
-              Viewport.Width = 200.000000000000000000
-              Viewport.Height = 200.000000000000000000
+              Viewport.Width = 296.000000000000000000
+              Viewport.Height = 334.000000000000000000
             end
           end
           object SubTabBuffers: TTabItem
@@ -382,8 +384,8 @@
               DefaultItemStyles.ItemStyle = ''
               DefaultItemStyles.GroupHeaderStyle = ''
               DefaultItemStyles.GroupFooterStyle = ''
-              Viewport.Width = 200.000000000000000000
-              Viewport.Height = 200.000000000000000000
+              Viewport.Width = 296.000000000000000000
+              Viewport.Height = 334.000000000000000000
             end
           end
         end
@@ -398,8 +400,8 @@
           DefaultItemStyles.ItemStyle = ''
           DefaultItemStyles.GroupHeaderStyle = ''
           DefaultItemStyles.GroupFooterStyle = ''
-          Viewport.Width = 200.000000000000000000
-          Viewport.Height = 200.000000000000000000
+          Viewport.Width = 296.000000000000000000
+          Viewport.Height = 360.000000000000000000
         end
       end
     end
@@ -602,7 +604,7 @@
       object LayoutPlacementTop: TLayout
         Align = Top
         Size.Width = 640.000000000000000000
-        Size.Height = 272.000000000000000000
+        Size.Height = 304.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 1
         object LabelPlacementTitle: TLabel
@@ -799,9 +801,28 @@
           OnChange = EditPlacementChanged
           OnKeyDown = EditPlacementKeyDown
         end
-        object LabelPlacementErrors: TLabel
+        object LabelBiasLayer: TLabel
           Position.X = 24.000000000000000000
           Position.Y = 252.000000000000000000
+          Size.Width = 170.000000000000000000
+          Size.Height = 20.000000000000000000
+          Size.PlatformDefault = False
+          Text = 'Bias routing layer:'
+          TabOrder = 24
+        end
+        object ComboBiasLayer: TComboBox
+          Touch.InteractiveGestures = [LongTap, DoubleTap]
+          Position.X = 200.000000000000000000
+          Position.Y = 248.000000000000000000
+          Size.Width = 140.000000000000000000
+          Size.Height = 26.000000000000000000
+          Size.PlatformDefault = False
+          TabOrder = 25
+          OnChange = ComboBiasLayerChange
+        end
+        object LabelPlacementErrors: TLabel
+          Position.X = 24.000000000000000000
+          Position.Y = 284.000000000000000000
           Size.Width = 592.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
@@ -816,15 +837,15 @@
         Margins.Right = 24.000000000000000000
         Margins.Bottom = 16.000000000000000000
         Size.Width = 592.000000000000000000
-        Size.Height = 132.000000000000000000
+        Size.Height = 100.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 10
         DisableFocusEffect = True
         DefaultItemStyles.ItemStyle = ''
         DefaultItemStyles.GroupHeaderStyle = ''
         DefaultItemStyles.GroupFooterStyle = ''
-        Viewport.Width = 200.000000000000000000
-        Viewport.Height = 200.000000000000000000
+        Viewport.Width = 588.000000000000000000
+        Viewport.Height = 128.000000000000000000
       end
     end
     object TabItem7: TTabItem
@@ -849,17 +870,30 @@
         Position.X = 8.000000000000000000
         Position.Y = 8.000000000000000000
         Size.Width = 624.000000000000000000
-        Size.Height = 32.000000000000000000
+        Size.Height = 72.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 2
         object ButtonOptimize: TButton
-          Align = Client
+          Align = Top
           Size.Width = 624.000000000000000000
           Size.Height = 32.000000000000000000
           Size.PlatformDefault = False
+          TabOrder = 0
           Text = 'Optimize Placement'
           TextSettings.Trimming = None
           OnClick = ButtonOptimizeClick
+        end
+        object ButtonExpandBias: TButton
+          Align = Top
+          Margins.Top = 4.000000000000000000
+          Position.Y = 36.000000000000000000
+          Size.Width = 624.000000000000000000
+          Size.Height = 32.000000000000000000
+          Size.PlatformDefault = False
+          TabOrder = 1
+          Text = 'Expand Bias Lines'
+          TextSettings.Trimming = None
+          OnClick = ButtonExpandBiasClick
         end
       end
       object LayoutToggles: TLayout
@@ -867,7 +901,7 @@
         Margins.Left = 8.000000000000000000
         Margins.Right = 8.000000000000000000
         Position.X = 8.000000000000000000
-        Position.Y = 40.000000000000000000
+        Position.Y = 80.000000000000000000
         Size.Width = 624.000000000000000000
         Size.Height = 28.000000000000000000
         Size.PlatformDefault = False
@@ -945,8 +979,8 @@
         DefaultItemStyles.ItemStyle = ''
         DefaultItemStyles.GroupHeaderStyle = ''
         DefaultItemStyles.GroupFooterStyle = ''
-        Viewport.Width = 200.000000000000000000
-        Viewport.Height = 60.000000000000000000
+        Viewport.Width = 620.000000000000000000
+        Viewport.Height = 56.000000000000000000
       end
       object SplitterErrors: TSplitter
         Align = Bottom
@@ -960,7 +994,7 @@
       object PaintBox3: TPaintBox
         Align = Client
         Size.Width = 640.000000000000000000
-        Size.Height = 283.000000000000000000
+        Size.Height = 243.000000000000000000
         Size.PlatformDefault = False
       end
     end
@@ -983,7 +1017,10 @@
         Margins.Left = 8.000000000000000000
         Margins.Top = 8.000000000000000000
         Margins.Bottom = 8.000000000000000000
+        Position.X = 8.000000000000000000
+        Position.Y = 8.000000000000000000
         Size.Width = 192.000000000000000000
+        Size.Height = 408.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 0
         object ButtonRunRouting: TButton
@@ -998,27 +1035,30 @@
         object MemoRouting: TMemo
           Touch.InteractiveGestures = [Pan, LongTap, DoubleTap]
           DataDetectorTypes = []
+          ReadOnly = True
           Align = Client
           Margins.Top = 8.000000000000000000
           Size.Width = 192.000000000000000000
-          Size.Height = 360.000000000000000000
+          Size.Height = 368.000000000000000000
           Size.PlatformDefault = False
           TabOrder = 1
-          ReadOnly = True
+          Viewport.Width = 192.000000000000000000
+          Viewport.Height = 368.000000000000000000
         end
       end
       object SplitterRouting: TSplitter
         Align = Left
         Cursor = crHSplit
         MinSize = 20.000000000000000000
+        Position.X = 200.000000000000000000
         Size.Width = 5.000000000000000000
-        Size.Height = 408.000000000000000000
+        Size.Height = 424.000000000000000000
         Size.PlatformDefault = False
       end
       object PaintBox4: TPaintBox
         Align = Client
         Size.Width = 435.000000000000000000
-        Size.Height = 408.000000000000000000
+        Size.Height = 424.000000000000000000
         Size.PlatformDefault = False
       end
     end

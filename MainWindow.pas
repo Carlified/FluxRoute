@@ -52,6 +52,22 @@ type
     W, H: Integer; // component size in grid cells (cell width/height / core)
   end;
 
+  // One power port of a placed cell on a given edge, in grid coordinates. Used
+  // to partition the row's bias demand into groups and to route the bias lines.
+  TBiasPort = record
+    Gate: TGateInstance;
+    Edge: TPortEdge; // peTop or peBottom
+    X, Y: Integer;   // port grid block (the offshoot connects here)
+    CurrentUa: Double;
+  end;
+
+  // One partition of a channel's side: the ports it contains (left to right)
+  // plus the total current it must carry.
+  TBiasGroup = record
+    Ports: TArray<TBiasPort>; // the group's ports, in placement order
+    TotalUa: Double;
+  end;
+
   // Immobile I/O anchor: an external input/output net pinned to a grid block
   // at the top/bottom of the die. Used to anchor the barycentre relaxation so
   // the layout cannot float freely.
@@ -83,6 +99,52 @@ type
     W, H: Integer; // placed footprint
     Rotated: Boolean;
     Band: Integer; // -1 = in the trunk; else the overflow band index
+  end;
+
+  // One routed trace: the net it belongs to and the grid blocks (cell centres)
+// it passes through, in order. Layers holds the routing-layer name for each
+// point (via crossings change the layer between consecutive points).
+  TRoutedTrace = record
+    NetName: string;
+    Points: TArray<TPoint>;
+    Layers: TArray<string>;
+  end;
+
+// One A* search node: grid cell + routing layer + the direction the trace came
+// from (for the bend penalty). Dir: 0=E,1=W,2=S,3=N, -1 = start (no direction).
+  TAStarNode = record
+    X, Y: Integer;
+    Dir: Integer;
+    Layer: Integer; // index into FRouteLayers
+    G: Integer;  // steps so far + bend/via penalties
+  end;
+
+  // One point-to-point routing job: a driver pin -> a load pin (a signal net,
+  // or one link of a clock net's fan-out). Kind distinguishes them for the
+  // summary counts; Start/Goal are the pin grid blocks on the primary layer.
+  TRouteJobKind = (rkSignal, rkClock);
+  TRouteJob = record
+    NetName: string;
+    Kind: TRouteJobKind;
+    Driver: TGateInstance;
+    DriverPin: string;
+    Load: TGateInstance;
+    LoadPin: string;
+    Dist: Integer;  // Manhattan pin distance (ordering)
+    Start, Goal: TPoint; // terminal grid blocks (resolved once)
+    StartValid, GoalValid: Boolean;
+    Routed: Boolean;
+    Path: TArray<TPoint>;
+    PathLayers: TArray<Integer>;
+  end;
+  TRouteJobArray = TArray<TRouteJob>;
+
+// Snapshot of a placed cell's horizontal position relative to its row, used to
+// preserve the optimized placement when the bias lines are expanded (the
+// geometry rebuild must not reshuffle the cells horizontally).
+  TPlaceSnapshot = record
+    Gate: TGateInstance;
+    X: Integer; // X offset from the row's left edge at snapshot time
   end;
 
   TForm1 = class(TForm)
@@ -123,6 +185,8 @@ type
     EditUtilization: TEdit;
     EditBiasCurrent: TEdit;
     EditPTLLength: TEdit;
+    ComboBiasLayer: TComboBox;
+    LabelBiasLayer: TLabel;
     ListBoxPlacementErrors: TListBox;
     TabItem5: TTabItem;
     PaintBox1: TPaintBox;
@@ -135,6 +199,7 @@ type
     PaintBox2: TPaintBox;
     PaintBox3: TPaintBox;
     ButtonOptimize: TButton;
+    ButtonExpandBias: TButton;
     CheckBoxShowNames: TCheckBox;
     CheckBoxShowLogicWires: TCheckBox;
     CheckBoxShowClockWires: TCheckBox;
@@ -173,7 +238,10 @@ type
     procedure EditPlacementChanged(Sender: TObject);
     procedure EditPlacementKeyDown(Sender: TObject; var Key: Word;
       var KeyChar: WideChar; Shift: TShiftState);
+    procedure ComboBiasLayerChange(Sender: TObject);
+    procedure PopulateBiasLayerCombo;
 procedure ButtonOptimizeClick(Sender: TObject);
+    procedure ButtonExpandBiasClick(Sender: TObject);
     procedure CheckBoxToggleChange(Sender: TObject);
     procedure ButtonRunRoutingClick(Sender: TObject);
     procedure PaintBox1MouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Single);
@@ -214,6 +282,7 @@ procedure ButtonOptimizeClick(Sender: TObject);
     FAllowClose: Boolean;
     FPlacementInitialized: Boolean;
     FFormattingPlacement: Boolean;
+    FBiasLayer: string;
     FPanX, FPanY: Single;
     FDragX, FDragY: Single;
     FDragging: Boolean;
@@ -232,6 +301,20 @@ procedure ButtonOptimizeClick(Sender: TObject);
     FRouteNeedsFit: Boolean;
     FRouteDragX, FRouteDragY: Single;
     FRouteDragging: Boolean;
+    FRoutingLayers: TStringList;
+    FRoutingLayerEnabled: TDictionary<string, Boolean>;
+    FRouteTraces: TArray<TRoutedTrace>;
+    FRouteSignalLayer: string;
+    FRouteShowHeat: Boolean; // overlay the per-block history heat map
+    FRouteLayers: TArray<string>;          // routing layer names, in library order
+    FRouteObstacles: TArray<TArray<Boolean>>; // [layerIdx][block] pin-geometry blocks
+    FRouteUsage: TArray<TArray<Integer>>;     // [layerIdx][block] present usage (NCR)
+    FRouteHist: TArray<TArray<Integer>>;      // [layerIdx][block] history congestion (NCR)
+    FRoutePresFactor: Integer;                // present-congestion weight (NCR)
+    FRouteHistFactor: Integer;                // history-congestion weight (NCR)
+    FRouteMaxIter: Integer;                   // rip-up-and-reroute iteration cap
+    FRouteLastOverflow: Integer;              // overused blocks from the last run
+    FRouteObstaclesW, FRouteObstaclesH: Integer;
     FPlacementErrorCount: Integer;
     FFloorplanErrorCount: Integer;
     FSwitchingTab: Boolean;
@@ -260,8 +343,27 @@ procedure ButtonOptimizeClick(Sender: TObject);
     FPlanLevelFirstBand: TArray<Integer>;
     FPlanLevelBandCount: TArray<Integer>;
     FPlanBandStarts: TArray<Integer>;
-    FPlanXRight: Integer;
+    FPlanXLeft: Integer;  // left edge of the rows (bias trunk is at XLeft-1)
+    FPlanXRight: Integer; // right edge of the rows (feed column at XRight)
     FPlanRowHBlocks: Integer;
+    FPlanBandHeight: TArray<Integer>; // actual height per band (incl. extra rows)
+    FLogicRowExtra: TArray<Integer>; // extra rows added to a band's LOGIC row
+    FClockRowExtra: TArray<Integer>; // extra rows added to a band's CLOCK row
+    // Bias-line current-capacity geometry (set by the bias helpers, applied in
+    // BuildFloorplan): extra height per band's TOP/MIDDLE bias row, the extra
+    // height of the bottommost full-width bias row, and the width of the two
+    // vertical bias lanes flanking the clock trunk (the feed column and the
+    // far-right lane; base 1 each). The green clock trunk itself is not a bias
+    // zone and stays at its row-width size.
+    FBiasRowH: TArray<TArray<Integer>>; // [band][0=top,1=middle] extra rows
+    FBottomBiasH: Integer;              // extra rows on the bottom-most bias line
+    FBiasLaneW: TArray<Integer>;        // [0]=left feed lane, [1]=right lane width (>=1)
+    FPlanMaxRowW: Integer;              // row-width override for the nudge (0=auto)
+    FPlanTrunkW: Integer;               // snapshot: clock trunk width (RowHBlocks)
+    FPlanLane0W: Integer;               // snapshot: left feed bias lane width
+    FPlanLane1W: Integer;               // snapshot: far-right bias lane width
+    FPlanLastTotalH: Integer;           // snapshot: last TotalH (bias-fit checks)
+    FBiasExpansionDone: Boolean;        // bias expansion has run (latching)
     FOrderChanged: Boolean;
     FManhattanItem: TListBoxItem; // live 'total wire length' diagnostic line
     procedure FreeLib;
@@ -341,8 +443,54 @@ procedure ButtonOptimizeClick(Sender: TObject);
     procedure PaintBox4MouseMove(Sender: TObject; Shift: TShiftState; X, Y: Single);
     procedure PaintBox4MouseUp(Sender: TObject; Button: TMouseButton;
       Shift: TShiftState; X, Y: Single);
+    procedure BuildRoutingLayers;
+    function RoutingLayerEnabled(const ALayer: string): Boolean;
+    procedure ToggleRoutingLayer(const ALayer: string);
+    procedure DrawRoutingLegend(Canvas: TCanvas);
+    function HslToColor(H, S, L, A: Single): TAlphaColor;
+    function RoutingLayerColor(const ALayer: string): TAlphaColor;
+    procedure RunRouting;
+    procedure DrawRoutedTraces(Canvas: TCanvas);
+    function GatePinBlock(G: TGateInstance; const PinName: string;
+      ALayer: Integer; var P: TPoint): Boolean;
+    function GatePinBlockAt(G: TGateInstance; const PinName: string;
+      ALayer, AX, AY: Integer; Rotated: Boolean; var P: TPoint): Boolean;
+    procedure BuildRoutingObstacles;
+    function AStarRoute(Start, Goal: TPoint;
+      var OutPath: TArray<TPoint>; var OutLayers: TArray<Integer>): Boolean;
     procedure OrderLayer(L: Integer; CrossOnly: Boolean);
     procedure ResolvePlacementOverlaps;
+    procedure OptimizePlacement;
+    procedure RebuildFloorplanPreserve; // rebuild bias geometry, keep placement
+    function BandIndexOfY(Y: Integer): Integer; // band containing grid row Y
+    procedure AnalyzeCongestion(var AChanged: Boolean);
+    // Bias-line current-capacity helpers. Each returns True on success; on
+    // failure it reports the reason via AddFloorplanError and leaves the layout
+    // unchanged.
+    function IncreaseBiasRowHeight(Band, Which, ByRows: Integer): Boolean;
+    function IncreaseClockTrunkColumn(ColIdx, ByCols: Integer): Boolean;
+    function IncreaseTopBottomBiasRow(IsTop: Boolean; ByRows: Integer): Boolean;
+    function MaxUaGreaterThanLargestPort: Boolean;
+    // Bias-line routing: collects a row's edge ports, partitions them into
+    // current groups, and routes each group as a horizontal track to the trunk.
+    procedure CollectCellPorts(G: TGateInstance; AX, AY: Integer;
+      AEdge: TPortEdge; var Ports: TArray<TBiasPort>);
+    function PartitionBiasPorts(const Ports: TArray<TBiasPort>;
+      AMaxUa: Double): TArray<TBiasGroup>;
+    // Clock bias: the trunk cells are rotated 90 deg CCW, so their "top" ports
+    // face left and "bottom" ports face right. CollectTrunkPorts gathers one
+    // side's ports; PartitionTrunkPorts groups them by Y (top-to-bottom for the
+    // left side, bottom-to-top for the right).
+    procedure CollectTrunkPorts(IsLeft: Boolean; var Ports: TArray<TBiasPort>);
+    function PartitionTrunkPorts(const Ports: TArray<TBiasPort>;
+      AMaxUa: Double; Descending: Boolean): TArray<TBiasGroup>;
+    procedure RouteBiasLines;
+    // Geometry accessors for the variable-height bias rows (used by the
+    // packing, ordering, clock-subtree and spine placements).
+    function BandTopBiasH(Band: Integer): Integer;   // height of a band's top bias row
+    function BandMidBiasH(Band: Integer): Integer;   // height of a band's middle bias row
+    function BandLogicRowY(Band: Integer): Integer;  // top Y of a band's logic row
+    function BandClockRowY(Band: Integer): Integer;  // top Y of a band's clock row
   public
     { Public declarations }
   end;
@@ -368,6 +516,13 @@ begin
   FPlacementInitialized := False;
   FPlacedComponents := nil;
   FGatePlacement.Clear;
+  FLogicRowExtra := nil;
+  FClockRowExtra := nil;
+  FBiasRowH := nil;
+  FBottomBiasH := 0;
+  FBiasLaneW := nil;
+  FPlanMaxRowW := 0;
+  FBiasExpansionDone := False;
   FPlacementModel := nil;
   FreePipelineRows;
   FreePipelineModel;
@@ -449,6 +604,7 @@ begin
   end;
   for i := 0 to FLib.Cells.Count - 1 do
     ListBox1.Items.Add(FLib.Cells[i].Name);
+  PopulateBiasLayerCombo;
   Label1.Text := Format('Loaded %d cell(s) from %s',
     [FLib.Cells.Count, ExtractFileName(FLefFile)]);
   UpdateUI;
@@ -574,8 +730,16 @@ begin
     ButtonNext.Enabled := ButtonNext.Enabled and FPlacementInitialized and
       (FPlacementErrorCount = 0);
   if TabControl1.TabIndex = TabFloorplan then
+  begin
+    // The bias expansion is a one-shot latch: enabled only once the floorplan
+    // is valid and the placement has been optimised; disabled again once run.
+    // Progress past the floorplan requires the expansion to have been run.
+    ButtonExpandBias.Enabled := FFloorplanValid and (not FBiasExpansionDone);
     ButtonNext.Enabled := ButtonNext.Enabled and
-      (FFloorplanErrorCount = 0);
+      (FFloorplanErrorCount = 0) and FBiasExpansionDone;
+  end
+  else
+    ButtonExpandBias.Enabled := False;
 end;
 
 procedure TForm1.UpdateRecentList;
@@ -654,6 +818,7 @@ var
   Cell: TCell;
   Key, BestKey, BestCount: Integer;
   Tally: TDictionary<Integer, Integer>;
+  i: Integer;
 begin
   G := 0;
   ModeH := 0;
@@ -701,6 +866,23 @@ begin
   EditUtilization.Text := '60';
   EditBiasCurrent.Text := '5';
   EditPTLLength.Text := '550';
+  // Bias-routing layer: default to the first masterslice layer (the usual
+  // choice for the bias rail, since it is not a signal-routing layer); leave
+  // the current selection if one was already made.
+  if ComboBiasLayer.ItemIndex < 0 then
+  begin
+    ComboBiasLayer.ItemIndex := 0;
+    if FLib <> nil then
+      for i := 0 to FLib.Layers.Count - 1 do
+        if FLib.Layers[i].LayerType = ltMasterslice then
+        begin
+          ComboBiasLayer.ItemIndex := i;
+          Break;
+        end;
+  end;
+  FBiasLayer := '';
+  if ComboBiasLayer.ItemIndex >= 0 then
+    FBiasLayer := ComboBiasLayer.Items[ComboBiasLayer.ItemIndex];
   FPlacementInitialized := True;
   FormatPlacementFields;
   ValidatePlacement;
@@ -818,6 +1000,10 @@ begin
   if not TryDimParse(EditPTLLength.Text, PTL) then
     AddPlacementMsg('Max PTL length must be a valid number.', $FFFF0000, True);
 
+  // The bias-routing layer must be a valid selection from the library.
+  if FBiasLayer = '' then
+    AddPlacementMsg('Select a bias routing layer.', $FFFF0000, True);
+
   // Which cells actually appear in the parsed netlist?
   UsedNames := nil;
   if FModel <> nil then
@@ -902,6 +1088,46 @@ begin
   end;
 end;
 
+procedure TForm1.ComboBiasLayerChange(Sender: TObject);
+begin
+  if ComboBiasLayer.ItemIndex >= 0 then
+    FBiasLayer := ComboBiasLayer.Items[ComboBiasLayer.ItemIndex]
+  else
+    FBiasLayer := '';
+  if FPlacementInitialized and (not FFormattingPlacement) then
+  begin
+    ValidatePlacement;
+    UpdateUI;
+  end;
+end;
+
+// Fills the bias-routing-layer dropdown from the parsed library's layer stack,
+// preserving the current selection if it is still present.
+procedure TForm1.PopulateBiasLayerCombo;
+var
+  i: Integer;
+  Sel: string;
+begin
+  if ComboBiasLayer = nil then
+    Exit;
+  Sel := FBiasLayer;
+  ComboBiasLayer.Items.BeginUpdate;
+  try
+    ComboBiasLayer.Items.Clear;
+    if FLib <> nil then
+      for i := 0 to FLib.Layers.Count - 1 do
+        ComboBiasLayer.Items.Add(FLib.Layers[i].Name);
+  finally
+    ComboBiasLayer.Items.EndUpdate;
+  end;
+  if Sel <> '' then
+  begin
+    i := ComboBiasLayer.Items.IndexOf(Sel);
+    if i >= 0 then
+      ComboBiasLayer.ItemIndex := i;
+  end;
+end;
+
 procedure TForm1.EditPlacementKeyDown(Sender: TObject; var Key: Word;
   var KeyChar: WideChar; Shift: TShiftState);
 begin
@@ -952,6 +1178,7 @@ begin
   FProject.Utilization := EditUtilization.Text;
   FProject.BiasCurrent := EditBiasCurrent.Text;
   FProject.PTLLength := EditPTLLength.Text;
+  FProject.BiasLayer := FBiasLayer;
   try
     FProject.SaveToFile(FProjectPath);
   except
@@ -985,6 +1212,8 @@ begin
 end;
 
 procedure TForm1.ApplyProjectSettings;
+var
+  i: Integer;
 begin
   if FProject.LefFile <> '' then
     LoadLibraryFromFile(FProject.LefFile, False);
@@ -1021,6 +1250,15 @@ begin
     EditUtilization.Text := FProject.Utilization;
     EditBiasCurrent.Text := FProject.BiasCurrent;
     EditPTLLength.Text := FProject.PTLLength;
+    FBiasLayer := FProject.BiasLayer;
+    if ComboBiasLayer <> nil then
+    begin
+      i := ComboBiasLayer.Items.IndexOf(FBiasLayer);
+      if i >= 0 then
+        ComboBiasLayer.ItemIndex := i
+      else
+        ComboBiasLayer.ItemIndex := 0;
+    end;
     FPlacementInitialized := True;
     FormatPlacementFields; // refresh the derived labels from saved values
   end;
@@ -1111,6 +1349,8 @@ begin
   FCellDelays := TDictionary<string, Double>.Create;
   FGatePlacement := TDictionary<TGateInstance, TPoint>.Create;
   FPadMap := TDictionary<string, TPoint>.Create;
+  FRoutingLayers := TStringList.Create;
+  FRoutingLayerEnabled := TDictionary<string, Boolean>.Create;
   FFlipFlopNames := TStringList.Create;
   FFlipFlopCandidates := TList<TCell>.Create;
   FBufferNames := TStringList.Create;
@@ -1168,6 +1408,14 @@ end;
 procedure TForm1.FormKeyDown(Sender: TObject; var Key: Word;
   var KeyChar: WideChar; Shift: TShiftState);
 begin
+  // H: toggle the per-block history heat map on the routing tab.
+  if (Key = Ord('H')) and (TabControl1.TabIndex = TabRouting) then
+  begin
+    Key := 0;
+    FRouteShowHeat := not FRouteShowHeat;
+    PaintBox4.Repaint;
+    Exit;
+  end;
   // Ctrl+S on Windows, Cmd+S on macOS. Only the explicit save actions open
   // the Save As dialog; everything else saves silently or never asks.
   if (Key = Ord('S')) and ((ssCtrl in Shift) or (ssCommand in Shift)) then
@@ -1241,6 +1489,8 @@ begin
   FCellDelays.Free;
   FGatePlacement.Free;
   FPadMap.Free;
+  FRoutingLayers.Free;
+  FRoutingLayerEnabled.Free;
   FFlipFlopNames.Free;
   FFlipFlopCandidates.Free;
   FBufferNames.Free;
@@ -2227,8 +2477,8 @@ begin
   if FPadDragging then
   begin
     BlockX := (X - FPlanPanX) / FPlanZoom / FPlanCore;
-    if BlockX < 1 then
-      BlockX := 1;
+    if BlockX < FPlanXLeft then
+      BlockX := FPlanXLeft;
     if BlockX > FPlanXRight - 1 then
       BlockX := FPlanXRight - 1;
     FPadDragX := BlockX;
@@ -2262,7 +2512,7 @@ begin
     else
     begin
       N := Length(FPadOrderOutput);
-      Slot := NearestPadSlot(FPadDragX, N, FPlanXRight + 1 + FPlanRowHBlocks);
+      Slot := NearestPadSlot(FPadDragX, N, FPlanXRight + FPlanLane0W + FPlanTrunkW);
       FPadOrderOutput := PreviewPadOrder(FPadOrderOutput, FPadDragIdx, Slot);
     end;
     ReapplyPadOrder;
@@ -2270,6 +2520,56 @@ begin
     RepaintFloorplanPage;
   end;
   FPlanDragging := False;
+end;
+
+// Band index containing grid row Y, using the stored per-band starts/heights.
+// Returns -1 if Y is outside every band (e.g. a pad or routing row).
+function TForm1.BandIndexOfY(Y: Integer): Integer;
+var
+  b: Integer;
+begin
+  Result := -1;
+  for b := 0 to High(FPlanBandStarts) do
+    if (b < Length(FPlanBandHeight)) and
+       (Y >= FPlanBandStarts[b]) and
+       (Y < FPlanBandStarts[b] + FPlanBandHeight[b]) then
+    begin
+      Result := b;
+      Exit;
+    end;
+end;
+
+// Height of a band's top bias row: base 1 plus any extra current-capacity rows.
+function TForm1.BandTopBiasH(Band: Integer): Integer;
+begin
+  Result := 1;
+  if (Band >= 0) and (Band < Length(FBiasRowH)) and
+     (Length(FBiasRowH[Band]) > 0) then
+    Inc(Result, FBiasRowH[Band][0]);
+end;
+
+// Height of a band's middle bias row (the one above the clock row).
+function TForm1.BandMidBiasH(Band: Integer): Integer;
+begin
+  Result := 1;
+  if (Band >= 0) and (Band < Length(FBiasRowH)) and
+     (Length(FBiasRowH[Band]) > 1) then
+    Inc(Result, FBiasRowH[Band][1]);
+end;
+
+// Top Y of a band's logic row (below the band's top bias row).
+function TForm1.BandLogicRowY(Band: Integer): Integer;
+begin
+  Result := FPlanBandStarts[Band] + BandTopBiasH(Band);
+end;
+
+// Top Y of a band's clock row (below the logic row, its extras, and the
+// middle bias row).
+function TForm1.BandClockRowY(Band: Integer): Integer;
+begin
+  Result := BandLogicRowY(Band) + FPlanRowHBlocks + BandMidBiasH(Band);
+  if (Band >= 0) and (Band < Length(FLogicRowExtra)) then
+    Inc(Result, FLogicRowExtra[Band]);
 end;
 
 procedure TForm1.OrderLayer(L: Integer; CrossOnly: Boolean);
@@ -2449,7 +2749,7 @@ begin
       cand := Pref + d;
       if (cand >= BandStartIdx) and (cand < BandEndIdx) and
          (BandUsed[cand - BandStartIdx] +
-          FPlacedComponents[Idx].W <= FPlanXRight - 1) then
+          FPlacedComponents[Idx].W <= FPlanXRight - FPlanXLeft) then
       begin
         CellBand[i] := cand;
         Break;
@@ -2457,7 +2757,7 @@ begin
       cand := Pref - d;
       if (d > 0) and (cand >= BandStartIdx) and (cand < BandEndIdx) and
          (BandUsed[cand - BandStartIdx] +
-          FPlacedComponents[Idx].W <= FPlanXRight - 1) then
+          FPlacedComponents[Idx].W <= FPlanXRight - FPlanXLeft) then
       begin
         CellBand[i] := cand;
         Break;
@@ -2479,7 +2779,7 @@ begin
   begin
     // Forward pass: place each cell at its target left, but not before the
     // previous cell's right edge + gap.
-    X := 1;
+    X := FPlanXLeft;
     for i := 0 to High(Order) do
     begin
       if CellBand[i] <> BandIdx then
@@ -2487,8 +2787,8 @@ begin
       Idx := Items[Order[i]];
       W := FPlacedComponents[Idx].W;
       DL := Round(BaryX[Order[i]] - W / 2);
-      if DL < 1 then
-        DL := 1;
+      if DL < FPlanXLeft then
+        DL := FPlanXLeft;
       if DL > FPlanXRight - W then
         DL := FPlanXRight - W;
       if DL < X then
@@ -2509,8 +2809,8 @@ begin
         PlacedX[i] := FPlanXRight - W;
       if PlacedX[i] + W + 1 > NextLeft then
         PlacedX[i] := NextLeft - W - 1;
-      if PlacedX[i] < 1 then
-        PlacedX[i] := 1;
+      if PlacedX[i] < FPlanXLeft then
+        PlacedX[i] := FPlanXLeft;
       NextLeft := PlacedX[i];
     end;
   end;
@@ -2521,7 +2821,7 @@ begin
     if (CellBand[i] < BandStartIdx) or (CellBand[i] >= BandEndIdx) then
       Continue;
     Idx := Items[Order[i]];
-    RowY := FPlanBandStarts[CellBand[i]] + 1 +
+    RowY := BandLogicRowY(CellBand[i]) +
       ((FPlanRowHBlocks - FPlacedComponents[Idx].H) div 2);
     if (FPlacedComponents[Idx].X <> PlacedX[i]) or
        (FPlacedComponents[Idx].Y <> RowY) then
@@ -2537,6 +2837,248 @@ begin
 end;
 
 procedure TForm1.ButtonOptimizeClick(Sender: TObject);
+begin
+  // Latching behavior: if the bias expansion has already run, this re-optimizes
+  // from a clean slate - reset the bias expansion state so the floorplan is
+  // built with base-width bias lines again, then optimise.
+  if FBiasExpansionDone then
+  begin
+    FBiasRowH := nil;
+    FBottomBiasH := 0;
+    FBiasLaneW := nil;
+    FPlanMaxRowW := 0;
+    FBiasExpansionDone := False;
+    BuildFloorplan;
+  end;
+  OptimizePlacement;
+  UpdateUI;
+end;
+
+// Returns True if the configured max bias current (EditBiasCurrent) is greater
+// than the largest single-port current drawn by any cell in the netlist. This
+// guards the expansion: a per-line limit smaller than a port's own current can
+// never be satisfied, which made rows never grow and columns over-grow.
+function TForm1.MaxUaGreaterThanLargestPort: Boolean;
+var
+  MaxUa, Largest: Double;
+  Gate: TGateInstance;
+  Port: TPort;
+  Shape: TPortShape;
+begin
+  Result := False;
+  if FLib = nil then
+    Exit;
+  if not TryDimParse(EditBiasCurrent.Text, MaxUa) then
+    Exit;
+  Largest := 0;
+  // Scan the gates actually in the netlist (the placement model's gates), not
+  // the whole library, so unused cells with large ports don't block expansion.
+  if FPlacementModel <> nil then
+    for Gate in FPlacementModel.Gates do
+      if (Gate <> nil) and (Gate.Cell <> nil) then
+        for Port in Gate.Cell.PowerPorts do
+          for Shape in Port.Shapes do
+            if Shape.CurrentUa > Largest then
+              Largest := Shape.CurrentUa;
+  Result := MaxUa > Largest;
+end;
+
+// Expands the bias lines to carry the routed currents: for every horizontal
+// bias channel between two cell rows, and for the two vertical bias lanes
+// flanking the clock trunk, it sums the current each channel must carry and
+// grows the channel to hold that many parallel tracks (each track carries up
+// to the user's max bias current, EditBiasCurrent). Also adds the clock trunk
+// cells' own power current to the topmost/bottommost rows and the flanking
+// lanes. Only one expansion is allowed per optimized placement (latching).
+procedure TForm1.ButtonExpandBiasClick(Sender: TObject);
+var
+  MaxUa: Double;
+  NumBands, Band, GLeft, GRight: Integer;
+  b, Upper: Integer;
+  Extra: Integer;
+  LogicTop, LogicBot, ClockTop, ClockBot: TArray<Integer>; // tracks per band
+  LogicTopP, LogicBotP, ClockTopP, ClockBotP: TArray<TArray<TBiasPort>>;
+  Above, Below, TrunkPorts: TArray<TBiasPort>;
+
+  // Collects all edge ports of a band's logic cells (placed in its logic row).
+  procedure CollectLogic(Band: Integer; AEdge: TPortEdge;
+    var APorts: TArray<TBiasPort>);
+  var
+    k: Integer;
+  begin
+    SetLength(APorts, 0);
+    for k := 0 to High(FPlacedComponents) do
+      if BandIndexOfY(FPlacedComponents[k].Y) = Band then
+        CollectCellPorts(FPlacedComponents[k].Gate, FPlacedComponents[k].X,
+          FPlacedComponents[k].Y, AEdge, APorts);
+  end;
+
+  // Collects all edge ports of a band's clock-row cells (subtree interiors).
+  procedure CollectClock(Band: Integer; AEdge: TPortEdge;
+    var APorts: TArray<TBiasPort>);
+  var
+    lv, c2: Integer;
+  begin
+    SetLength(APorts, 0);
+    for lv := 0 to High(FClockSubtree) do
+      for c2 := 0 to High(FClockSubtree[lv]) do
+        if (not FClockSubtree[lv][c2].IsLeaf) and
+           (BandIndexOfY(FClockSubtree[lv][c2].Y) = Band) then
+          CollectCellPorts(FClockSubtree[lv][c2].Gate, FClockSubtree[lv][c2].X,
+            FClockSubtree[lv][c2].Y, AEdge, APorts);
+  end;
+
+  // Number of tracks a channel needs: partition the above and below sides into
+  // current groups; each group is one track. The final-group merge edge case
+  // (the rightmost groups' combined current <= MaxUa) saves one track.
+  function SharedTracks(const AAbove, ABelow: TArray<TBiasPort>): Integer;
+  var
+    GA, GB: TArray<TBiasGroup>;
+  begin
+    GA := PartitionBiasPorts(AAbove, MaxUa);
+    GB := PartitionBiasPorts(ABelow, MaxUa);
+    Result := Length(GA) + Length(GB);
+    if (Length(GA) > 0) and (Length(GB) > 0) then
+      if GA[High(GA)].TotalUa + GB[High(GB)].TotalUa <= MaxUa then
+        Dec(Result);
+  end;
+
+begin
+  if not FFloorplanValid then
+    Exit;
+  if not TryDimParse(EditBiasCurrent.Text, MaxUa) or (MaxUa <= 0) then
+  begin
+    AddFloorplanError('Max bias current must be positive before expanding bias lines.');
+    Exit;
+  end;
+  // Guard: the per-line limit must be able to carry the largest single port
+  // current in the netlist, otherwise even one channel is under-sized.
+  if not MaxUaGreaterThanLargestPort then
+  begin
+    AddFloorplanError('Max bias current is smaller than a cell''s largest port current; increase it.');
+    Exit;
+  end;
+  NumBands := Length(FPlanBandStarts);
+  if NumBands < 1 then
+    Exit;
+  if Length(FBiasRowH) < NumBands then
+  begin
+    SetLength(FBiasRowH, NumBands);
+    for b := 0 to NumBands - 1 do
+    begin
+      SetLength(FBiasRowH[b], 2);
+      FBiasRowH[b][0] := 0;
+      FBiasRowH[b][1] := 0;
+    end;
+  end;
+  if Length(FBiasLaneW) <> 2 then
+  begin
+    SetLength(FBiasLaneW, 2);
+    FBiasLaneW[0] := 1;
+    FBiasLaneW[1] := 1;
+  end;
+
+  // Clock bias groups: the trunk's left ("top") ports top-to-bottom and right
+  // ("bottom") ports bottom-to-top. Each group needs one vertical lane track and
+  // one horizontal turn row in the topmost/bottommost full-width bias row.
+  CollectTrunkPorts(True, TrunkPorts);
+  GLeft := Length(PartitionTrunkPorts(TrunkPorts, MaxUa, False));
+  CollectTrunkPorts(False, TrunkPorts);
+  GRight := Length(PartitionTrunkPorts(TrunkPorts, MaxUa, True));
+
+  // Partition each row side's ports into current groups. The number of groups
+  // IS the number of horizontal tracks the channel needs (a partition
+  // guideline, not a ceil of the summed current).
+  SetLength(LogicTopP, NumBands);
+  SetLength(LogicBotP, NumBands);
+  SetLength(ClockTopP, NumBands);
+  SetLength(ClockBotP, NumBands);
+  SetLength(LogicTop, NumBands);
+  SetLength(LogicBot, NumBands);
+  SetLength(ClockTop, NumBands);
+  SetLength(ClockBot, NumBands);
+  for b := 0 to NumBands - 1 do
+  begin
+    CollectLogic(b, peTop, LogicTopP[b]);
+    CollectLogic(b, peBottom, LogicBotP[b]);
+    CollectClock(b, peTop, ClockTopP[b]);
+    CollectClock(b, peBottom, ClockBotP[b]);
+    LogicTop[b] := Length(PartitionBiasPorts(LogicTopP[b], MaxUa));
+    LogicBot[b] := Length(PartitionBiasPorts(LogicBotP[b], MaxUa));
+    ClockTop[b] := Length(PartitionBiasPorts(ClockTopP[b], MaxUa));
+    ClockBot[b] := Length(PartitionBiasPorts(ClockBotP[b], MaxUa));
+  end;
+
+  // --- Horizontal channels (bias rows) ---
+  // Topmost full-width row (band 0's top): carries the top logic row's top
+  // ports as horizontal tracks (bottom of the row) plus the clock trunk's left
+  // turn rows (top of the row). The height must hold BOTH: LogicTop[0] + GLeft.
+  Extra := (LogicTop[0] + GLeft) - BandTopBiasH(0);
+  if Extra < 0 then
+    Extra := 0;
+  if Extra > 0 then
+    IncreaseTopBottomBiasRow(True, Extra);
+  // Bottommost full-width row: the last band's clock-row bottom ports
+  // (ClockBot[last] tracks) plus the clock trunk's right turn rows (GRight).
+  Extra := (ClockBot[NumBands - 1] + GRight) - (1 + FBottomBiasH);
+  if Extra < 0 then
+    Extra := 0;
+  if Extra > 0 then
+    IncreaseTopBottomBiasRow(False, Extra);
+  // Interior channels. Each band's MIDDLE bias row sits between that band's
+  // logic row (above) and clock row (below). Each band's TOP bias row (band>0)
+  // sits between the previous band's clock row (above) and this band's logic
+  // row (below). A channel between two rows powers both: bottom ports of the
+  // upper row + top ports of the lower row.
+  for Band := 0 to NumBands - 1 do
+  begin
+    // Middle bias row: logic (above) + clock (below).
+    Above := LogicBotP[Band];
+    Below := ClockTopP[Band];
+    Extra := SharedTracks(Above, Below) - 1; // base-1 floor
+    if Extra < 0 then
+      Extra := 0;
+    if Extra > 0 then
+      IncreaseBiasRowHeight(Band, 1, Extra);
+    // Top bias row (skip band 0: it is the topmost full-width row).
+    if Band > 0 then
+    begin
+      Upper := Band - 1;
+      Above := ClockBotP[Upper];
+      Below := LogicTopP[Band];
+      Extra := SharedTracks(Above, Below) - 1; // base-1 floor
+      if Extra < 0 then
+        Extra := 0;
+      if Extra > 0 then
+        IncreaseBiasRowHeight(Band, 0, Extra);
+    end;
+  end;
+
+  // --- Clock bias lanes (flanking the clock trunk) ---
+  // Each clock group becomes one vertical track, so the lane width = the number
+  // of groups (the same grouping logic the logic rows use, not ceil(total/max)).
+  // GLeft/GRight were computed above; the topmost/bottommost rows already grew
+  // to hold the corresponding turn rows.
+  Extra := GLeft - 1;
+  if Extra < 0 then
+    Extra := 0;
+  if Extra > 0 then
+    IncreaseClockTrunkColumn(0, Extra);
+  Extra := GRight - 1;
+  if Extra < 0 then
+    Extra := 0;
+  if Extra > 0 then
+    IncreaseClockTrunkColumn(1, Extra);
+
+  FBiasExpansionDone := True;
+  UpdateUI;
+  RepaintFloorplanPage;
+end;
+
+// Runs the barycentre relaxation (cross-only ordering first to untangle
+// layer-to-layer wires, then the full optimisation alternating the sweep
+// direction), then guarantees no overlaps and rebuilds the clock placements.
+procedure TForm1.OptimizePlacement;
 const
   MaxCrossPasses = 40;
   MaxOrderPasses = 100;
@@ -2589,6 +3131,161 @@ begin
   RepaintFloorplanPage;
 end;
 
+// Rebuilds the floorplan geometry (band heights, lane widths) without
+// reshuffling the placed cells. The current placement's horizontal positions
+// are snapshotted (offset from each row's left edge), BuildFloorplan rebuilds
+// the bias geometry and recomputes every cell's correct row Y for the new band
+// layout, then the optimized X arrangement is restored. Rows that no longer fit
+// (because a bias lane grew) are uniformly shifted left, preserving the row's
+// shape. This is what the bias-expansion helpers use instead of a plain
+// BuildFloorplan.
+procedure TForm1.RebuildFloorplanPreserve;
+var
+  LogicSnap, ClockSnap: TDictionary<TGateInstance, TPlaceSnapshot>;
+  CloneToPlace: TDictionary<TGateInstance, TGateInstance>;
+  S: TPlaceSnapshot;
+  i, L, ci, band: Integer;
+  RowCells: TArray<Integer>;
+  j, MaxRight, Shift: Integer;
+  Pt: TPoint;
+  PGate: TGateInstance;
+begin
+  if not FFloorplanValid then
+  begin
+    BuildFloorplan;
+    Exit;
+  end;
+  LogicSnap := TDictionary<TGateInstance, TPlaceSnapshot>.Create;
+  ClockSnap := TDictionary<TGateInstance, TPlaceSnapshot>.Create;
+  CloneToPlace := TDictionary<TGateInstance, TGateInstance>.Create;
+  try
+    // Logic cells: snapshot the horizontal offset from the row's left edge.
+    // (The vertical position is recomputed by BuildFloorplan for the new band
+    // geometry, so only the optimized X arrangement is preserved.)
+    for i := 0 to High(FPlacedComponents) do
+    begin
+      S.Gate := FPlacedComponents[i].Gate;
+      S.X := FPlacedComponents[i].X - FPlanXLeft;
+      LogicSnap.AddOrSetValue(S.Gate, S);
+    end;
+    // Clock tree interior nodes: same - keep the horizontal offset, let the
+    // rebuilt clock placement set the row Y.
+    for L := 0 to High(FClockSubtree) do
+      for ci := 0 to High(FClockSubtree[L]) do
+        if not FClockSubtree[L][ci].IsLeaf then
+        begin
+          S.Gate := FClockSubtree[L][ci].Gate;
+          S.X := FClockSubtree[L][ci].X - FPlanXLeft;
+          ClockSnap.AddOrSetValue(S.Gate, S);
+        end;
+
+    BuildFloorplan;
+
+    // Restore logic cells' X (keeps the optimized horizontal row layout). The
+    // Y is left as BuildFloorplan computed it for the current band geometry.
+    for i := 0 to High(FPlacedComponents) do
+      if LogicSnap.TryGetValue(FPlacedComponents[i].Gate, S) then
+      begin
+        FPlacedComponents[i].X := FPlanXLeft + S.X;
+        FGatePlacement.AddOrSetValue(FPlacedComponents[i].Gate,
+          TPoint.Create(FPlacedComponents[i].X, FPlacedComponents[i].Y));
+      end;
+    // Restore clock tree interior nodes' X.
+    for L := 0 to High(FClockSubtree) do
+      for ci := 0 to High(FClockSubtree[L]) do
+        if (not FClockSubtree[L][ci].IsLeaf) and
+           ClockSnap.TryGetValue(FClockSubtree[L][ci].Gate, S) then
+          FClockSubtree[L][ci].X := FPlanXLeft + S.X;
+
+    // A grown bias lane narrows the rows: uniformly shift each band's cells left
+    // so they fit (this keeps the band's shape, per the user). Both the logic
+    // cells and the clock-row interior nodes move together by the same amount,
+    // so the row's cells stay with their row.
+    for band := 0 to High(FPlanBandStarts) do
+    begin
+      SetLength(RowCells, 0);
+      for i := 0 to High(FPlacedComponents) do
+        if BandIndexOfY(FPlacedComponents[i].Y) = band then
+        begin
+          SetLength(RowCells, Length(RowCells) + 1);
+          RowCells[High(RowCells)] := i;
+        end;
+      MaxRight := FPlanXLeft - 1;
+      for j := 0 to High(RowCells) do
+        if FPlacedComponents[RowCells[j]].X +
+           FPlacedComponents[RowCells[j]].W > MaxRight then
+          MaxRight := FPlacedComponents[RowCells[j]].X +
+            FPlacedComponents[RowCells[j]].W;
+      // Include the clock-row interior nodes of the same band: they sit in the
+      // same row region and must move with it.
+      for L := 0 to High(FClockSubtree) do
+        for ci := 0 to High(FClockSubtree[L]) do
+          if (not FClockSubtree[L][ci].IsLeaf) and
+             (BandIndexOfY(FClockSubtree[L][ci].Y) = band) then
+            if FClockSubtree[L][ci].X + FClockSubtree[L][ci].W > MaxRight then
+              MaxRight := FClockSubtree[L][ci].X + FClockSubtree[L][ci].W;
+      if MaxRight > FPlanXRight then
+      begin
+        Shift := MaxRight - FPlanXRight;
+        for j := 0 to High(RowCells) do
+        begin
+          FPlacedComponents[RowCells[j]].X :=
+            FPlacedComponents[RowCells[j]].X - Shift;
+          if FPlacedComponents[RowCells[j]].X < FPlanXLeft then
+            FPlacedComponents[RowCells[j]].X := FPlanXLeft;
+          FGatePlacement.AddOrSetValue(FPlacedComponents[RowCells[j]].Gate,
+            TPoint.Create(FPlacedComponents[RowCells[j]].X,
+              FPlacedComponents[RowCells[j]].Y));
+        end;
+        // Shift the clock-row interior nodes by the same amount.
+        for L := 0 to High(FClockSubtree) do
+          for ci := 0 to High(FClockSubtree[L]) do
+            if (not FClockSubtree[L][ci].IsLeaf) and
+               (BandIndexOfY(FClockSubtree[L][ci].Y) = band) then
+            begin
+              FClockSubtree[L][ci].X := FClockSubtree[L][ci].X - Shift;
+              if FClockSubtree[L][ci].X < FPlanXLeft then
+                FClockSubtree[L][ci].X := FPlanXLeft;
+            end;
+      end;
+    end;
+
+    // Re-sync clocked leaves after the uniform shift: they mirror their logic
+    // cells, which may have just been moved left. The subtree gates are
+    // clock-model clones, so map each back to its placement-model gate by
+    // index (the clone preserves gate order) before looking up FGatePlacement.
+    if (FPlacementModel <> nil) and (FClockBufferedModel <> nil) and
+       (FClockBufferedModel.Gates.Count > 0) then
+      for i := 0 to FPlacementModel.Gates.Count - 1 do
+        if (i < FClockBufferedModel.Gates.Count) and
+           (not CloneToPlace.ContainsKey(FClockBufferedModel.Gates[i])) then
+          CloneToPlace.Add(FClockBufferedModel.Gates[i], FPlacementModel.Gates[i]);
+    if (FPlacementModel <> nil) and (FClockModel <> nil) and
+       (FClockModel.Gates.Count > 0) then
+      for i := 0 to FPlacementModel.Gates.Count - 1 do
+        if (i < FClockModel.Gates.Count) and
+           (not CloneToPlace.ContainsKey(FClockModel.Gates[i])) then
+          CloneToPlace.Add(FClockModel.Gates[i], FPlacementModel.Gates[i]);
+    for L := 0 to High(FClockSubtree) do
+      for ci := 0 to High(FClockSubtree[L]) do
+        if FClockSubtree[L][ci].IsLeaf and
+           CloneToPlace.TryGetValue(FClockSubtree[L][ci].Gate, PGate) and
+           FGatePlacement.TryGetValue(PGate, Pt) then
+        begin
+          FClockSubtree[L][ci].X := Pt.X;
+          FClockSubtree[L][ci].Y := Pt.Y;
+        end;
+
+    ValidateFloorplanLayout;
+    UpdateManhattanDiagnostic;
+  finally
+    LogicSnap.Free;
+    ClockSnap.Free;
+    CloneToPlace.Free;
+  end;
+  RepaintFloorplanPage;
+end;
+
 procedure TForm1.CheckBoxToggleChange(Sender: TObject);
 begin
   if TabControl1.TabIndex = TabFloorplan then
@@ -2597,18 +3294,15 @@ end;
 
 procedure TForm1.ResolvePlacementOverlaps;
 var
-  BandHeight, MaxBand, BandIdx, i, j, Idx, Tmp, MinX: Integer;
+  MaxBand, BandIdx, i, j, Idx, Tmp, MinX: Integer;
   Items: TArray<Integer>;
 begin
   if Length(FPlacedComponents) = 0 then
     Exit;
-  BandHeight := 2 + 2 * FPlanRowHBlocks;
-  if BandHeight < 1 then
-    Exit;
   MaxBand := 0;
   for i := 0 to High(FPlacedComponents) do
   begin
-    BandIdx := (FPlacedComponents[i].Y - 1) div BandHeight;
+    BandIdx := BandIndexOfY(FPlacedComponents[i].Y);
     if BandIdx > MaxBand then
       MaxBand := BandIdx;
   end;
@@ -2617,7 +3311,7 @@ begin
     // Collect the band's cells, then order them by X.
     SetLength(Items, 0);
     for i := 0 to High(FPlacedComponents) do
-      if (FPlacedComponents[i].Y - 1) div BandHeight = BandIdx then
+      if BandIndexOfY(FPlacedComponents[i].Y) = BandIdx then
       begin
         SetLength(Items, Length(Items) + 1);
         Items[High(Items)] := i;
@@ -2646,8 +3340,8 @@ begin
         FPlacedComponents[Idx].X := MinX;
       if FPlacedComponents[Idx].X + FPlacedComponents[Idx].W > FPlanXRight then
         FPlacedComponents[Idx].X := FPlanXRight - FPlacedComponents[Idx].W;
-      if FPlacedComponents[Idx].X < 1 then
-        FPlacedComponents[Idx].X := 1;
+      if FPlacedComponents[Idx].X < FPlanXLeft then
+        FPlacedComponents[Idx].X := FPlanXLeft;
       FGatePlacement.AddOrSetValue(FPlacedComponents[Idx].Gate,
         TPoint.Create(FPlacedComponents[Idx].X, FPlacedComponents[Idx].Y));
     end;
@@ -2772,10 +3466,10 @@ end;
 // outputs).
 function TForm1.PadSlotX(k, N, Right: Integer): Single;
 begin
-  Result := 1 + (k + 0.5) * (Right - 2) / Max(1, N);
+  Result := FPlanXLeft + (k + 0.5) * (Right - FPlanXLeft - 1) / Max(1, N);
 end;
 
-// The slot (0..N-1) whose X is closest to DragX within [1, Right).
+// The slot (0..N-1) whose X is closest to DragX within [FPlanXLeft, Right).
 function TForm1.NearestPadSlot(DragX: Single; N, Right: Integer): Integer;
 var
   k: Integer;
@@ -2841,7 +3535,7 @@ begin
     Idx := FPadOrderOutput[k];
     if (Idx >= 0) and (Idx < Length(FPads)) then
     begin
-      X := Round(PadSlotX(k, M, FPlanXRight + 1 + FPlanRowHBlocks));
+      X := Round(PadSlotX(k, M, FPlanXRight + FPlanLane0W + FPlanTrunkW));
       FPads[Idx].X := X;
       FPadMap.AddOrSetValue(FPads[Idx].NetName, TPoint.Create(X, FPads[Idx].Y));
     end;
@@ -2872,7 +3566,7 @@ begin
   else
   begin
     N := Length(FPadOrderOutput);
-    Right := FPlanXRight + 1 + FPlanRowHBlocks;
+    Right := FPlanXRight + FPlanLane0W + FPlanTrunkW;
     Slot := NearestPadSlot(FPadDragX, N, Right);
     Order := PreviewPadOrder(FPadOrderOutput, FPadDragIdx, Slot);
     for k := 0 to High(Order) do
@@ -2959,14 +3653,21 @@ var
   RowNetName: string;
   Visited: TDictionary<TGateInstance, Boolean>;
   RowWidths: TArray<Integer>;
-  TotalH, TotalW, XRight, BandStart: Integer;
+  TotalH, TotalW, XRight, BandStart, CursorY: Integer;
+  MaxRowW, BodyW, LeftPad, XLeft: Integer;
   TopPad: Integer;
   AvailableWidth, TotalBands, Band, C, ChunkCount, ChunkWidth: Integer;
   LevelBandCount, LevelFirstBand, BandStarts: TArray<Integer>;
+  NewExtra: TArray<Integer>;
+  NewBias: TArray<TArray<Integer>>;
+  NewLane: TArray<Integer>;
+  OldFirst, OldCount: Integer;
+  TrunkW, Lane0W, Lane1W: Integer;
   CurChunk, CurX: TArray<Integer>;
   Idx: Integer;
   P: TPlacedComponent;
   RowY, BandIndex: Integer;
+  RowY0, RowY1: Integer;
 begin
   // Reset the view; the die is fitted to the canvas on the next paint.
   FPlanPanX := 0;
@@ -3083,20 +3784,70 @@ begin
         RowWidths[L] := Round(ClkBlocks);
     end;
 
-    // Horizontal: bias trunk (1) on the far left, rows, a bias feed column (1)
-    // for the clock trunk, then the clock trunk (rowH), then a far-right bias
-    // lane (1) fed from the topmost bias row. The widest a row can be is the
-    // die width minus the trunks.
-    AvailableWidth := DieWBlocks - 3 - RowHBlocks;
+    // Horizontal: far-left bias trunk (1), rows, the left feed bias lane
+    // (FBiasLaneW[0], immediately left of the clock trunk), the clock trunk
+    // (RowHBlocks - the green column, not a bias zone), then the far-right
+    // bias lane (FBiasLaneW[1]). The rows are sized to their content: the
+    // widest row calculated (clipped to the die's allocatable space; wider rows
+    // wrap into chunks). The whole floorplan is then centered horizontally and
+    // vertically in the die.
+    // Bias lanes flanking the clock trunk: ensure two entries, base width 1.
+    if Length(FBiasLaneW) <> 2 then
+    begin
+      NewLane := nil;
+      SetLength(NewLane, 2);
+      NewLane[0] := 1;
+      NewLane[1] := 1;
+      if Length(FBiasLaneW) >= 1 then
+      begin
+        if FBiasLaneW[0] >= 1 then
+          NewLane[0] := FBiasLaneW[0];
+        if Length(FBiasLaneW) >= 2 then
+          if FBiasLaneW[1] >= 1 then
+            NewLane[1] := FBiasLaneW[1];
+      end;
+      FBiasLaneW := NewLane;
+    end;
+    Lane0W := FBiasLaneW[0];
+    Lane1W := FBiasLaneW[1];
+    TrunkW := RowHBlocks; // the clock trunk is always RowHBlocks wide
+    AvailableWidth := DieWBlocks - 1 - Lane0W - TrunkW - Lane1W;
     if AvailableWidth < 1 then
     begin
-      AddFloorplanError(Format('Die is too narrow: at least %d blocks are needed for the trunks.',
-        [3 + RowHBlocks]));
+      AddFloorplanError(Format('Die is too narrow: at least %d blocks are needed for the bias lanes and clock trunk.',
+        [1 + Lane0W + TrunkW + Lane1W]));
       RepaintFloorplanPage;
       Exit;
     end;
-    XRight := 1 + AvailableWidth;   // common right edge of the rows
-    TotalW := XRight + 2 + RowHBlocks; // = DieWBlocks (+1 far-right bias lane)
+    MaxRowW := 0;
+    for L := 0 to NumLayers - 1 do
+      if RowWidths[L] > MaxRowW then
+        MaxRowW := RowWidths[L];
+    if MaxRowW > AvailableWidth then
+      MaxRowW := AvailableWidth; // clip to the die's allocatable row width
+    // The congestion helpers may have nudged the rows tighter (column
+    // expansion recovered space from the utilization slack).
+    if FPlanMaxRowW > 0 then
+      if FPlanMaxRowW < MaxRowW then
+        MaxRowW := FPlanMaxRowW;
+    BodyW := MaxRowW + 1 + Lane0W + TrunkW + Lane1W;
+    if BodyW > DieWBlocks then
+    begin
+      AddFloorplanError(Format('Not enough width: floorplan needs %d blocks, die has %d.',
+        [BodyW, DieWBlocks]));
+      BodyW := DieWBlocks;
+    end;
+    // Center the floorplan horizontally (rows + trunks) in the die; a floorplan
+    // that fills the die gets no padding. The far-left bias lane and far-right
+    // bias lane sit at the two edges of the allocated block.
+    LeftPad := (DieWBlocks - BodyW) div 2;
+    if LeftPad < 0 then
+      LeftPad := 0;
+    XLeft := LeftPad + 1;                 // left edge of the rows
+    XRight := XLeft + MaxRowW;            // common right edge of the rows
+    TotalW := LeftPad + BodyW;            // far-right edge of the bias lane
+    FPlanXLeft := XLeft;
+    FPlanXRight := XRight;
 
     // Allocate the die-sized grid and its per-cell layer tags.
     FFloorplanW := DieWBlocks;
@@ -3110,18 +3861,132 @@ begin
     end;
 
     // Lay out the bands, wrapping any row wider than the die so it continues
-    // underneath in its own bias/logic/bias/clock band.
+    // underneath in its own bias/logic/bias/clock band. The chunk layout per
+    // layer is computed first so the congestion extra rows can be remapped by
+    // (layer, chunk) identity when wrapping changes the band indexing.
+    SetLength(LevelBandCount, NumLayers);
+    SetLength(LevelFirstBand, NumLayers);
     TotalBands := 0;
     for L := 0 to NumLayers - 1 do
-      TotalBands := TotalBands + Max(1, Ceil(RowWidths[L] / AvailableWidth));
-    // +1 for the bias line allocated BELOW the bottom-most cell row, so every
-    // cell row (logic and clock) has a bias line both above and below it.
-    // Interior rows already share one line (the line above a row is the line
-    // below the previous row); only the last band has no row beneath it.
-    TotalH := TotalBands * (2 + 2 * RowHBlocks) + 1;
+    begin
+      LevelFirstBand[L] := TotalBands;
+      LevelBandCount[L] := Max(1, Ceil(RowWidths[L] / AvailableWidth));
+      TotalBands := TotalBands + LevelBandCount[L];
+    end;
+    // Remap the accumulated per-row extra rows by (layer, chunk): the old
+    // layout is still in FPlanLevelFirstBand/FPlanLevelBandCount from the last
+    // build. Chunks that existed before keep their rows; new chunks start at 0.
+    if Length(FLogicRowExtra) > 0 then
+    begin
+      NewExtra := nil;
+      SetLength(NewExtra, TotalBands);
+      for L := 0 to NumLayers - 1 do
+      begin
+        OldFirst := 0;
+        OldCount := 0;
+        if (L < Length(FPlanLevelFirstBand)) and (L < Length(FPlanLevelBandCount)) then
+        begin
+          OldFirst := FPlanLevelFirstBand[L];
+          OldCount := FPlanLevelBandCount[L];
+        end;
+        for Band := 0 to Min(OldCount, LevelBandCount[L]) - 1 do
+          if (OldFirst + Band >= 0) and (OldFirst + Band < Length(FLogicRowExtra)) then
+            NewExtra[LevelFirstBand[L] + Band] := FLogicRowExtra[OldFirst + Band];
+      end;
+      FLogicRowExtra := NewExtra;
+    end
+    else
+      SetLength(FLogicRowExtra, TotalBands);
+    if Length(FClockRowExtra) > 0 then
+    begin
+      NewExtra := nil;
+      SetLength(NewExtra, TotalBands);
+      for L := 0 to NumLayers - 1 do
+      begin
+        OldFirst := 0;
+        OldCount := 0;
+        if (L < Length(FPlanLevelFirstBand)) and (L < Length(FPlanLevelBandCount)) then
+        begin
+          OldFirst := FPlanLevelFirstBand[L];
+          OldCount := FPlanLevelBandCount[L];
+        end;
+        for Band := 0 to Min(OldCount, LevelBandCount[L]) - 1 do
+          if (OldFirst + Band >= 0) and (OldFirst + Band < Length(FClockRowExtra)) then
+            NewExtra[LevelFirstBand[L] + Band] := FClockRowExtra[OldFirst + Band];
+      end;
+      FClockRowExtra := NewExtra;
+    end
+    else
+      SetLength(FClockRowExtra, TotalBands);
+    // Remap the per-band bias-row extras (top/middle) by (layer, chunk).
+    if Length(FBiasRowH) > 0 then
+    begin
+      NewBias := nil;
+      SetLength(NewBias, TotalBands);
+      for Band := 0 to TotalBands - 1 do
+      begin
+        SetLength(NewBias[Band], 2);
+        NewBias[Band][0] := 0;
+        NewBias[Band][1] := 0;
+      end;
+      for L := 0 to NumLayers - 1 do
+      begin
+        OldFirst := 0;
+        OldCount := 0;
+        if (L < Length(FPlanLevelFirstBand)) and (L < Length(FPlanLevelBandCount)) then
+        begin
+          OldFirst := FPlanLevelFirstBand[L];
+          OldCount := FPlanLevelBandCount[L];
+        end;
+        for Band := 0 to Min(OldCount, LevelBandCount[L]) - 1 do
+          if (OldFirst + Band >= 0) and (OldFirst + Band < Length(FBiasRowH)) and
+             (Length(FBiasRowH[OldFirst + Band]) >= 2) then
+          begin
+            NewBias[LevelFirstBand[L] + Band][0] :=
+              FBiasRowH[OldFirst + Band][0];
+            NewBias[LevelFirstBand[L] + Band][1] :=
+              FBiasRowH[OldFirst + Band][1];
+          end;
+      end;
+      FBiasRowH := NewBias;
+    end
+    else
+    begin
+      SetLength(FBiasRowH, TotalBands);
+      for Band := 0 to TotalBands - 1 do
+      begin
+        SetLength(FBiasRowH[Band], 2);
+        FBiasRowH[Band][0] := 0;
+        FBiasRowH[Band][1] := 0;
+      end;
+    end;
+    // Default: the topmost (band 0's top) and the bottommost full-width bias
+    // rows start 2 cells thick (base 1 + one default extra cell), which is
+    // needed to route the bias lines. The expansion helpers grow them further.
+    if Length(FBiasRowH) > 0 then
+      if Length(FBiasRowH[0]) > 0 then
+        if FBiasRowH[0][0] < 1 then
+          FBiasRowH[0][0] := 1;
+    if FBottomBiasH < 1 then
+      FBottomBiasH := 1;
+    // Total height = sum of per-band heights (top bias + logic row + its extras
+    // + middle bias + clock row + its extras) + the bottom-most bias line.
+    SetLength(FPlanBandHeight, TotalBands);
+    TotalH := 0;
+    for Band := 0 to TotalBands - 1 do
+    begin
+      FPlanBandHeight[Band] := BandTopBiasH(Band) + RowHBlocks +
+        FLogicRowExtra[Band] + BandMidBiasH(Band) + RowHBlocks +
+        FClockRowExtra[Band];
+      if FPlanBandHeight[Band] < 1 then
+        FPlanBandHeight[Band] := 1;
+      TotalH := TotalH + FPlanBandHeight[Band];
+    end;
+    Inc(TotalH, 1 + FBottomBiasH);
 
     // Failure checks - report and keep whatever fits. Two extra rows are reserved
-    // for the I/O pads (top inputs, bottom outputs).
+    // for the I/O pads (top inputs, bottom outputs); the bias trunk and the
+    // far-right bias lane need one column each side of the rows.
     if TotalH + 2 > DieHBlocks then
       AddFloorplanError(Format('Not enough height: floorplan needs %d blocks (plus 2 pad rows), die has %d.',
         [TotalH, DieHBlocks]));
@@ -3136,30 +4001,29 @@ begin
     if TopPad < 1 then
       TopPad := 1;
 
-    // Bias trunk (red) on the far left, and the vertical bias feed column (red)
-    // immediately left of the clock trunk, both spanning the stack height
-    // (the reserved rows above and below stay clear for the I/O pads).
-    FillPlanRect(0, TopPad, 1, TopPad + TotalH, fcBias, -1);
-    FillPlanRect(XRight, TopPad, XRight + 1, TopPad + TotalH, fcBias, -1);
+    // Bias trunk (red) on the far left, and the vertical bias lanes (red)
+    // flanking the clock trunk, all spanning the stack height (the reserved
+    // rows above and below stay clear for the I/O pads).
+    FillPlanRect(LeftPad, TopPad, LeftPad + 1, TopPad + TotalH, fcBias, -1);
+    // Left feed bias lane (width Lane0W), immediately left of the clock trunk.
+    FillPlanRect(XRight, TopPad, XRight + Lane0W, TopPad + TotalH, fcBias, -1);
     // Clock trunk (green), spanning the stack height. It is enclosed by bias:
-    // the feed column and far-right lane on its sides, and the full-width
-    // topmost and bottom-most bias rows above and below it.
-    FillPlanRect(XRight + 1, TopPad, XRight + 1 + RowHBlocks, TopPad + TotalH, fcClock, -1);
-    // Far-right bias lane (red), spanning the stack height; the top-right
-    // corner (the input-pin row) stays empty.
-    FillPlanRect(XRight + 1 + RowHBlocks, TopPad, TotalW, TopPad + TotalH, fcBias, -1);
+    // the two flanking lanes on its sides, and the full-width topmost and
+    // bottom-most bias rows above and below it.
+    FillPlanRect(XRight + Lane0W, TopPad,
+      XRight + Lane0W + TrunkW, TopPad + TotalH, fcClock, -1);
+    // Far-right bias lane (width Lane1W), spanning the stack height; the
+    // top-right corner (the input-pin row) stays empty.
+    FillPlanRect(XRight + Lane0W + TrunkW, TopPad, TotalW, TopPad + TotalH, fcBias, -1);
 
     // Bands, top to bottom; a layer may wrap into several bands. The bands are
     // shifted down by one row so the top row is reserved for input pads.
-    SetLength(LevelBandCount, NumLayers);
-    SetLength(LevelFirstBand, NumLayers);
     SetLength(BandStarts, TotalBands);
     Band := 0;
+    CursorY := TopPad; // running Y cursor: bands have per-band heights now
     for L := 0 to NumLayers - 1 do
     begin
-      ChunkCount := Max(1, Ceil(RowWidths[L] / AvailableWidth));
-      LevelFirstBand[L] := Band;
-      LevelBandCount[L] := ChunkCount;
+      ChunkCount := LevelBandCount[L];
       for C := 0 to ChunkCount - 1 do
       begin
         ChunkWidth := RowWidths[L] - C * AvailableWidth;
@@ -3167,37 +4031,50 @@ begin
           ChunkWidth := AvailableWidth;
         if ChunkWidth < 1 then
           ChunkWidth := 1;
-        BandStart := TopPad + Band * (2 + 2 * RowHBlocks);
+        BandStart := CursorY;
         BandStarts[Band] := BandStart;
         // Bias line spanning from the bias trunk to the common right edge. The
-        // topmost one (band 0) runs the full die width, reaching the far-right
-        // bias lane so it encloses the top of the clock trunk.
+        // topmost one (band 0) runs the full floorplan width, reaching the
+        // far-right bias lane so it encloses the top of the clock trunk.
         if Band = 0 then
-          FillPlanRect(0, BandStart, TotalW, BandStart + 1, fcBias, Levels[L])
+          FillPlanRect(LeftPad, BandStart, TotalW,
+            BandStart + BandTopBiasH(Band), fcBias, Levels[L])
         else
-          FillPlanRect(0, BandStart, XRight, BandStart + 1, fcBias, Levels[L]);
-        // Logic row (blue), right-aligned; remaining space is filled out to
-        // the bias line with a lighter shade.
-        FillPlanRect(XRight - ChunkWidth, BandStart + 1,
-          XRight, BandStart + 1 + RowHBlocks, fcLogic, Levels[L]);
-        FillPlanRect(1, BandStart + 1,
-          XRight - ChunkWidth, BandStart + 1 + RowHBlocks, fcLogicFill, Levels[L]);
+          FillPlanRect(LeftPad, BandStart, XRight,
+            BandStart + BandTopBiasH(Band), fcBias, Levels[L]);
+        // Logic row (blue), as wide as its chunk, left-aligned from the bias
+        // trunk. Extra logic-row rows extend the logic row downward (they are
+        // routing space between logic and clock). Computed locally (BandStart,
+        // RowHBlocks) because the FPlan* snapshots are only written later.
+        RowY0 := BandStart + BandTopBiasH(Band);
+        RowY1 := RowY0 + RowHBlocks + FLogicRowExtra[Band] + BandMidBiasH(Band);
+        FillPlanRect(XLeft, RowY0,
+          XLeft + ChunkWidth, RowY0 + RowHBlocks, fcLogic, Levels[L]);
+        if FLogicRowExtra[Band] > 0 then
+          FillPlanRect(XLeft, RowY0 + RowHBlocks,
+            XLeft + ChunkWidth, RowY0 + RowHBlocks + FLogicRowExtra[Band],
+            fcLogicFill, Levels[L]);
         // Bias line above the clock row.
-        FillPlanRect(0, BandStart + 1 + RowHBlocks,
-          XRight, BandStart + 2 + RowHBlocks, fcBias, Levels[L]);
-        // Clock row (green), right-aligned; fill the remainder lighter.
-        FillPlanRect(XRight - ChunkWidth, BandStart + 2 + RowHBlocks,
-          XRight, BandStart + 2 + 2 * RowHBlocks, fcClock, Levels[L]);
-        FillPlanRect(1, BandStart + 2 + RowHBlocks,
-          XRight - ChunkWidth, BandStart + 2 + 2 * RowHBlocks, fcClockFill, Levels[L]);
+        FillPlanRect(LeftPad, RowY1 - BandMidBiasH(Band),
+          XRight, RowY1, fcBias, Levels[L]);
+        // Clock row (green), as wide as its chunk, left-aligned. Extra clock-
+        // row rows extend the clock row downward.
+        FillPlanRect(XLeft, RowY1,
+          XLeft + ChunkWidth, RowY1 + RowHBlocks, fcClock, Levels[L]);
+        if FClockRowExtra[Band] > 0 then
+          FillPlanRect(XLeft, RowY1 + RowHBlocks,
+            XLeft + ChunkWidth, RowY1 + RowHBlocks +
+            FClockRowExtra[Band], fcClockFill, Levels[L]);
         Inc(Band);
+        CursorY := CursorY + FPlanBandHeight[Band - 1];
       end;
     end;
 
     // Bias line below the very bottom cell row (the last band's clock row),
-    // stretching the full die width far-left to far-right, unbroken, so it
+    // stretching the full floorplan width left to right, unbroken, so it
     // encloses the bottom of the clock trunk.
-    FillPlanRect(0, TopPad + TotalH - 1, TotalW, TopPad + TotalH, fcBias, -1);
+    FillPlanRect(LeftPad, TopPad + TotalH - 1 - FBottomBiasH,
+      TotalW, TopPad + TotalH, fcBias, -1);
 
     // Snapshot the layout for the ordering animation.
     FPlanCore := Core;
@@ -3206,8 +4083,11 @@ begin
     FPlanLevelFirstBand := LevelFirstBand;
     FPlanLevelBandCount := LevelBandCount;
     FPlanBandStarts := BandStarts;
-    FPlanXRight := XRight;
     FPlanRowHBlocks := RowHBlocks;
+    FPlanTrunkW := TrunkW;
+    FPlanLane0W := Lane0W;
+    FPlanLane1W := Lane1W;
+    FPlanLastTotalH := TotalH;
 
     // Build the immobile I/O anchor pads. Inputs go on the top row; the clock
     // input is placed on its own at the bottom of the die, in the middle of the
@@ -3259,7 +4139,7 @@ begin
       if ClockIsInput then
       begin
         PadRec.NetName := ClockNetName;
-        PadRec.X := XRight + 1 + RowHBlocks div 2;
+        PadRec.X := XRight + FPlanLane0W + FPlanTrunkW div 2;
         PadRec.Y := DieHBlocks - 1;
         PadRec.IsInput := True;
         SetLength(FPads, Length(FPads) + 1);
@@ -3296,7 +4176,7 @@ begin
     for L := 0 to NumLayers - 1 do
     begin
       CurChunk[L] := 0;
-      CurX[L] := 1; // fill the entire row (from the bias trunk rightwards)
+      CurX[L] := XLeft; // fill the row (from the bias trunk rightwards)
     end;
     if FPlacementModel <> nil then
       for Idx := 0 to FPlacementModel.Gates.Count - 1 do
@@ -3322,7 +4202,7 @@ begin
         begin
           Inc(CurChunk[L]);
           if CurChunk[L] < LevelBandCount[L] then
-            CurX[L] := 1
+            CurX[L] := XLeft
           else
             CurX[L] := High(Integer);
         end;
@@ -3332,7 +4212,7 @@ begin
           Continue; // no more room for this layer
         end;
         BandIndex := LevelFirstBand[L] + CurChunk[L];
-        RowY := BandStarts[BandIndex] + 1 + ((RowHBlocks - P.H) div 2);
+        RowY := BandLogicRowY(BandIndex) + ((RowHBlocks - P.H) div 2);
         P.Gate := Gate;
         P.InstanceName := Format('%s_%d', [Gate.CellName, Idx + 1]);
         P.CellName := Gate.CellName;
@@ -3371,7 +4251,7 @@ var
   TreeModel: TBlifModel;
   HasClkCell: Boolean;
   Interior: TArray<Integer>;
-  Tmp, j, Idx, W, MinX, NextLeft, BandCount, BandHeight, s, e: Integer;
+  Tmp, j, Idx, W, MinX, NextLeft, BandCount, s, e: Integer;
   RootNode: Integer;
 
   function WalkNet(const ANetName: string; ClkY: Integer): Integer;
@@ -3424,7 +4304,7 @@ var
         end
         else
         begin
-          FClockSubtree[L][Node].X := FPlanXRight div 2;
+          FClockSubtree[L][Node].X := (FPlanXLeft + FPlanXRight) div 2;
           FClockSubtree[L][Node].Y := ClkY;
         end;
       end
@@ -3453,8 +4333,8 @@ var
         begin
           FClockSubtree[L][Node].X :=
             Round(SumX / Cnt - FClockSubtree[L][Node].W / 2);
-          if FClockSubtree[L][Node].X < 1 then
-            FClockSubtree[L][Node].X := 1;
+          if FClockSubtree[L][Node].X < FPlanXLeft then
+            FClockSubtree[L][Node].X := FPlanXLeft;
           if FClockSubtree[L][Node].X + FClockSubtree[L][Node].W > FPlanXRight then
             FClockSubtree[L][Node].X := FPlanXRight - FClockSubtree[L][Node].W;
           FClockSubtree[L][Node].Y := ClkY - FClockSubtree[L][Node].H div 2;
@@ -3463,7 +4343,7 @@ var
         end
         else
         begin
-          FClockSubtree[L][Node].X := FPlanXRight div 2;
+          FClockSubtree[L][Node].X := (FPlanXLeft + FPlanXRight) div 2;
           FClockSubtree[L][Node].Y := ClkY - FClockSubtree[L][Node].H div 2;
         end;
       end;
@@ -3485,8 +4365,7 @@ var
     SetLength(Counts, BandCount);
     if FClockSubtree[L][NodeIdx].IsLeaf then
     begin
-      Band := (FClockSubtree[L][NodeIdx].Y - 1) div BandHeight -
-        FPlanLevelFirstBand[L];
+      Band := BandIndexOfY(FClockSubtree[L][NodeIdx].Y) - FPlanLevelFirstBand[L];
       if Band < 0 then
         Band := 0;
       if Band >= BandCount then
@@ -3508,8 +4387,8 @@ var
       if Counts[Band] > Counts[BestBand] then
         BestBand := Band;
     FClockSubtree[L][NodeIdx].Band := BestBand;
-    FClockSubtree[L][NodeIdx].Y := FPlanBandStarts[
-      FPlanLevelFirstBand[L] + BestBand] + 2 + FPlanRowHBlocks +
+    FClockSubtree[L][NodeIdx].Y := BandClockRowY(
+      FPlanLevelFirstBand[L] + BestBand) +
       FPlanRowHBlocks div 2 - FClockSubtree[L][NodeIdx].H div 2;
     if FClockSubtree[L][NodeIdx].Y < 0 then
       FClockSubtree[L][NodeIdx].Y := 0;
@@ -3568,8 +4447,7 @@ begin
         AddFloorplanError(Format('Clock tree: tap net "clk_row_%d" missing.',
           [FPlanLevels[L]]));
       RootNode := WalkNet(Format('clk_row_%d', [FPlanLevels[L]]),
-        FPlanBandStarts[FPlanLevelFirstBand[L]] + 2 + FPlanRowHBlocks +
-        FPlanRowHBlocks div 2);
+        BandClockRowY(FPlanLevelFirstBand[L]) + FPlanRowHBlocks div 2);
       // Spread the level's network across its wrapped bands: assign each node
       // to the band holding the majority of its descendant leaves, and place
       // interior nodes in that band's clock row. WalkNet appends the root
@@ -3579,9 +4457,6 @@ begin
         BandCount := FPlanLevelBandCount[L];
         if BandCount < 1 then
           BandCount := 1;
-        BandHeight := 2 + 2 * FPlanRowHBlocks;
-        if BandHeight < 1 then
-          BandHeight := 1;
         AssignBands(RootNode);
       end;
     end;
@@ -3627,7 +4502,7 @@ begin
         if e - s >= 2 then
         begin
           // Forward pass: keep a one-cell gap, clamped within the row.
-          MinX := 1;
+          MinX := FPlanXLeft;
           for i := s to e - 1 do
           begin
             Idx := Interior[i];
@@ -3636,8 +4511,8 @@ begin
               FClockSubtree[L][Idx].X := MinX;
             if FClockSubtree[L][Idx].X + W > FPlanXRight then
               FClockSubtree[L][Idx].X := FPlanXRight - W;
-            if FClockSubtree[L][Idx].X < 1 then
-              FClockSubtree[L][Idx].X := 1;
+            if FClockSubtree[L][Idx].X < FPlanXLeft then
+              FClockSubtree[L][Idx].X := FPlanXLeft;
             MinX := FClockSubtree[L][Idx].X + W + 1;
           end;
           // Backward pass: release any forward push where there is room.
@@ -3650,8 +4525,8 @@ begin
               FClockSubtree[L][Idx].X := FPlanXRight - W;
             if FClockSubtree[L][Idx].X + W + 1 > NextLeft then
               FClockSubtree[L][Idx].X := NextLeft - W - 1;
-            if FClockSubtree[L][Idx].X < 1 then
-              FClockSubtree[L][Idx].X := 1;
+            if FClockSubtree[L][Idx].X < FPlanXLeft then
+              FClockSubtree[L][Idx].X := FPlanXLeft;
             NextLeft := FClockSubtree[L][Idx].X;
           end;
         end;
@@ -3675,7 +4550,7 @@ const
 var
   TreeModel: TBlifModel;
   CurNet: string;
-  i, j, k, L, Lv, NextJ, Cursor, BufY, BestB, TrunkX, BandHeight: Integer;
+  i, j, k, L, Lv, NextJ, Cursor, BufY, BestB, TrunkX, LastB: Integer;
   Net: TNet;
   NC: TNetConnection;
   Conn: TPinConnection;
@@ -3777,10 +4652,10 @@ begin
   end;
 
   // ---- Place the junctions at the base of their layers. ---------------------
-  TrunkX := FPlanXRight + 1;
-  BandHeight := 2 + 2 * FPlanRowHBlocks;
-  if BandHeight < 1 then
-    BandHeight := 1;
+  // The clock trunk sits between the two flanking bias lanes: its left edge is
+  // after the left feed lane (FPlanXRight + FPlanLane0W), so the trunk cells
+  // move right with the lane when it is widened.
+  TrunkX := FPlanXRight + FPlanLane0W;
   for i := 0 to High(FSpine) do
     if FSpine[i].IsJunction then
     begin
@@ -3794,8 +4669,8 @@ begin
         end;
       if L < 0 then
         Continue;
-      SegBottom := FPlanBandStarts[FPlanLevelFirstBand[L] +
-        FPlanLevelBandCount[L] - 1] + BandHeight;
+      LastB := FPlanLevelFirstBand[L] + FPlanLevelBandCount[L] - 1;
+      SegBottom := BandClockRowY(LastB) + FPlanRowHBlocks;
       FSpine[i].Y := Round(SegBottom - FSpine[i].H);
       FSpine[i].X := TrunkX + (FPlanRowHBlocks - FSpine[i].W) div 2;
       if FSpine[i].X < TrunkX then
@@ -3832,8 +4707,7 @@ begin
         BestD := MaxSingle;
         for k := 0 to High(FPlanBandStarts) do
         begin
-          ClkY := FPlanBandStarts[k] + 2 + FPlanRowHBlocks +
-            FPlanRowHBlocks / 2;
+          ClkY := BandClockRowY(k) + FPlanRowHBlocks / 2;
           D := Abs(ClkY - BufY);
           if D < BestD then
           begin
@@ -3853,7 +4727,7 @@ begin
           if FSpine[j].H < 1 then FSpine[j].H := 1;
         end;
         FSpine[j].X := FPlanXRight - FSpine[j].W;
-        FSpine[j].Y := FPlanBandStarts[BestB] + 2 + FPlanRowHBlocks +
+        FSpine[j].Y := BandClockRowY(BestB) +
           (FPlanRowHBlocks - FSpine[j].H) div 2;
       end
       else
@@ -4461,21 +5335,22 @@ const
   MinBlockPx = 3.0;   // below this on-screen block size, skip the grid
   CellAlpha = $50;   // placed cells: semi-transparent grey
   PortAlpha = 0.55;   // port shapes: semi-transparent
-  HueShift = 30.0;    // constant hue shift between successive layers
+  BaseHue = 216.0;    // starting hue for the first layer
+  HueShift = 222.0;   // hue step between successive layers (mod 360)
 var
   R: TRectF;
   ClipState: TCanvasSaveState;
   DieW, DieH, Core: Double;
-  Cols, Rows, i: Integer;
+  Cols, Rows, i, j: Integer;
   X, Y: Single;
   BlockPx, WorldX0, WorldX1, WorldY0, WorldY1: Single;
   I0, I1, J0, J1: Integer;
-  LayerColors: TDictionary<string, TAlphaColor>;
-  LayerIdx: Integer;
   P: TPlacedComponent;
   ClkL, ClkIdx: Integer;
   ClkNode: TPlacedClockNode;
   Sp: TSpineComponent;
+  HeatL, HeatMax, HeatV: Integer;
+  HeatT: Single;
 
   function WX(AValue: Single): Single;
   begin
@@ -4491,52 +5366,21 @@ var
   // TAlphaColorF.CreateHSL helper is not available on this toolchain, so the
   // conversion is done by hand.
   function HslColor(H, S, L, A: Single): TAlphaColor;
-  var
-    C, X, M: Single;
-    R, G, B: Single;
-    Hh: Single;
   begin
-    if S <= 0 then
-    begin
-      R := L;
-      G := L;
-      B := L;
-    end
-    else
-    begin
-      Hh := H / 360.0;
-      C := (1 - Abs(2 * L - 1)) * S;
-      X := C * (1 - Abs(Frac(Hh * 6.0) * 2 - 1));
-      M := L - C / 2;
-      case Trunc(Hh * 6.0) mod 6 of
-        0: begin R := C; G := X; B := 0; end;
-        1: begin R := X; G := C; B := 0; end;
-        2: begin R := 0; G := C; B := X; end;
-        3: begin R := 0; G := X; B := C; end;
-        4: begin R := X; G := 0; B := C; end;
-      else
-        begin R := C; G := 0; B := X; end;
-      end;
-      R := R + M;
-      G := G + M;
-      B := B + M;
-    end;
-    Result := TAlphaColorF.Create(R, G, B, A).ToAlphaColor;
+    Result := HslToColor(H, S, L, A);
   end;
 
-  // Per-layer colour from HSV: a constant hue shift per new layer (colour
-  // assigned on first sight, so the map is stable within one paint).
-  function LayerColor(const ALayer: string): TAlphaColor;
+  // Per-layer colour from HSV: a constant hue shift per layer, keyed by the
+  // layer's position in the parsed-library order (FRoutingLayers), so colours
+  // are stable and the legend matches what is drawn.
+  function LayerColor(const ALayer: string; AAlpha: Single): TAlphaColor;
   var
-    Hue: Single;
+    k: Integer;
   begin
-    if not LayerColors.TryGetValue(ALayer, Result) then
-    begin
-      Hue := LayerIdx * HueShift;
-      Result := HslColor(Hue, 0.65, 0.55, PortAlpha);
-      LayerColors.Add(ALayer, Result);
-      Inc(LayerIdx);
-    end;
+    k := FRoutingLayers.IndexOf(ALayer);
+    if k < 0 then
+      k := 0;
+    Result := HslColor(BaseHue + k * HueShift, 0.65, 0.55, AAlpha);
   end;
 
   // Draws every port shape of one cell, translated to its placed origin (and
@@ -4554,7 +5398,9 @@ var
     for Port in ACell.Ports do
       for Shape in Port.Shapes do
       begin
-        Canvas.Fill.Color := LayerColor(Shape.Layer);
+        if not RoutingLayerEnabled(Shape.Layer) then
+          Continue;
+        Canvas.Fill.Color := LayerColor(Shape.Layer, PortAlpha);
         if Rotated then
         begin
           Wx1 := AX * Core + (AHeight - Shape.y2);
@@ -4564,10 +5410,11 @@ var
         end
         else
         begin
+          // Canvas Y runs down while LEF Y runs up: flip (AHeight - y).
           Wx1 := AX * Core + Shape.x1;
           Wx2 := AX * Core + Shape.x2;
-          Wy1 := AY * Core + Shape.y1;
-          Wy2 := AY * Core + Shape.y2;
+          Wy1 := AY * Core + (AHeight - Shape.y2);
+          Wy2 := AY * Core + (AHeight - Shape.y1);
         end;
         Canvas.FillRect(TRectF.Create(WX(Wx1), WY(Wy1), WX(Wx2), WY(Wy2)),
           0, 0, [], 1.0);
@@ -4575,7 +5422,9 @@ var
     for Port in ACell.PowerPorts do
       for Shape in Port.Shapes do
       begin
-        Canvas.Fill.Color := LayerColor(Shape.Layer);
+        if not RoutingLayerEnabled(Shape.Layer) then
+          Continue;
+        Canvas.Fill.Color := LayerColor(Shape.Layer, PortAlpha);
         if Rotated then
         begin
           Wx1 := AX * Core + (AHeight - Shape.y2);
@@ -4585,10 +5434,11 @@ var
         end
         else
         begin
+          // Canvas Y runs down while LEF Y runs up: flip (AHeight - y).
           Wx1 := AX * Core + Shape.x1;
           Wx2 := AX * Core + Shape.x2;
-          Wy1 := AY * Core + Shape.y1;
-          Wy2 := AY * Core + Shape.y2;
+          Wy1 := AY * Core + (AHeight - Shape.y2);
+          Wy2 := AY * Core + (AHeight - Shape.y1);
         end;
         Canvas.FillRect(TRectF.Create(WX(Wx1), WY(Wy1), WX(Wx2), WY(Wy2)),
           0, 0, [], 1.0);
@@ -4626,13 +5476,9 @@ begin
       FRouteNeedsFit := False;
     end;
 
-    LayerColors := TDictionary<string, TAlphaColor>.Create;
-    try
-      LayerIdx := 0;
-
-      // Die body.
-      Canvas.Fill.Color := $FFF2F2F2;
-      Canvas.FillRect(TRectF.Create(WX(0), WY(0), WX(DieW), WY(DieH)), 0, 0, [], 1.0);
+    // Die body.
+    Canvas.Fill.Color := $FFF2F2F2;
+    Canvas.FillRect(TRectF.Create(WX(0), WY(0), WX(DieW), WY(DieH)), 0, 0, [], 1.0);
 
       // Placed logic cells (semi-transparent grey), then their ports.
 Canvas.Fill.Color := HslColor(0, 0, 0.6, CellAlpha / 255);
@@ -4688,6 +5534,9 @@ Canvas.Fill.Color := HslColor(0, 0, 0.6, CellAlpha / 255);
             Sp.Gate.Cell.Width, Sp.Gate.Cell.Height, Sp.Rotated);
       end;
 
+      // Routed traces (on the signal layer), drawn under the grid.
+      DrawRoutedTraces(Canvas);
+
       // Grid of core-block-sized squares (culled to the visible area).
       BlockPx := Core * FRouteZoom;
       if (BlockPx >= MinBlockPx) and (FRouteZoom > 0) then
@@ -4731,9 +5580,47 @@ Canvas.Fill.Color := HslColor(0, 0, 0.6, CellAlpha / 255);
         WX(0) + BorderHalf, WY(DieH) + BorderHalf), 0, 0, [], 1.0); // left
       Canvas.FillRect(TRectF.Create(WX(DieW) - BorderHalf, WY(0) - BorderHalf,
         WX(DieW) + BorderHalf, WY(DieH) + BorderHalf), 0, 0, [], 1.0); // right
-    finally
-      LayerColors.Free;
-    end;
+
+      // Per-block history heat map (toggle with H), overlaid on top: the
+      // strongest history across all routing layers at each block. Hue runs
+      // from yellow (light congestion) to red (severe); the alpha scales so
+      // uncongested blocks stay invisible.
+      if FRouteShowHeat and (Length(FRouteHist) > 0) and
+         (FRouteObstaclesW > 0) and (FRouteObstaclesH > 0) then
+      begin
+        HeatMax := 0;
+        for HeatL := 0 to High(FRouteHist) do
+          for i := 0 to High(FRouteHist[HeatL]) do
+            if FRouteHist[HeatL][i] > HeatMax then
+              HeatMax := FRouteHist[HeatL][i];
+        if HeatMax > 0 then
+        begin
+          for i := 0 to FRouteObstaclesH - 1 do
+            for j := 0 to FRouteObstaclesW - 1 do
+            begin
+              HeatV := 0;
+              for HeatL := 0 to High(FRouteHist) do
+              begin
+                if FRouteHist[HeatL][i * FRouteObstaclesW + j] > HeatV then
+                  HeatV := FRouteHist[HeatL][i * FRouteObstaclesW + j];
+              end;
+              if HeatV <= 0 then
+                Continue;
+              HeatT := HeatV / HeatMax;
+              Canvas.Fill.Color := HslColor(
+                60 * (1 - HeatT), 1.0, 0.5, 0.15 + 0.55 * HeatT);
+              Canvas.FillRect(TRectF.Create(WX(j * Core), WY(i * Core),
+                WX((j + 1) * Core), WY((i + 1) * Core)), 0, 0, [], 1.0);
+            end;
+        end;
+      end;
+
+      // Interactive layer legend, fixed to the top-right of the canvas (screen
+      // space, independent of pan/zoom). One row per used layer in library
+      // order: a colour box + the layer name. Clicking the box toggles whether
+      // that layer's ports are drawn (filled = enabled, outlined = hidden).
+      if FRoutingLayers.Count > 0 then
+        DrawRoutingLegend(Canvas);
   finally
     Canvas.RestoreState(ClipState);
   end;
@@ -4741,13 +5628,39 @@ end;
 
 procedure TForm1.PaintBox4MouseDown(Sender: TObject; Button: TMouseButton;
   Shift: TShiftState; X, Y: Single);
+const
+  LegendPad = 8;    // must match DrawRoutingLegend
+  RowH = 18;
+  BoxSize = 12;
+  PanelW = 70;
+var
+  PanelX, PanelY: Single;
+  i: Integer;
+  BoxLeft, BoxTop: Single;
 begin
-  if Button = TMouseButton.mbLeft then
+  if Button <> TMouseButton.mbLeft then
+    Exit;
+  // Hit-test the top-right layer legend first; clicking a colour box toggles
+  // that layer instead of starting a pan.
+  if FRoutingLayers.Count > 0 then
   begin
-    FRouteDragging := True;
-    FRouteDragX := X;
-    FRouteDragY := Y;
+    PanelX := PaintBox4.Width - PanelW - LegendPad;
+    PanelY := LegendPad;
+    for i := 0 to FRoutingLayers.Count - 1 do
+    begin
+      BoxLeft := PanelX + LegendPad;
+      BoxTop := PanelY + LegendPad + i * RowH + (RowH - BoxSize) / 2;
+      if (X >= BoxLeft) and (X <= BoxLeft + BoxSize) and
+         (Y >= BoxTop) and (Y <= BoxTop + BoxSize) then
+      begin
+        ToggleRoutingLayer(FRoutingLayers[i]);
+        Exit;
+      end;
+    end;
   end;
+  FRouteDragging := True;
+  FRouteDragX := X;
+  FRouteDragY := Y;
 end;
 
 procedure TForm1.PaintBox4MouseMove(Sender: TObject; Shift: TShiftState;
@@ -4767,6 +5680,2101 @@ procedure TForm1.PaintBox4MouseUp(Sender: TObject; Button: TMouseButton;
   Shift: TShiftState; X, Y: Single);
 begin
   FRouteDragging := False;
+end;
+
+// Rebuilds the ordered list of layers shown for routing. Only the layers
+// labelled as routing in the parsed library are listed, plus the user-chosen
+// bias-routing layer (FBiasLayer), which is not a signal-routing layer but
+// still needs to be visible. Independent of which pins happen to be used.
+procedure TForm1.BuildRoutingLayers;
+var
+  i: Integer;
+begin
+  if FRoutingLayers = nil then
+    FRoutingLayers := TStringList.Create;
+  FRoutingLayers.Clear;
+  if FLib <> nil then
+    for i := 0 to FLib.Layers.Count - 1 do
+      if FLib.Layers[i].LayerType = ltRouting then
+        FRoutingLayers.Add(FLib.Layers[i].Name);
+  if (FBiasLayer <> '') and (FRoutingLayers.IndexOf(FBiasLayer) < 0) then
+    FRoutingLayers.Add(FBiasLayer);
+  // Newly-seen layers default to enabled.
+  for i := 0 to FRoutingLayers.Count - 1 do
+    if not FRoutingLayerEnabled.ContainsKey(FRoutingLayers[i]) then
+      FRoutingLayerEnabled.Add(FRoutingLayers[i], True);
+end;
+
+function TForm1.RoutingLayerEnabled(const ALayer: string): Boolean;
+begin
+  Result := True;
+  if FRoutingLayerEnabled <> nil then
+    FRoutingLayerEnabled.TryGetValue(ALayer, Result);
+end;
+
+procedure TForm1.ToggleRoutingLayer(const ALayer: string);
+var
+  B: Boolean;
+begin
+  B := RoutingLayerEnabled(ALayer);
+  if FRoutingLayerEnabled <> nil then
+    FRoutingLayerEnabled.AddOrSetValue(ALayer, not B);
+  RepaintRoutingPage;
+end;
+
+// HSV -> TAlphaColor. H in degrees [0..360], S/L/A in [0..1].
+function TForm1.HslToColor(H, S, L, A: Single): TAlphaColor;
+var
+  C, X, M: Single;
+  R, G, B: Single;
+  Hh: Single;
+begin
+  if S <= 0 then
+  begin
+    R := L;
+    G := L;
+    B := L;
+  end
+  else
+  begin
+    Hh := H / 360.0;
+    C := (1 - Abs(2 * L - 1)) * S;
+    X := C * (1 - Abs(Frac(Hh * 6.0) * 2 - 1));
+    M := L - C / 2;
+    case Trunc(Hh * 6.0) mod 6 of
+      0: begin R := C; G := X; B := 0; end;
+      1: begin R := X; G := C; B := 0; end;
+      2: begin R := 0; G := C; B := X; end;
+      3: begin R := 0; G := X; B := C; end;
+      4: begin R := X; G := 0; B := C; end;
+    else
+      begin R := C; G := 0; B := X; end;
+    end;
+    R := R + M;
+    G := G + M;
+    B := B + M;
+  end;
+  Result := TAlphaColorF.Create(R, G, B, A).ToAlphaColor;
+end;
+
+// The legend/port colour for a layer, keyed by its position in the parsed
+// library order, with a base hue of 216 and a 222-degree step per layer
+// (modulo 360), matching the draw code.
+function TForm1.RoutingLayerColor(const ALayer: string): TAlphaColor;
+var
+  k: Integer;
+begin
+  k := FRoutingLayers.IndexOf(ALayer);
+  if k < 0 then
+    k := 0;
+  Result := HslToColor(216.0 + k * 222.0, 0.65, 0.55, 1.0);
+end;
+
+// Draws the fixed top-right layer legend. Row order = FRoutingLayers order; a
+// filled colour box means the layer is enabled, an outlined box means hidden.
+procedure TForm1.DrawRoutingLegend(Canvas: TCanvas);
+const
+  LegendPad = 8;       // margin from the canvas top-right corner
+  RowH = 18;           // per-row height
+  BoxSize = 12;        // colour-box side length
+  TextX = 26;          // text left offset within a row
+  PanelW = 70;         // legend panel width (names are short)
+var
+  PanelX, PanelY, PanelH: Single;
+  i: Integer;
+  BoxLeft, BoxTop: Single;
+  Enabled: Boolean;
+begin
+  PanelH := LegendPad * 2 + FRoutingLayers.Count * RowH;
+  PanelX := PaintBox4.Width - PanelW - LegendPad;
+  PanelY := LegendPad;
+  // Panel background (semi-transparent) so the grid underneath stays readable.
+  Canvas.Fill.Color := $E6FFFFFF;
+  Canvas.FillRect(TRectF.Create(PanelX, PanelY, PanelX + PanelW, PanelY + PanelH),
+    0, 0, [], 1.0);
+  Canvas.Fill.Color := $FF404040;
+  Canvas.FillRect(TRectF.Create(PanelX, PanelY, PanelX + PanelW, PanelY + 1), 0, 0, [], 1.0);
+  Canvas.FillRect(TRectF.Create(PanelX, PanelY + PanelH - 1, PanelX + PanelW, PanelY + PanelH), 0, 0, [], 1.0);
+  Canvas.FillRect(TRectF.Create(PanelX, PanelY, PanelX + 1, PanelY + PanelH), 0, 0, [], 1.0);
+  Canvas.FillRect(TRectF.Create(PanelX + PanelW - 1, PanelY, PanelX + PanelW, PanelY + PanelH), 0, 0, [], 1.0);
+
+  Canvas.Font.Size := 10;
+  for i := 0 to FRoutingLayers.Count - 1 do
+  begin
+    BoxLeft := PanelX + LegendPad;
+    BoxTop := PanelY + LegendPad + i * RowH + (RowH - BoxSize) / 2;
+    Enabled := RoutingLayerEnabled(FRoutingLayers[i]);
+    if Enabled then
+    begin
+      Canvas.Fill.Color := RoutingLayerColor(FRoutingLayers[i]);
+      Canvas.FillRect(TRectF.Create(BoxLeft, BoxTop, BoxLeft + BoxSize, BoxTop + BoxSize),
+        0, 0, [], 1.0);
+    end
+    else
+    begin
+      Canvas.Fill.Color := $FFFFFFFF;
+      Canvas.FillRect(TRectF.Create(BoxLeft, BoxTop, BoxLeft + BoxSize, BoxTop + BoxSize),
+        0, 0, [], 1.0);
+      Canvas.Fill.Color := $FF606060;
+      Canvas.FillRect(TRectF.Create(BoxLeft, BoxTop, BoxLeft + BoxSize, BoxTop + 1), 0, 0, [], 1.0);
+      Canvas.FillRect(TRectF.Create(BoxLeft, BoxTop + BoxSize - 1, BoxLeft + BoxSize, BoxTop + BoxSize), 0, 0, [], 1.0);
+      Canvas.FillRect(TRectF.Create(BoxLeft, BoxTop, BoxLeft + 1, BoxTop + BoxSize), 0, 0, [], 1.0);
+      Canvas.FillRect(TRectF.Create(BoxLeft + BoxSize - 1, BoxTop, BoxLeft + BoxSize, BoxTop + BoxSize), 0, 0, [], 1.0);
+    end;
+    Canvas.Fill.Color := TAlphaColorRec.Black;
+    Canvas.FillText(TRectF.Create(PanelX + TextX, BoxTop - 4,
+      PanelX + PanelW - LegendPad, BoxTop + 14),
+      FRoutingLayers[i], False, 1.0, [], TTextAlign.Leading, TTextAlign.Center);
+  end;
+end;
+
+// Maze-routes every signal net on the routing layers (vialess, for now).
+// Cost metric: Manhattan length is primary, then a penalty per bend (impedance
+// discontinuity). Nets are routed shortest-first; each net tries the routing
+// layers in order (the first one that succeeds wins), and every trace's cells
+// are marked used so later nets route around earlier ones (no intersections).
+procedure TForm1.RunRouting;
+var
+  Core: Double;
+  Path: TArray<TPoint>;
+  PathLayers: TArray<Integer>;
+  NC: TNetConnection;
+  Net: TNet;
+  Pair: TPair<string, TNet>;
+  Driver, Load: TGateInstance;
+  DriverPin, LoadPin: string;
+  Routed, Skipped, Failed: Integer;
+  Trace: TRoutedTrace;
+  i, j, k, L, ci: Integer;
+  Jobs, BestJobs: TRouteJobArray;
+  Job: TRouteJob;
+  Order: TArray<Integer>;
+  TmpIdx: Integer;
+  Pt: TPoint;
+  Iter, Overflow, BestOverflow, BestIter: Integer;
+  SigRouted, ClkRouted: Integer;
+  TreeModel: TBlifModel;
+  ClkPos: TDictionary<TGateInstance, TPoint>;
+  ClkRot: TDictionary<TGateInstance, Boolean>;
+  Sp: TSpineComponent;
+  Node: TPlacedClockNode;
+  GatePos, DriverPos: TPoint;
+  UseClkPad: Boolean;
+
+  // Adds a job's cells to the present-usage map (via cells count on both the
+  // old and the new layer, matching the trace-drawing).
+  procedure AddUsage(Pth: TArray<TPoint>; PL: TArray<Integer>);
+  var
+    ii: Integer;
+  begin
+    for ii := 0 to High(Pth) do
+    begin
+      Pt := Pth[ii];
+      if (Pt.X < 0) or (Pt.X >= FRouteObstaclesW) or
+         (Pt.Y < 0) or (Pt.Y >= FRouteObstaclesH) then
+        Continue;
+      Inc(FRouteUsage[PL[ii]][Pt.Y * FRouteObstaclesW + Pt.X]);
+      if (ii > 0) and (PL[ii] <> PL[ii - 1]) then
+        Inc(FRouteUsage[PL[ii - 1]][Pt.Y * FRouteObstaclesW + Pt.X]);
+    end;
+  end;
+
+  // Builds one TRouteJob for a signal net (from the placement model) or for a
+  // single clock link (one driver -> load branch of a clock net's fan-out).
+  procedure PushJob(ANetName: string; AKind: TRouteJobKind;
+    ADriver: TGateInstance; ADriverPin: string;
+    ALoad: TGateInstance; ALoadPin: string);
+  var
+    SJ: TRouteJob;
+  begin
+    SJ.NetName := ANetName;
+    SJ.Kind := AKind;
+    SJ.Driver := ADriver;
+    SJ.DriverPin := ADriverPin;
+    SJ.Load := ALoad;
+    SJ.LoadPin := ALoadPin;
+    SJ.Routed := False;
+    SJ.Path := nil;
+    SJ.PathLayers := nil;
+    SJ.StartValid := False;
+    SJ.GoalValid := False;
+    SJ.Dist := High(Integer) div 2;
+    if ADriver = nil then
+    begin
+      if GetPad(ANetName, SJ.Start) then
+        SJ.StartValid := True;
+    end
+    else if GatePinBlock(ADriver, ADriverPin, 0, SJ.Start) then
+      SJ.StartValid := True;
+    if ALoad = nil then
+    begin
+      if GetPad(ANetName, SJ.Goal) then
+        SJ.GoalValid := True;
+    end
+    else if GatePinBlock(ALoad, ALoadPin, 0, SJ.Goal) then
+      SJ.GoalValid := True;
+    if SJ.StartValid and SJ.GoalValid then
+      SJ.Dist := Abs(SJ.Start.X - SJ.Goal.X) + Abs(SJ.Start.Y - SJ.Goal.Y);
+    SetLength(Jobs, Length(Jobs) + 1);
+    Jobs[High(Jobs)] := SJ;
+  end;
+
+begin
+  MemoRouting.Lines.Clear;
+  if FPlacementModel = nil then
+  begin
+    MemoRouting.Lines.Add('No placement model to route.');
+    Exit;
+  end;
+  if not (TryDimParse(EditCoreSize.Text, Core) and (Core > 0)) then
+  begin
+    MemoRouting.Lines.Add('Core block size is invalid.');
+    Exit;
+  end;
+  if FLib = nil then
+  begin
+    MemoRouting.Lines.Add('No library loaded.');
+    Exit;
+  end;
+
+    // All routing layers, in library order. The first is the primary layer;
+    // subsequent layers are used as fallbacks when the primary is blocked.
+    SetLength(FRouteLayers, 0);
+    for i := 0 to FLib.Layers.Count - 1 do
+      if FLib.Layers[i].LayerType = ltRouting then
+      begin
+        SetLength(FRouteLayers, Length(FRouteLayers) + 1);
+        FRouteLayers[High(FRouteLayers)] := FLib.Layers[i].Name;
+      end;
+    FRouteSignalLayer := '';
+    if Length(FRouteLayers) > 0 then
+      FRouteSignalLayer := FRouteLayers[0];
+    if FRouteSignalLayer = '' then
+    begin
+      MemoRouting.Lines.Add('No routing layer defined in the library.');
+      Exit;
+    end;
+
+    BuildRoutingObstacles;
+
+    // Negotiated-congestion weights and iteration budget.
+    FRoutePresFactor := 1;
+    FRouteHistFactor := 1;
+    FRouteMaxIter := 40;
+    // Show the per-block history heat map while the negotiation runs.
+    FRouteShowHeat := True;
+
+    SetLength(FRouteTraces, 0);
+    Routed := 0;
+    Skipped := 0;
+    Failed := 0;
+    SetLength(Jobs, 0);
+
+    // Collect signal nets (non-clock pins, placed gates only).
+    for Pair in FPlacementModel.Nets do
+    begin
+      Net := Pair.Value;
+      Driver := nil;
+      DriverPin := '';
+      Load := nil;
+      LoadPin := '';
+      for NC in Net.Connections do
+      begin
+        if IsClockPinName(NC.PinName) then
+          Continue;
+        if not FGatePlacement.ContainsKey(NC.Gate) then
+          Continue;
+        if NC.IsDriver then
+        begin
+          Driver := NC.Gate;
+          DriverPin := NC.PinName;
+        end
+        else
+        begin
+          Load := NC.Gate;
+          LoadPin := NC.PinName;
+        end;
+      end;
+      if (Driver = nil) and (Load = nil) then
+      begin
+        Inc(Skipped);
+        Continue;
+      end;
+      PushJob(Net.Name, rkSignal, Driver, DriverPin, Load, LoadPin);
+    end;
+
+    // Collect clock links from the buffered clock tree (driver -> each load).
+    TreeModel := FClockBufferedModel;
+    if TreeModel = nil then
+      TreeModel := FClockModel;
+    if (TreeModel <> nil) and (Length(FPlanLevels) > 0) then
+    begin
+      ClkPos := TDictionary<TGateInstance, TPoint>.Create;
+      ClkRot := TDictionary<TGateInstance, Boolean>.Create;
+      try
+        for i := 0 to High(FSpine) do
+        begin
+          Sp := FSpine[i];
+          if Sp.Gate <> nil then
+          begin
+            ClkPos.AddOrSetValue(Sp.Gate, TPoint.Create(Sp.X, Sp.Y));
+            ClkRot.AddOrSetValue(Sp.Gate, Sp.Rotated);
+          end;
+        end;
+        for L := 0 to High(FClockSubtree) do
+          for ci := 0 to High(FClockSubtree[L]) do
+          begin
+            Node := FClockSubtree[L][ci];
+            if Node.Gate <> nil then
+            begin
+              ClkPos.AddOrSetValue(Node.Gate, TPoint.Create(Node.X, Node.Y));
+              ClkRot.AddOrSetValue(Node.Gate, False);
+            end;
+          end;
+        for Pair in TreeModel.Nets do
+        begin
+          Net := Pair.Value;
+          if not StartsText('clk', Net.Name) then
+          begin
+            Inc(Skipped);
+            Continue;
+          end;
+          Driver := nil;
+          DriverPin := '';
+          UseClkPad := False;
+          for NC in Net.Connections do
+            if NC.IsDriver and ClkPos.ContainsKey(NC.Gate) then
+            begin
+              Driver := NC.Gate;
+              DriverPin := NC.PinName;
+              Break;
+            end;
+          if (Driver = nil) and SameText(Net.Name, 'clk') and
+             (FClockPadIdx >= 0) then
+            UseClkPad := True;
+          if (Driver = nil) and (not UseClkPad) then
+          begin
+            Inc(Skipped);
+            Continue;
+          end;
+          if UseClkPad then
+            DriverPos := TPoint.Create(FPads[FClockPadIdx].X, FPads[FClockPadIdx].Y)
+          else if not GatePinBlockAt(Driver, DriverPin, 0,
+            ClkPos[Driver].X, ClkPos[Driver].Y, ClkRot[Driver], DriverPos) then
+          begin
+            Inc(Skipped);
+            Continue;
+          end;
+          // Each non-driver connection is a point-to-point link.
+          for NC in Net.Connections do
+          begin
+            if NC.IsDriver then
+              Continue;
+            if not ClkPos.TryGetValue(NC.Gate, GatePos) then
+            begin
+              Inc(Skipped);
+              Continue;
+            end;
+            if not GatePinBlockAt(NC.Gate, NC.PinName, 0,
+              GatePos.X, GatePos.Y, ClkRot[NC.Gate], Pt) then
+            begin
+              Inc(Skipped);
+              Continue;
+            end;
+            Job.NetName := Net.Name;
+            Job.Kind := rkClock;
+            Job.Driver := nil; // clock links use the pre-resolved DriverPos
+            Job.DriverPin := '';
+            Job.Load := NC.Gate;
+            Job.LoadPin := NC.PinName;
+            Job.Routed := False;
+            Job.Path := nil;
+            Job.PathLayers := nil;
+            Job.Start := DriverPos;
+            Job.Goal := Pt;
+            Job.StartValid := True;
+            Job.GoalValid := True;
+            Job.Dist := Abs(Job.Start.X - Job.Goal.X) +
+              Abs(Job.Start.Y - Job.Goal.Y);
+            SetLength(Jobs, Length(Jobs) + 1);
+            Jobs[High(Jobs)] := Job;
+          end;
+        end;
+      finally
+        ClkPos.Free;
+        ClkRot.Free;
+      end;
+    end;
+
+    // Shortest links first (stable insertion order for ties): a good first
+    // guess; later iterations let history drive the negotiation.
+    SetLength(Order, Length(Jobs));
+    for i := 0 to High(Jobs) do
+      Order[i] := i;
+    for i := 0 to High(Order) - 1 do
+      for j := i + 1 to High(Order) do
+        if Jobs[Order[j]].Dist < Jobs[Order[i]].Dist then
+        begin
+          TmpIdx := Order[i];
+          Order[i] := Order[j];
+          Order[j] := TmpIdx;
+        end;
+
+    // ---- Negotiated congestion routing (rip-up and re-route) ----
+    // Each iteration re-routes every link once; present usage from earlier
+    // links is a soft cost (never a hard block). After the pass, blocks used
+    // by more than one wire accumulate history, which raises their cost next
+    // iteration so contending links negotiate which one truly needs the block.
+    BestOverflow := High(Integer);
+    BestIter := 0;
+    BestJobs := nil;
+    for Iter := 1 to FRouteMaxIter do
+    begin
+      // Reset present usage (history is kept across iterations).
+      for j := 0 to High(FRouteUsage) do
+        for i := 0 to High(FRouteUsage[j]) do
+          FRouteUsage[j][i] := 0;
+      Routed := 0;
+      Failed := 0;
+      for k := 0 to High(Order) do
+      begin
+        Job := Jobs[Order[k]];
+        if Job.StartValid and Job.GoalValid and
+           AStarRoute(Job.Start, Job.Goal, Path, PathLayers) then
+        begin
+          Job.Routed := True;
+          Job.Path := Path;
+          Job.PathLayers := PathLayers;
+          AddUsage(Path, PathLayers);
+          Inc(Routed);
+        end
+        else
+        begin
+          Job.Routed := False;
+          Inc(Failed);
+        end;
+        Jobs[Order[k]] := Job;
+      end;
+      // Accumulate history on overused blocks and compute total overflow.
+      Overflow := 0;
+      for j := 0 to High(FRouteUsage) do
+        for i := 0 to High(FRouteUsage[j]) do
+          if FRouteUsage[j][i] > 1 then
+          begin
+            Inc(FRouteHist[j][i], FRouteUsage[j][i] - 1);
+            Inc(Overflow, FRouteUsage[j][i] - 1);
+          end;
+      if (Overflow < BestOverflow) or (BestIter = 0) then
+      begin
+        BestOverflow := Overflow;
+        BestIter := Iter;
+        BestJobs := Copy(Jobs);
+      end;
+      MemoRouting.Lines.Add(Format(
+        'Iter %d: %d/%d links routed, %d block(s) overused.',
+        [Iter, Routed, Length(Jobs), Overflow]));
+      if Overflow = 0 then
+        Break;
+      if Iter - BestIter >= 10 then
+        Break; // no improvement for a while; keep the best solution
+      // Refresh the trace list from this iteration's routes so the repaint
+      // shows both the current wires and the history heat map.
+      SetLength(FRouteTraces, 0);
+      for k := 0 to High(Jobs) do
+      begin
+        Job := Jobs[k];
+        if not Job.Routed or (Length(Job.Path) = 0) then
+          Continue;
+        Trace.NetName := Job.NetName;
+        Trace.Points := Job.Path;
+        SetLength(Trace.Layers, Length(Job.PathLayers));
+        for j := 0 to High(Job.PathLayers) do
+          Trace.Layers[j] := FRouteLayers[Job.PathLayers[j]];
+        SetLength(FRouteTraces, Length(FRouteTraces) + 1);
+        FRouteTraces[High(FRouteTraces)] := Trace;
+      end;
+      PaintBox4.Repaint;
+      Application.ProcessMessages;
+    end;
+
+    // Restore the best solution seen (it may be an earlier iteration).
+    if BestIter > 0 then
+      Jobs := BestJobs;
+
+    // Emit the final traces from the chosen solution.
+    Routed := 0;
+    Failed := 0;
+    SigRouted := 0;
+    ClkRouted := 0;
+    for i := 0 to High(Jobs) do
+    begin
+      Job := Jobs[i];
+      if not Job.Routed or (Length(Job.Path) = 0) then
+      begin
+        Inc(Failed);
+        Continue;
+      end;
+      Trace.NetName := Job.NetName;
+      Trace.Points := Job.Path;
+      SetLength(Trace.Layers, Length(Job.PathLayers));
+      for j := 0 to High(Job.PathLayers) do
+        Trace.Layers[j] := FRouteLayers[Job.PathLayers[j]];
+      SetLength(FRouteTraces, Length(FRouteTraces) + 1);
+      FRouteTraces[High(FRouteTraces)] := Trace;
+      Inc(Routed);
+      if Job.Kind = rkSignal then
+        Inc(SigRouted)
+      else
+        Inc(ClkRouted);
+    end;
+
+    MemoRouting.Lines.Add(Format(
+      'Routed %d signal net(s) + %d clock link(s) on %d routing layer(s).',
+      [SigRouted, ClkRouted, Length(FRouteLayers)]));
+    if Skipped > 0 then
+      MemoRouting.Lines.Add(Format('%d link(s) skipped (clock / unplaced).',
+        [Skipped]));
+    if Failed > 0 then
+      MemoRouting.Lines.Add(Format('%d link(s) could not be routed.',
+        [Failed]));
+    // Convergence report: recompute usage from the emitted solution (Jobs may
+    // have been rolled back to the best iteration) and count remaining overlap.
+    for j := 0 to High(FRouteUsage) do
+      for i := 0 to High(FRouteUsage[j]) do
+        FRouteUsage[j][i] := 0;
+    for i := 0 to High(Jobs) do
+      if Jobs[i].Routed then
+        AddUsage(Jobs[i].Path, Jobs[i].PathLayers);
+    Overflow := 0;
+    for j := 0 to High(FRouteUsage) do
+      for i := 0 to High(FRouteUsage[j]) do
+        if FRouteUsage[j][i] > 1 then
+          Inc(Overflow, FRouteUsage[j][i] - 1);
+    FRouteLastOverflow := Overflow;
+    if Overflow > 0 then
+      MemoRouting.Lines.Add(Format(
+        'WARNING: routing did NOT converge - %d block(s) still carry more than one wire after %d iteration(s).',
+        [Overflow, BestIter]))
+    else
+      MemoRouting.Lines.Add(Format(
+        'Routing converged in %d iteration(s): every block carries at most one wire.',
+        [BestIter]));
+  RepaintRoutingPage;
+end;
+
+// Builds the per-block obstacle maps for every routing layer: any block covered
+// by pin geometry (logic OR clock cells) on that layer is blocked. Cell
+// footprints are NOT blocked (they lie on other layers), matching the chosen
+// model. Clock gates are placed in FSpine / FClockSubtree and are marked with
+// the same rotation handling as the port drawing.
+procedure TForm1.BuildRoutingObstacles;
+var
+  Core, DieW, DieH: Double;
+  W, H: Integer;
+  i, j: Integer;
+  P: TPlacedComponent;
+  BX0, BY0, BX1, BY1: Integer;
+  Swp: Integer;
+  Sp: TSpineComponent;
+  Node: TPlacedClockNode;
+  L, ci: Integer;
+
+  // Marks every pin shape of one gate, placed at (AX, AY) (grid cells, with
+  // optional 90 deg CCW rotation), on the routing layer it belongs to.
+  procedure MarkGatePins(G: TGateInstance; AX, AY: Integer; Rotated: Boolean);
+  var
+    k, x, y: Integer;
+    Port2: TPort;
+    Shape2: TPortShape;
+    CellH: Double;
+  begin
+    if (G = nil) or (G.Cell = nil) then
+      Exit;
+    for k := 0 to High(FRouteLayers) do
+    begin
+      for Port2 in G.Cell.Ports do
+        for Shape2 in Port2.Shapes do
+          if SameText(Shape2.Layer, FRouteLayers[k]) then
+          begin
+            if Rotated then
+            begin
+              CellH := G.Cell.Height;
+              if CellH <= 0 then CellH := Core;
+              BX0 := Trunc((AX * Core + (CellH - Shape2.y2)) / Core);
+              BY0 := Trunc((AY * Core + Shape2.x1) / Core);
+              BX1 := Trunc((AX * Core + (CellH - Shape2.y1)) / Core);
+              BY1 := Trunc((AY * Core + Shape2.x2) / Core);
+            end
+            else
+            begin
+              // Canvas Y runs down while LEF Y runs up: flip (CellH - y).
+              CellH := G.Cell.Height;
+              if CellH <= 0 then CellH := Core;
+              BX0 := Trunc((AX * Core + Shape2.x1) / Core);
+              BY0 := Trunc((AY * Core + (CellH - Shape2.y2)) / Core);
+              BX1 := Trunc((AX * Core + Shape2.x2) / Core);
+              BY1 := Trunc((AY * Core + (CellH - Shape2.y1)) / Core);
+            end;
+            if BX1 < BX0 then begin Swp := BX0; BX0 := BX1; BX1 := Swp; end;
+            if BY1 < BY0 then begin Swp := BY0; BY0 := BY1; BY1 := Swp; end;
+            for x := BX0 to BX1 do
+              for y := BY0 to BY1 do
+                if (x >= 0) and (x < W) and (y >= 0) and (y < H) then
+                  FRouteObstacles[k][y * W + x] := True;
+          end;
+      for Port2 in G.Cell.PowerPorts do
+        for Shape2 in Port2.Shapes do
+          if SameText(Shape2.Layer, FRouteLayers[k]) then
+          begin
+            if Rotated then
+            begin
+              CellH := G.Cell.Height;
+              if CellH <= 0 then CellH := Core;
+              BX0 := Trunc((AX * Core + (CellH - Shape2.y2)) / Core);
+              BY0 := Trunc((AY * Core + Shape2.x1) / Core);
+              BX1 := Trunc((AX * Core + (CellH - Shape2.y1)) / Core);
+              BY1 := Trunc((AY * Core + Shape2.x2) / Core);
+            end
+            else
+            begin
+              // Canvas Y runs down while LEF Y runs up: flip (CellH - y).
+              CellH := G.Cell.Height;
+              if CellH <= 0 then CellH := Core;
+              BX0 := Trunc((AX * Core + Shape2.x1) / Core);
+              BY0 := Trunc((AY * Core + (CellH - Shape2.y2)) / Core);
+              BX1 := Trunc((AX * Core + Shape2.x2) / Core);
+              BY1 := Trunc((AY * Core + (CellH - Shape2.y1)) / Core);
+            end;
+            if BX1 < BX0 then begin Swp := BX0; BX0 := BX1; BX1 := Swp; end;
+            if BY1 < BY0 then begin Swp := BY0; BY0 := BY1; BY1 := Swp; end;
+            for x := BX0 to BX1 do
+              for y := BY0 to BY1 do
+                if (x >= 0) and (x < W) and (y >= 0) and (y < H) then
+                  FRouteObstacles[k][y * W + x] := True;
+          end;
+    end;
+  end;
+
+begin
+  if not (TryDimParse(EditCoreSize.Text, Core) and (Core > 0)) then
+    Core := FPlanCore;
+  W := 0;
+  H := 0;
+  if TryDimParse(EditDieW.Text, DieW) then
+    W := Round(DieW / Core);
+  if TryDimParse(EditDieH.Text, DieH) then
+    H := Round(DieH / Core);
+  if (W <= 0) or (H <= 0) then
+    Exit;
+
+  FRouteObstaclesW := W;
+  FRouteObstaclesH := H;
+  // One obstacle + usage + history map per routing layer.
+  SetLength(FRouteObstacles, Length(FRouteLayers));
+  SetLength(FRouteUsage, Length(FRouteLayers));
+  SetLength(FRouteHist, Length(FRouteLayers));
+  for j := 0 to High(FRouteLayers) do
+  begin
+    SetLength(FRouteObstacles[j], W * H);
+    SetLength(FRouteUsage[j], W * H);
+    SetLength(FRouteHist[j], W * H);
+    for i := 0 to W * H - 1 do
+    begin
+      FRouteObstacles[j][i] := False;
+      FRouteUsage[j][i] := 0;
+      FRouteHist[j][i] := 0;
+    end;
+  end;
+
+  // Logic cells (in FPlacedComponents), unrotated.
+  for i := 0 to High(FPlacedComponents) do
+  begin
+    P := FPlacedComponents[i];
+    if (P.Gate <> nil) and (P.Gate.Cell <> nil) then
+      MarkGatePins(P.Gate, P.X, P.Y, False);
+  end;
+  // Clock trunk (spine) cells - trunk cells are rotated 90 deg CCW.
+  for i := 0 to High(FSpine) do
+  begin
+    Sp := FSpine[i];
+    if (Sp.Gate <> nil) and (Sp.Gate.Cell <> nil) then
+      MarkGatePins(Sp.Gate, Sp.X, Sp.Y, Sp.Rotated);
+  end;
+  // Clock tree cells (subtree interior + leaves), unrotated.
+  for L := 0 to High(FClockSubtree) do
+    for ci := 0 to High(FClockSubtree[L]) do
+    begin
+      Node := FClockSubtree[L][ci];
+      if (Node.Gate <> nil) and (Node.Gate.Cell <> nil) then
+        MarkGatePins(Node.Gate, Node.X, Node.Y, False);
+    end;
+end;
+
+// Converts the final congestion map into bias-row expansions. No sideways
+// spacing: for the worst ~20% of overused blocks, a bias row is grown at the
+// row that holds the block - the band's middle bias row for logic-row blocks,
+// or the bias row below the clock cells for clock-row blocks. The growth goes
+// through the same IncreaseBiasRowHeight/IncreaseTopBottomBiasRow helpers the
+// 'Expand Bias Lines' button uses. Blocks whose row already received an
+// insertion this pass are ignored (many offenders on the same row collapse to
+// one row insertion). AChanged reports whether any row grew, so the caller can
+// rebuild and reroute.
+procedure TForm1.AnalyzeCongestion(var AChanged: Boolean);
+type
+  TProblemBlock = record
+    X, Y: Integer;
+    Usage, Hist: Integer;
+  end;
+var
+  Pool: TArray<TProblemBlock>;
+  PB: TProblemBlock;
+  i, j, k, L, idx, Band, W, H, RowH: Integer;
+  RowY0, RowY1, ClkY0, ClkY1: Integer;
+  Count: Integer;
+  TmpPB: TProblemBlock;
+  RowKey: Int64;
+  RowInserted: TDictionary<Int64, Boolean>;
+begin
+  AChanged := False;
+  if (Length(FRouteUsage) = 0) or (Length(FPlanBandStarts) = 0) or
+     (Length(FPlacedComponents) = 0) then
+    Exit;
+  W := FRouteObstaclesW;
+  H := FRouteObstaclesH;
+  if (W <= 0) or (H <= 0) then
+    Exit;
+  RowH := FPlanRowHBlocks;
+
+  // 1. Pool every overused block.
+  SetLength(Pool, 0);
+  for L := 0 to High(FRouteUsage) do
+    for idx := 0 to High(FRouteUsage[L]) do
+      if FRouteUsage[L][idx] > 1 then
+      begin
+        PB.X := idx mod W;
+        PB.Y := idx div W;
+        PB.Usage := FRouteUsage[L][idx];
+        PB.Hist := FRouteHist[L][idx];
+        SetLength(Pool, Length(Pool) + 1);
+        Pool[High(Pool)] := PB;
+      end;
+  if Length(Pool) = 0 then
+    Exit;
+
+  // 2. Rank by usage (desc), history (desc); take the worst 20% (min 1).
+  for i := 0 to High(Pool) - 1 do
+    for j := i + 1 to High(Pool) do
+      if (Pool[j].Usage > Pool[i].Usage) or
+         ((Pool[j].Usage = Pool[i].Usage) and (Pool[j].Hist > Pool[i].Hist)) then
+      begin
+        TmpPB := Pool[i];
+        Pool[i] := Pool[j];
+        Pool[j] := TmpPB;
+      end;
+  Count := (Length(Pool) + 4) div 5;
+  if Count < 1 then
+    Count := 1;
+
+  // 3. Grow a bias row for each offending block's row; blocks sharing a row (or
+  //    a band between rows) collapse to a single insertion. RowKey encodes the
+  //    target: band*2 = logic row, band*2+1 = clock row. The row growth goes
+  //    through the same bias-expansion helpers the 'Expand Bias Lines' button
+  //    uses, so the congestion fixes and the manual expansion stay consistent.
+  //    A LOGIC-row block grows that band's MIDDLE bias row (the bias zone
+  //    directly below the logic cells); a CLOCK-row block grows the bias row
+  //    below the clock cells (the next band's top bias, or the bottom-most bias
+  //    row for the last band). Each distinct target is decided against the
+  //    CURRENT geometry first, then grown (the helpers rebuild as they grow, so
+  //    the band-to-block mapping must not be re-derived after a rebuild).
+  RowInserted := TDictionary<Int64, Boolean>.Create;
+  try
+    for k := 0 to Count - 1 do
+    begin
+      PB := Pool[k];
+      Band := BandIndexOfY(PB.Y);
+      if Band < 0 then
+        Continue;
+      RowY0 := BandLogicRowY(Band);
+      RowY1 := RowY0 + RowH; // logic-row cell region
+      ClkY0 := BandClockRowY(Band);
+      ClkY1 := ClkY0 + RowH; // clock-row cell region
+      if (PB.Y >= RowY0) and (PB.Y < RowY1) then
+        RowKey := Band * 2 // logic row
+      else if (PB.Y >= ClkY0) and (PB.Y < ClkY1) then
+        RowKey := Band * 2 + 1 // clock row
+      else
+        RowKey := Band * 2; // between rows -> grow the space between layers
+      if RowInserted.ContainsKey(RowKey) then
+        Continue; // this row already got its insertion this pass
+      RowInserted.Add(RowKey, True);
+    end;
+    for RowKey in RowInserted.Keys do
+    begin
+      Band := RowKey div 2;
+      if RowKey mod 2 = 0 then
+      begin
+        // Logic row (or between rows): grow the band's middle bias row, the
+        // bias zone between the logic and clock cells.
+        if IncreaseBiasRowHeight(Band, 1, 1) then
+          AChanged := True
+        else
+          Break; // die is full; no further rows will fit this pass
+      end
+      else
+      begin
+        // Clock row: grow the bias row below the clock cells - the next band's
+        // top bias row, or the bottom-most bias row for the last band.
+        if Band + 1 < Length(FBiasRowH) then
+        begin
+          if IncreaseBiasRowHeight(Band + 1, 0, 1) then
+            AChanged := True
+          else
+            Break; // die is full
+        end
+        else if IncreaseTopBottomBiasRow(False, 1) then
+          AChanged := True
+        else
+          Break; // die is full
+      end;
+    end;
+  finally
+    RowInserted.Free;
+  end;
+end;
+
+// Increase the height of a band's TOP (Which=0) or MIDDLE (Which=1) bias row by
+// ByRows cells. Reports 'not enough space for the bias lines' and leaves the
+// layout unchanged if the die has no room for the taller row.
+function TForm1.IncreaseBiasRowHeight(Band, Which, ByRows: Integer): Boolean;
+var
+  DieHBlocks: Integer;
+begin
+  Result := False;
+  if (Band < 0) or (Band >= Length(FBiasRowH)) or (Which < 0) or (Which > 1) or
+     (ByRows < 1) then
+    Exit;
+  if FFloorplanH > 0 then
+    DieHBlocks := FFloorplanH
+  else
+    Exit;
+  if FPlanLastTotalH + ByRows + 2 > DieHBlocks then
+  begin
+    AddFloorplanError('not enough space for the bias lines');
+    Exit;
+  end;
+  FBiasRowH[Band][Which] := FBiasRowH[Band][Which] + ByRows;
+  RebuildFloorplanPreserve;
+  Result := True;
+end;
+
+// Increase the height of the topmost (IsTop=True, band 0's top bias row) or the
+// bottommost full-width bias row by ByRows cells. Same height error handling.
+function TForm1.IncreaseTopBottomBiasRow(IsTop: Boolean;
+  ByRows: Integer): Boolean;
+var
+  DieHBlocks: Integer;
+begin
+  Result := False;
+  if ByRows < 1 then
+    Exit;
+  if FFloorplanH > 0 then
+    DieHBlocks := FFloorplanH
+  else
+    Exit;
+  if FPlanLastTotalH + ByRows + 2 > DieHBlocks then
+  begin
+    AddFloorplanError('not enough space for the bias lines');
+    Exit;
+  end;
+  if IsTop then
+  begin
+    if (Length(FBiasRowH) > 0) and (Length(FBiasRowH[0]) > 0) then
+    begin
+      FBiasRowH[0][0] := FBiasRowH[0][0] + ByRows;
+      RebuildFloorplanPreserve;
+      Result := True;
+    end;
+  end
+  else
+  begin
+    FBottomBiasH := FBottomBiasH + ByRows;
+    RebuildFloorplanPreserve;
+    Result := True;
+  end;
+end;
+
+// Increase the width of a vertical BIAS lane by ByCols cells: ColIdx 0 = the
+// left feed lane immediately before the clock trunk, ColIdx 1 = the far-right
+// lane. The green clock trunk itself is not a bias zone and is never widened.
+// If the die has no spare width, first tries to recover space by packing
+// (nudging) every row's cells to the left (knock-on) and shrinking the row
+// allocation with the
+// recovered columns; only if that is impossible reports 'no space for clock
+// bias lines' and leaves the layout unchanged.
+function TForm1.IncreaseClockTrunkColumn(ColIdx, ByCols: Integer): Boolean;
+var
+  DieWBlocks, MaxRowW, NewLaneW, Need: Integer;
+  TightMax, PrevRight, X: Integer;
+  b, i, Ci, n: Integer;
+  RowCells: TArray<Integer>;
+  Tmp: Integer;
+  NewLane: TArray<Integer>;
+
+  // Sorts the band's logic-row cell indices by X (insertion sort, stable).
+  procedure SortRowByX;
+  var
+    a, b2: Integer;
+  begin
+    for a := 1 to n - 1 do
+    begin
+      Tmp := RowCells[a];
+      b2 := a - 1;
+      while (b2 >= 0) and
+            (FPlacedComponents[RowCells[b2]].X > FPlacedComponents[Tmp].X) do
+      begin
+        RowCells[b2 + 1] := RowCells[b2];
+        Dec(b2);
+      end;
+      RowCells[b2 + 1] := Tmp;
+    end;
+  end;
+
+begin
+  Result := False;
+  // ColIdx: 0 = left feed bias lane, 1 = far-right bias lane.
+  if (ColIdx < 0) or (ColIdx > 1) or (ByCols < 1) then
+    Exit;
+  if Length(FBiasLaneW) <> 2 then
+  begin
+    NewLane := nil;
+    SetLength(NewLane, 2);
+    NewLane[0] := 1;
+    NewLane[1] := 1;
+    if Length(FBiasLaneW) >= 1 then
+    begin
+      if FBiasLaneW[0] >= 1 then
+        NewLane[0] := FBiasLaneW[0];
+      if Length(FBiasLaneW) >= 2 then
+        if FBiasLaneW[1] >= 1 then
+          NewLane[1] := FBiasLaneW[1];
+    end;
+    FBiasLaneW := NewLane;
+  end;
+  if FFloorplanW > 0 then
+    DieWBlocks := FFloorplanW
+  else
+    Exit;
+  MaxRowW := FPlanXRight - FPlanXLeft;
+  if MaxRowW < 1 then
+    MaxRowW := 1;
+  NewLaneW := FPlanLane0W + FPlanLane1W + ByCols; // widened lane adds ByCols
+  // Fits outright (far-left trunk 1 + rows + lane0 + trunk + lane1)?
+  if MaxRowW + 1 + NewLaneW + FPlanTrunkW <= DieWBlocks then
+  begin
+    FBiasLaneW[ColIdx] := FBiasLaneW[ColIdx] + ByCols;
+    RebuildFloorplanPreserve;
+    Result := True;
+    Exit;
+  end;
+  // Need to recover columns from the rows: pack each logic row's cells to the
+  // left (knock-on nudge) and compute the tightest row width.
+  Need := (MaxRowW + 1 + NewLaneW + FPlanTrunkW) - DieWBlocks;
+  if Need < 1 then
+    Need := 1;
+  TightMax := 0;
+  for b := 0 to High(FPlanBandStarts) do
+  begin
+    SetLength(RowCells, 0);
+    for i := 0 to High(FPlacedComponents) do
+      if (BandIndexOfY(FPlacedComponents[i].Y) = b) and
+         (FPlacedComponents[i].Y >= BandLogicRowY(b)) and
+         (FPlacedComponents[i].Y < BandLogicRowY(b) + FPlanRowHBlocks) then
+      begin
+        SetLength(RowCells, Length(RowCells) + 1);
+        RowCells[High(RowCells)] := i;
+      end;
+    n := Length(RowCells);
+    if n = 0 then
+      Continue;
+    SortRowByX;
+    // Knock-on: pack left from XLeft with one-cell gaps.
+    PrevRight := FPlanXLeft - 1;
+    for Ci := 0 to n - 1 do
+    begin
+      X := FPlanXLeft;
+      if PrevRight + 1 > X then
+        X := PrevRight + 1;
+      if FPlacedComponents[RowCells[Ci]].X > X then
+        FPlacedComponents[RowCells[Ci]].X := X;
+      FGatePlacement.AddOrSetValue(FPlacedComponents[RowCells[Ci]].Gate,
+        TPoint.Create(FPlacedComponents[RowCells[Ci]].X,
+          FPlacedComponents[RowCells[Ci]].Y));
+      PrevRight := FPlacedComponents[RowCells[Ci]].X +
+        FPlacedComponents[RowCells[Ci]].W;
+    end;
+    if PrevRight - FPlanXLeft + 1 > TightMax then
+      TightMax := PrevRight - FPlanXLeft + 1;
+  end;
+  if MaxRowW - TightMax >= Need then
+  begin
+    // Recovered enough: shrink the row allocation, widen the lane, rebuild.
+    FPlanMaxRowW := MaxRowW - Need;
+    FBiasLaneW[ColIdx] := FBiasLaneW[ColIdx] + ByCols;
+    RebuildFloorplanPreserve;
+    Result := True;
+  end
+  else
+  begin
+    // Could not recover enough width. Rebuild so the (nudged) cell positions
+    // match the floorplan grid, then report the failure.
+    RebuildFloorplanPreserve;
+    AddFloorplanError('no space for clock bias lines');
+  end;
+end;
+
+// Collects the power ports of one placed cell that sit on AEdge (top/bottom),
+// as TBiasPort records with their grid-block position and current. Used to
+// partition a row's bias demand into current groups. Ports use the cell's local
+// shape geometry mapped to the die via the placed origin (AX, AY).
+procedure TForm1.CollectCellPorts(G: TGateInstance; AX, AY: Integer;
+  AEdge: TPortEdge; var Ports: TArray<TBiasPort>);
+var
+  Port: TPort;
+  Shape: TPortShape;
+  BP: TBiasPort;
+  Core, CellH: Double;
+  BX0, BX1, HBlocks: Integer;
+  Swp: Integer;
+begin
+  if (G = nil) or (G.Cell = nil) then
+    Exit;
+  Core := FPlanCore;
+  if Core <= 0 then
+    Exit;
+  CellH := G.Cell.Height;
+  if CellH <= 0 then
+    CellH := Core;
+  HBlocks := Max(1, Round(CellH / Core));
+  for Port in G.Cell.PowerPorts do
+    for Shape in Port.Shapes do
+      if Shape.Edge = AEdge then
+      begin
+        BP.Gate := G;
+        BP.Edge := AEdge;
+        // Horizontal port block from the parsed shape geometry (X is not
+        // affected by the Y-axis flip).
+        BX0 := Trunc((AX * Core + Shape.x1) / Core);
+        BX1 := Trunc((AX * Core + Shape.x2) / Core);
+        if BX1 < BX0 then begin Swp := BX0; BX0 := BX1; BX1 := Swp; end;
+        BP.X := (BX0 + BX1) div 2;
+        // The bias line must NOT enter the cell: the offshoot terminates at the
+        // cell's edge row, so the connection reads as a T touching the cell.
+        // Top-edge ports touch the cell's top row, bottom-edge ports its bottom
+        // row - read from the port's edge and the placed cell, no hard-coding.
+        if AEdge = peTop then
+          BP.Y := AY
+        else
+          BP.Y := AY + HBlocks - 1;
+        BP.CurrentUa := Shape.CurrentUa;
+        SetLength(Ports, Length(Ports) + 1);
+        Ports[High(Ports)] := BP;
+      end;
+end;
+
+// Partitions a side's ports (in placement order, i.e. by X) into groups each
+// carrying at most AMaxUa. Each group becomes one horizontal bias track. Ports
+// with no current are skipped; a group never splits a single port (the caller
+// guarantees AMaxUa >= every port's current).
+function TForm1.PartitionBiasPorts(const Ports: TArray<TBiasPort>;
+  AMaxUa: Double): TArray<TBiasGroup>;
+var
+  Sorted: TArray<TBiasPort>;
+  Order: TArray<Integer>;
+  i, j, Tmp: Integer;
+  G: TBiasGroup;
+  GroupStart: Integer;
+begin
+  Result := nil;
+  if AMaxUa <= 0 then
+    Exit;
+  // Keep only ports with current, ordered by X (placement order).
+  SetLength(Sorted, 0);
+  for i := 0 to High(Ports) do
+    if Ports[i].CurrentUa > 0 then
+    begin
+      SetLength(Sorted, Length(Sorted) + 1);
+      Sorted[High(Sorted)] := Ports[i];
+    end;
+  if Length(Sorted) = 0 then
+    Exit;
+  SetLength(Order, Length(Sorted));
+  for i := 0 to High(Order) do
+    Order[i] := i;
+  for i := 0 to High(Order) - 1 do
+    for j := i + 1 to High(Order) do
+      if Sorted[Order[j]].X < Sorted[Order[i]].X then
+      begin
+        Tmp := Order[i];
+        Order[i] := Order[j];
+        Order[j] := Tmp;
+      end;
+  // Greedy partition: fill a group until adding the next port would exceed the
+  // limit, then start a new group.
+  GroupStart := 0;
+  G.TotalUa := 0;
+  G.Ports := nil;
+  for i := 0 to High(Order) do
+  begin
+    if (i > GroupStart) and
+       (G.TotalUa + Sorted[Order[i]].CurrentUa > AMaxUa) then
+    begin
+      // Close the current group.
+      SetLength(Result, Length(Result) + 1);
+      Result[High(Result)] := G;
+      G.Ports := nil;
+      G.TotalUa := 0;
+      GroupStart := i;
+    end;
+    SetLength(G.Ports, Length(G.Ports) + 1);
+    G.Ports[High(G.Ports)] := Sorted[Order[i]];
+    G.TotalUa := G.TotalUa + Sorted[Order[i]].CurrentUa;
+  end;
+  if Length(G.Ports) > 0 then
+  begin
+    SetLength(Result, Length(Result) + 1);
+    Result[High(Result)] := G;
+  end;
+end;
+
+// Collects the power ports of the clock-trunk (spine) cells on one side. The
+// trunk cells are rotated 90 deg CCW, so their LEF "top" ports face LEFT and
+// their "bottom" ports face RIGHT. The port block is mapped with the same
+// rotation used by the obstacle builder: local (x, y) -> (CellH - y, x).
+// IsLeft selects the left ("top") or right ("bottom") ports.
+procedure TForm1.CollectTrunkPorts(IsLeft: Boolean; var Ports: TArray<TBiasPort>);
+var
+  i, BX0, BX1, BY0, BY1, Swp, W: Integer;
+  Port: TPort;
+  Shape: TPortShape;
+  BP: TBiasPort;
+  Core, CellH: Double;
+  AEdge: TPortEdge;
+begin
+  SetLength(Ports, 0);
+  Core := FPlanCore;
+  if Core <= 0 then
+    Exit;
+  if IsLeft then
+    AEdge := peTop
+  else
+    AEdge := peBottom;
+  for i := 0 to High(FSpine) do
+  begin
+    if (FSpine[i].Gate = nil) or (FSpine[i].Gate.Cell = nil) then
+      Continue;
+    CellH := FSpine[i].Gate.Cell.Height;
+    if CellH <= 0 then
+      CellH := Core;
+    W := Max(1, Round(CellH / Core)); // placed width of the rotated cell
+    for Port in FSpine[i].Gate.Cell.PowerPorts do
+      for Shape in Port.Shapes do
+        if Shape.Edge = AEdge then
+        begin
+          // Rotated 90 deg CCW: local (x, y) -> (CellH - y, x).
+          BX0 := FSpine[i].X + Trunc((CellH - Shape.y2) / Core);
+          BX1 := FSpine[i].X + Trunc((CellH - Shape.y1) / Core);
+          BY0 := FSpine[i].Y + Trunc(Shape.x1 / Core);
+          BY1 := FSpine[i].Y + Trunc(Shape.x2 / Core);
+          if BX1 < BX0 then begin Swp := BX0; BX0 := BX1; BX1 := Swp; end;
+          if BY1 < BY0 then begin Swp := BY0; BY0 := BY1; BY1 := Swp; end;
+          BP.Gate := FSpine[i].Gate;
+          BP.Edge := AEdge;
+          // Left ports hug the trunk's left edge, right ports its right edge.
+          // Clamp to the cell's own columns so the tap always reaches the cell
+          // edge (an edge-hugging right port maps one block past the cell).
+          if IsLeft then
+            BP.X := BX0
+          else
+            BP.X := BX1;
+          if BP.X < FSpine[i].X then
+            BP.X := FSpine[i].X;
+          if BP.X > FSpine[i].X + W - 1 then
+            BP.X := FSpine[i].X + W - 1;
+          BP.Y := (BY0 + BY1) div 2;
+          BP.CurrentUa := Shape.CurrentUa;
+          SetLength(Ports, Length(Ports) + 1);
+          Ports[High(Ports)] := BP;
+        end;
+  end;
+end;
+
+// Partitions the trunk side's ports into groups each carrying at most AMaxUa,
+// ordered by Y (ascending = top-to-bottom for the left side, descending =
+// bottom-to-top for the right). Each group becomes one vertical track.
+function TForm1.PartitionTrunkPorts(const Ports: TArray<TBiasPort>;
+  AMaxUa: Double; Descending: Boolean): TArray<TBiasGroup>;
+var
+  Sorted: TArray<TBiasPort>;
+  Order: TArray<Integer>;
+  i, j, Tmp: Integer;
+  G: TBiasGroup;
+  GroupStart: Integer;
+begin
+  Result := nil;
+  if AMaxUa <= 0 then
+    Exit;
+  SetLength(Sorted, 0);
+  for i := 0 to High(Ports) do
+    if Ports[i].CurrentUa > 0 then
+    begin
+      SetLength(Sorted, Length(Sorted) + 1);
+      Sorted[High(Sorted)] := Ports[i];
+    end;
+  if Length(Sorted) = 0 then
+    Exit;
+  SetLength(Order, Length(Sorted));
+  for i := 0 to High(Order) do
+    Order[i] := i;
+  for i := 0 to High(Order) - 1 do
+    for j := i + 1 to High(Order) do
+      if (not Descending and (Sorted[Order[j]].Y < Sorted[Order[i]].Y)) or
+         (Descending and (Sorted[Order[j]].Y > Sorted[Order[i]].Y)) then
+      begin
+        Tmp := Order[i];
+        Order[i] := Order[j];
+        Order[j] := Tmp;
+      end;
+  // Greedy partition: fill a group until adding the next port would exceed.
+  GroupStart := 0;
+  G.TotalUa := 0;
+  G.Ports := nil;
+  for i := 0 to High(Order) do
+  begin
+    if (i > GroupStart) and
+       (G.TotalUa + Sorted[Order[i]].CurrentUa > AMaxUa) then
+    begin
+      SetLength(Result, Length(Result) + 1);
+      Result[High(Result)] := G;
+      G.Ports := nil;
+      G.TotalUa := 0;
+      GroupStart := i;
+    end;
+    SetLength(G.Ports, Length(G.Ports) + 1);
+    G.Ports[High(G.Ports)] := Sorted[Order[i]];
+    G.TotalUa := G.TotalUa + Sorted[Order[i]].CurrentUa;
+  end;
+  if Length(G.Ports) > 0 then
+  begin
+    SetLength(Result, Length(Result) + 1);
+    Result[High(Result)] := G;
+  end;
+end;
+
+// Routes the horizontal bias lines for every channel (topmost, bottommost, and
+// each band's middle/top bias rows). Runs after the main circuit routing. Each
+// partition group becomes one track: a horizontal wire at its own Y that runs
+// left to the far-left bias trunk, with vertical offshoots dropping to each port
+// in the group. Group 1 hugs the cells; group g is g-1 rows further up (top
+// ports) or further down (bottom ports). In a shared channel the two sides'
+// tracks grow inward from their own cell rows and meet in the middle; the
+// final-group merge edge case shares one track. The trunk itself is left for a
+// later step, so no trunk connections are drawn yet.
+procedure TForm1.RouteBiasLines;
+var
+  MaxUa: Double;
+  NumBands, Band, g: Integer;
+  LogicTopP, LogicBotP, ClockTopP, ClockBotP: TArray<TArray<TBiasPort>>;
+  GA, GB: TArray<TBiasGroup>;
+  Above, Below: TArray<TBiasPort>;
+  Merged: Boolean;
+  ChanY0, ChanY1: Integer; // channel row extent (top row .. bottom row+1)
+  TrackY: Integer;
+  Tr: TRoutedTrace;
+  BiasLayer: string;
+  TrunkPorts: TArray<TBiasPort>;
+  TrackX, TurnY, ToX, TrunkL, TrunkR, TopRow, BotRow: Integer;
+
+  procedure CollectLogic(Band: Integer; AEdge: TPortEdge;
+    var APorts: TArray<TBiasPort>);
+  var
+    k: Integer;
+  begin
+    SetLength(APorts, 0);
+    for k := 0 to High(FPlacedComponents) do
+      if BandIndexOfY(FPlacedComponents[k].Y) = Band then
+        CollectCellPorts(FPlacedComponents[k].Gate, FPlacedComponents[k].X,
+          FPlacedComponents[k].Y, AEdge, APorts);
+  end;
+
+  procedure CollectClock(Band: Integer; AEdge: TPortEdge;
+    var APorts: TArray<TBiasPort>);
+  var
+    L, ci: Integer;
+  begin
+    SetLength(APorts, 0);
+    for L := 0 to High(FClockSubtree) do
+      for ci := 0 to High(FClockSubtree[L]) do
+        if (not FClockSubtree[L][ci].IsLeaf) and
+           (BandIndexOfY(FClockSubtree[L][ci].Y) = Band) then
+          CollectCellPorts(FClockSubtree[L][ci].Gate, FClockSubtree[L][ci].X,
+            FClockSubtree[L][ci].Y, AEdge, APorts);
+  end;
+
+  // Emits one group's track. ATrackY is the track's grid row; the group's ports
+  // are on AEdge (their offshoots drop up/down to the track). Ports are given
+  // left to right. The wire runs from the far-left trunk to the rightmost port:
+  // a horizontal run along the track with a vertical offshoot to each port.
+  procedure EmitGroup(const AGrp: TBiasGroup; ATrackY: Integer;
+    const ANetName: string);
+  var
+    k, px, py: Integer;
+  begin
+    if Length(AGrp.Ports) = 0 then
+      Exit;
+    Tr.NetName := ANetName;
+    SetLength(Tr.Points, 0);
+    // Start at the far-left bias trunk column (FPlanXLeft-1), on the track.
+    SetLength(Tr.Points, 1);
+    Tr.Points[0] := TPoint.Create(FPlanXLeft - 1, ATrackY);
+    for k := 0 to High(AGrp.Ports) do
+    begin
+      px := AGrp.Ports[k].X;
+      py := AGrp.Ports[k].Y;
+      // Horizontal to the port's X, then the vertical offshoot to the port, then
+      // back up onto the track (so the polyline stays on the track between ports).
+      SetLength(Tr.Points, Length(Tr.Points) + 3);
+      Tr.Points[High(Tr.Points) - 2] := TPoint.Create(px, ATrackY);
+      Tr.Points[High(Tr.Points) - 1] := TPoint.Create(px, py);
+      Tr.Points[High(Tr.Points)] := TPoint.Create(px, ATrackY);
+    end;
+    SetLength(Tr.Layers, Length(Tr.Points));
+    for k := 0 to High(Tr.Layers) do
+      Tr.Layers[k] := BiasLayer;
+    SetLength(FRouteTraces, Length(FRouteTraces) + 1);
+    FRouteTraces[High(FRouteTraces)] := Tr;
+  end;
+
+  // Emits the merged edge-case as ONE bias line: a single horizontal run from
+  // the far-left trunk to the farthest-right port of the two groups, at the top
+  // group's track. Every port (top and bottom) simply branches off that one line
+  // with a short vertical stub - no separate bus + connector. ASharedY = the
+  // shared line row (top group's track).
+  procedure EmitMergedT(const ATopGrp, ABottomGrp: TBiasGroup;
+    ASharedY: Integer; const ANetName: string);
+  var
+    Combined: TArray<TBiasPort>;
+    k, j, px, py: Integer;
+    Tmp: TBiasPort;
+  begin
+    // Combine both groups' ports into one list, ordered left to right so the
+    // line never doubles back.
+    SetLength(Combined, 0);
+    for k := 0 to High(ATopGrp.Ports) do
+    begin
+      SetLength(Combined, Length(Combined) + 1);
+      Combined[High(Combined)] := ATopGrp.Ports[k];
+    end;
+    for k := 0 to High(ABottomGrp.Ports) do
+    begin
+      SetLength(Combined, Length(Combined) + 1);
+      Combined[High(Combined)] := ABottomGrp.Ports[k];
+    end;
+    if Length(Combined) = 0 then
+      Exit;
+    for k := 1 to High(Combined) do
+    begin
+      Tmp := Combined[k];
+      j := k - 1;
+      while (j >= 0) and (Combined[j].X > Tmp.X) do
+      begin
+        Combined[j + 1] := Combined[j];
+        Dec(j);
+      end;
+      Combined[j + 1] := Tmp;
+    end;
+    Tr.NetName := ANetName;
+    SetLength(Tr.Points, 0);
+    // One line from the far-left trunk to the farthest-right port.
+    SetLength(Tr.Points, 1);
+    Tr.Points[0] := TPoint.Create(FPlanXLeft - 1, ASharedY);
+    for k := 0 to High(Combined) do
+    begin
+      px := Combined[k].X;
+      py := Combined[k].Y;
+      // Branch to each port (down for top ports, up for bottom ports) and back.
+      SetLength(Tr.Points, Length(Tr.Points) + 3);
+      Tr.Points[High(Tr.Points) - 2] := TPoint.Create(px, ASharedY);
+      Tr.Points[High(Tr.Points) - 1] := TPoint.Create(px, py);
+      Tr.Points[High(Tr.Points)] := TPoint.Create(px, ASharedY);
+    end;
+    SetLength(Tr.Layers, Length(Tr.Points));
+    for k := 0 to High(Tr.Layers) do
+      Tr.Layers[k] := BiasLayer;
+    SetLength(FRouteTraces, Length(FRouteTraces) + 1);
+    FRouteTraces[High(FRouteTraces)] := Tr;
+  end;
+
+  // Emits one clock-bias group as a vertical track: a vertical run at ATrackX
+  // from the turn row ATurnY down/up to each port, tapping horizontally into
+  // each port, plus a horizontal run from the track all the way left to AToX
+  // (the far-left bias trunk), which it joins. Ports are ordered along the track
+  // (top-to-bottom for the left side, bottom-to-top for the right).
+  procedure EmitClockGroup(const AGrp: TBiasGroup; ATrackX, ATurnY, AToX: Integer;
+    const ANetName: string);
+  var
+    k, px, py: Integer;
+  begin
+    if Length(AGrp.Ports) = 0 then
+      Exit;
+    Tr.NetName := ANetName;
+    SetLength(Tr.Points, 0);
+    // Start at the merge point on the full-width bias row, run to the track.
+    SetLength(Tr.Points, 1);
+    Tr.Points[0] := TPoint.Create(AToX, ATurnY);
+    SetLength(Tr.Points, Length(Tr.Points) + 1);
+    Tr.Points[High(Tr.Points)] := TPoint.Create(ATrackX, ATurnY);
+    // Walk the vertical track, tapping into each port.
+    for k := 0 to High(AGrp.Ports) do
+    begin
+      px := AGrp.Ports[k].X;
+      py := AGrp.Ports[k].Y;
+      SetLength(Tr.Points, Length(Tr.Points) + 3);
+      Tr.Points[High(Tr.Points) - 2] := TPoint.Create(ATrackX, py);
+      Tr.Points[High(Tr.Points) - 1] := TPoint.Create(px, py);
+      Tr.Points[High(Tr.Points)] := TPoint.Create(ATrackX, py);
+    end;
+    SetLength(Tr.Layers, Length(Tr.Points));
+    for k := 0 to High(Tr.Layers) do
+      Tr.Layers[k] := BiasLayer;
+    SetLength(FRouteTraces, Length(FRouteTraces) + 1);
+    FRouteTraces[High(FRouteTraces)] := Tr;
+  end;
+
+begin
+  if not FFloorplanValid then
+    Exit;
+  if not TryDimParse(EditBiasCurrent.Text, MaxUa) or (MaxUa <= 0) then
+    Exit;
+  // The bias lines are drawn on the user-chosen bias layer (set on the
+  // placement-config page), which BuildRoutingLayers adds to FRoutingLayers so
+  // it gets the standard per-layer colour and toggle. Fall back to the primary
+  // signal layer if it was never set.
+  BuildRoutingLayers;
+  BiasLayer := FBiasLayer;
+  if BiasLayer = '' then
+    BiasLayer := FRouteSignalLayer;
+  if BiasLayer = '' then
+    Exit;
+  NumBands := Length(FPlanBandStarts);
+  if NumBands < 1 then
+    Exit;
+  // Collect each side's ports once.
+  SetLength(LogicTopP, NumBands);
+  SetLength(LogicBotP, NumBands);
+  SetLength(ClockTopP, NumBands);
+  SetLength(ClockBotP, NumBands);
+  for Band := 0 to NumBands - 1 do
+  begin
+    CollectLogic(Band, peTop, LogicTopP[Band]);
+    CollectLogic(Band, peBottom, LogicBotP[Band]);
+    CollectClock(Band, peTop, ClockTopP[Band]);
+    CollectClock(Band, peBottom, ClockBotP[Band]);
+  end;
+
+  // Topmost full-width row: band 0's logic row top ports, tracks stepping UP
+  // from the cells. Channel rows: [FPlanBandStarts[0], BandLogicRowY(0)).
+  GA := PartitionBiasPorts(LogicTopP[0], MaxUa);
+  ChanY1 := BandLogicRowY(0);
+  for g := 0 to High(GA) do
+  begin
+    TrackY := ChanY1 - 1 - g; // group 1 hugs the cells, then steps up
+    EmitGroup(GA[g], TrackY, Format('bias_topmost_g%d', [g + 1]));
+  end;
+
+  // Bottommost full-width row: the last band's clock row bottom ports, tracks
+  // stepping DOWN from the cells. Channel rows: [end of last clock row, +1+FBottomBiasH).
+  GA := PartitionBiasPorts(ClockBotP[NumBands - 1], MaxUa);
+  ChanY0 := BandClockRowY(NumBands - 1) + FPlanRowHBlocks;
+  if NumBands - 1 < Length(FClockRowExtra) then
+    ChanY0 := ChanY0 + FClockRowExtra[NumBands - 1];
+  for g := 0 to High(GA) do
+  begin
+    TrackY := ChanY0 + g; // group 1 hugs the cells, then steps down
+    EmitGroup(GA[g], TrackY, Format('bias_bottom_g%d', [g + 1]));
+  end;
+
+  // Interior channels.
+  for Band := 0 to NumBands - 1 do
+  begin
+    // MIDDLE bias row: logic bottom (above) + clock top (below). The channel
+    // occupies [BandLogicRowY+RowH, BandClockRowY). Tracks from the logic side
+    // step down from the logic cells; tracks from the clock side step up from
+    // the clock cells; they meet in the middle.
+    Above := LogicBotP[Band];
+    Below := ClockTopP[Band];
+    GA := PartitionBiasPorts(Above, MaxUa);
+    GB := PartitionBiasPorts(Below, MaxUa);
+    Merged := False;
+    if (Length(GA) > 0) and (Length(GB) > 0) then
+      if GA[High(GA)].TotalUa + GB[High(GB)].TotalUa <= MaxUa then
+        Merged := True;
+    ChanY0 := BandClockRowY(Band) - BandMidBiasH(Band);
+    ChanY1 := BandClockRowY(Band);
+    // Logic side: group g is g-1 rows below the logic cells. The last group is
+    // the shared line when the edge case merges it with the clock side's last.
+    for g := 0 to High(GA) do
+    begin
+      if Merged and (g = High(GA)) then
+        Continue; // emitted with the T below
+      TrackY := ChanY0 + g;
+      EmitGroup(GA[g], TrackY, Format('bias_b%d_mid_lg%d', [Band, g + 1]));
+    end;
+    // Clock side: group g is g-1 rows above the clock cells.
+    for g := 0 to High(GB) do
+    begin
+      if Merged and (g = High(GB)) then
+        Continue; // emitted with the T below
+      TrackY := ChanY1 - 1 - g;
+      EmitGroup(GB[g], TrackY, Format('bias_b%d_mid_cl%d', [Band, g + 1]));
+    end;
+    // Merged edge case: one bias line at the top (logic) group's last track,
+    // with both groups' ports branching off it.
+    if Merged then
+      EmitMergedT(GA[High(GA)], GB[High(GB)], ChanY0 + High(GA),
+        Format('bias_b%d_mid_merged', [Band]));
+
+    // TOP bias row (band > 0): previous band's clock bottom (above) + this
+    // band's logic top (below). Channel rows: [FPlanBandStarts[Band], BandLogicRowY(Band)).
+    if Band > 0 then
+    begin
+      Above := ClockBotP[Band - 1];
+      Below := LogicTopP[Band];
+      GA := PartitionBiasPorts(Above, MaxUa);
+      GB := PartitionBiasPorts(Below, MaxUa);
+      Merged := False;
+      if (Length(GA) > 0) and (Length(GB) > 0) then
+        if GA[High(GA)].TotalUa + GB[High(GB)].TotalUa <= MaxUa then
+          Merged := True;
+      ChanY0 := FPlanBandStarts[Band];
+      ChanY1 := BandLogicRowY(Band);
+      // Clock side above: group g is g-1 rows below the previous clock row.
+      for g := 0 to High(GA) do
+      begin
+        if Merged and (g = High(GA)) then
+          Continue; // emitted with the T below
+        TrackY := ChanY0 + g;
+        EmitGroup(GA[g], TrackY, Format('bias_b%d_top_cl%d', [Band, g + 1]));
+      end;
+      // Logic side below: group g is g-1 rows above this logic row.
+      for g := 0 to High(GB) do
+      begin
+        if Merged and (g = High(GB)) then
+          Continue; // emitted with the T below
+        TrackY := ChanY1 - 1 - g;
+        EmitGroup(GB[g], TrackY, Format('bias_b%d_top_lg%d', [Band, g + 1]));
+      end;
+      // Merged edge case: one bias line at the top (clock) group's last track,
+      // with both groups' ports branching off it.
+      if Merged then
+        EmitMergedT(GA[High(GA)], GB[High(GB)], ChanY0 + High(GA),
+          Format('bias_b%d_top_merged', [Band]));
+    end;
+  end;
+
+  // --- Clock bias lines (vertical) ---
+  // The trunk cells are rotated 90 deg CCW, so their "top" ports face left and
+  // "bottom" ports face right. Left ports are grouped top-to-bottom, right ports
+  // bottom-to-top. Each group is one vertical track in the flanking bias lane
+  // (group 1 nearest the green trunk, stepping outward); the track runs to a
+  // stacked turn row (group 1 at the very top / bottom) then turns outward into
+  // the topmost / bottommost full-width bias row. The turn rows stack so there
+  // is always room for the corner.
+  TrunkL := FPlanXRight + FPlanLane0W;                 // green trunk left edge
+  TrunkR := FPlanXRight + FPlanLane0W + FPlanTrunkW;   // green trunk right edge
+  TopRow := FPlanBandStarts[0];                        // very top of the stack
+  BotRow := FPlanBandStarts[NumBands - 1] +
+    FPlanBandHeight[NumBands - 1] + FBottomBiasH;      // bottom of bottom bias row
+  // Left side: top-to-bottom groups, tracks step left, turn rows step down.
+  CollectTrunkPorts(True, TrunkPorts);
+  GA := PartitionTrunkPorts(TrunkPorts, MaxUa, False);
+  for g := 0 to High(GA) do
+  begin
+    TrackX := TrunkL - 1 - g;   // group 1 hugs the trunk, then steps left
+    TurnY := TopRow + g;        // group 1 at the very top, then one lower
+    ToX := FPlanXLeft - 1;      // run left to the far-left bias trunk
+    EmitClockGroup(GA[g], TrackX, TurnY, ToX, Format('bias_clkL_g%d', [g + 1]));
+  end;
+  // Right side: TOP-to-bottom groups so the topmost group turns at the LOWEST
+  // point (BotRow) and later groups turn one higher. The tracks step LEFT toward
+  // the trunk with group index: the group turning lowest sits farthest from the
+  // trunk, so a later group's higher run never crosses an earlier track.
+  CollectTrunkPorts(False, TrunkPorts);
+  GB := PartitionTrunkPorts(TrunkPorts, MaxUa, False);
+  for g := 0 to High(GB) do
+  begin
+    TrackX := TrunkR + (High(GB) - g); // topmost group farthest right, stepping left
+    TurnY := BotRow - g;               // group 1 (topmost) at the very bottom, then one higher
+    ToX := FPlanXLeft - 1;             // run left to the far-left bias trunk
+    EmitClockGroup(GB[g], TrackX, TurnY, ToX, Format('bias_clkR_g%d', [g + 1]));
+  end;
+
+  // The far-left bias trunk itself: a single vertical wire on the trunk column
+  // (FPlanXLeft-1) that every bias line branches from. It spans the full stack,
+  // from the topmost bias row to the bottom of the bottom-most bias row.
+  SetLength(Tr.Points, 2);
+  Tr.Points[0] := TPoint.Create(FPlanXLeft - 1, FPlanBandStarts[0]);
+  Tr.Points[1] := TPoint.Create(FPlanXLeft - 1,
+    FPlanBandStarts[NumBands - 1] + FPlanBandHeight[NumBands - 1] +
+    1 + FBottomBiasH);
+  SetLength(Tr.Layers, 2);
+  Tr.Layers[0] := BiasLayer;
+  Tr.Layers[1] := BiasLayer;
+  Tr.NetName := 'bias_trunk';
+  SetLength(FRouteTraces, Length(FRouteTraces) + 1);
+  FRouteTraces[High(FRouteTraces)] := Tr;
+
+  RepaintRoutingPage;
+end;
+
+// Draws the routed traces with each trace's layer colour, as a polyline
+// through the block centres.
+procedure TForm1.DrawRoutedTraces(Canvas: TCanvas);
+var
+  Core: Double;
+  i, k: Integer;
+  Clr: TAlphaColor;
+  X1, Y1, X2, Y2: Single;
+begin
+  if Length(FRouteTraces) = 0 then
+    Exit;
+  if not (TryDimParse(EditCoreSize.Text, Core) and (Core > 0)) then
+    Core := FPlanCore;
+  Canvas.Stroke.Kind := TBrushKind.Solid;
+  Canvas.Stroke.Thickness := 2;
+  for i := 0 to High(FRouteTraces) do
+  begin
+    if Length(FRouteTraces[i].Layers) <= 1 then
+      Continue;
+    // Draw each segment in its own layer's colour; via cells are the point
+    // where the layer changes (both colours join there).
+    for k := 0 to High(FRouteTraces[i].Points) - 1 do
+    begin
+      if not RoutingLayerEnabled(FRouteTraces[i].Layers[k]) then
+        Continue;
+      Clr := RoutingLayerColor(FRouteTraces[i].Layers[k]);
+      // Keep the trace opaque against the pale die body.
+      Clr := (Clr and $FFFFFF) or $FF000000;
+      Canvas.Stroke.Color := Clr;
+      X1 := FRoutePanX + (FRouteTraces[i].Points[k].X + 0.5) * Core * FRouteZoom;
+      Y1 := FRoutePanY + (FRouteTraces[i].Points[k].Y + 0.5) * Core * FRouteZoom;
+      X2 := FRoutePanX + (FRouteTraces[i].Points[k + 1].X + 0.5) * Core * FRouteZoom;
+      Y2 := FRoutePanY + (FRouteTraces[i].Points[k + 1].Y + 0.5) * Core * FRouteZoom;
+      Canvas.DrawLine(TPointF.Create(X1, Y1), TPointF.Create(X2, Y2), 1.0);
+    end;
+  end;
+end;
+
+// Returns the grid block of a gate's pin on a specific routing layer (ALayer
+// indexes FRouteLayers). The gate is placed in FGatePlacement (its origin is
+// read from there). Uses the pin's geometry on that layer; falls back to the
+// first shape, then to the cell centre. The returned block is always one
+// actually covered by that geometry (an occupied cell), so the trace connects
+// onto the pin rather than to a floating point.
+function TForm1.GatePinBlock(G: TGateInstance; const PinName: string;
+  ALayer: Integer; var P: TPoint): Boolean;
+var
+  Pt: TPoint;
+begin
+  Result := False;
+  if (G = nil) or (G.Cell = nil) then
+    Exit;
+  if not FGatePlacement.TryGetValue(G, Pt) then
+    Exit;
+  Result := GatePinBlockAt(G, PinName, ALayer, Pt.X, Pt.Y, False, P);
+end;
+
+// Like GatePinBlock, but the gate's placed top-left grid cell is given
+// explicitly (AX, AY) - used for clock gates, which are placed in FSpine /
+// FClockSubtree rather than FGatePlacement. Rotated cells (trunk cells) have
+// their footprint swapped (W = cell height, H = cell width) and their pin
+// shapes rotated 90 deg CCW, exactly like DrawCellPorts.
+function TForm1.GatePinBlockAt(G: TGateInstance; const PinName: string;
+  ALayer, AX, AY: Integer; Rotated: Boolean; var P: TPoint): Boolean;
+var
+  Core: Double;
+  Port: TPort;
+  Shape: TPortShape;
+  CellW, CellH: Double;
+  BX0, BY0, BX1, BY1: Integer;
+begin
+  Result := False;
+  if (G = nil) or (G.Cell = nil) then
+    Exit;
+  if not (TryDimParse(EditCoreSize.Text, Core) and (Core > 0)) then
+    Core := FPlanCore;
+  // The pin's own geometry: prefer a shape on the requested layer.
+  Port := G.Cell.FindPort(PinName);
+  Shape := nil;
+  if Port <> nil then
+  begin
+    for Shape in Port.Shapes do
+      if (ALayer >= 0) and (ALayer < Length(FRouteLayers)) and
+         SameText(Shape.Layer, FRouteLayers[ALayer]) then
+        Break;
+    if (Shape = nil) and (Port.Shapes.Count > 0) then
+      Shape := Port.Shapes[0];
+  end;
+  if Shape <> nil then
+  begin
+    // The occupied cell: the range of blocks covered by the (possibly
+    // rotated) shape.
+    if Rotated then
+    begin
+      CellH := G.Cell.Height;
+      if CellH <= 0 then
+        CellH := Core;
+      // 90 deg CCW: local (x, y) -> (cellH - y, x).
+      BX0 := Trunc((AX * Core + (CellH - Shape.y2)) / Core);
+      BY0 := Trunc((AY * Core + Shape.x1) / Core);
+      BX1 := Trunc((AX * Core + (CellH - Shape.y1)) / Core);
+      BY1 := Trunc((AY * Core + Shape.x2) / Core);
+    end
+    else
+    begin
+      // Canvas Y runs down while LEF Y runs up: flip (CellH - y).
+      CellH := G.Cell.Height;
+      if CellH <= 0 then
+        CellH := Core;
+      BX0 := Trunc((AX * Core + Shape.x1) / Core);
+      BY0 := Trunc((AY * Core + (CellH - Shape.y2)) / Core);
+      BX1 := Trunc((AX * Core + Shape.x2) / Core);
+      BY1 := Trunc((AY * Core + (CellH - Shape.y1)) / Core);
+    end;
+    if BX1 < BX0 then BX0 := BX1;
+    if BY1 < BY0 then BY0 := BY1;
+    // The cell nearest the shape centre, guaranteed inside the covered range.
+    P.X := BX0 + ((BX1 - BX0) div 2);
+    P.Y := BY0 + ((BY1 - BY0) div 2);
+    Result := True;
+    Exit;
+  end;
+  // Fallback: the centre of the placed cell footprint.
+  CellW := G.Cell.Width;
+  CellH := G.Cell.Height;
+  if CellW <= 0 then
+    CellW := Core;
+  if CellH <= 0 then
+    CellH := Core;
+  if Rotated then
+  begin
+    // Footprint is swapped: W = cell height, H = cell width.
+    P.X := Trunc((AX * Core + CellH / 2) / Core);
+    P.Y := Trunc((AY * Core + CellW / 2) / Core);
+  end
+  else
+  begin
+    P.X := Trunc((AX * Core + CellW / 2) / Core);
+    P.Y := Trunc((AY * Core + CellH / 2) / Core);
+  end;
+  Result := True;
+end;
+
+// A* maze router between two grid blocks over all routing layers. Manhattan
+// distance is the primary cost; a bend adds a penalty and a via (layer switch)
+// adds a larger penalty, so the router prefers straight, via-less routes but
+// will use other layers when the way is blocked. Pin-geometry blocks are hard
+// obstacles (except the goal cell); present usage and history congestion add a
+// soft cost, so links can share a block temporarily and the outer negotiation
+// loop resolves contention. Returns the path (inclusive of start and goal) in
+// OutPath and each point's routing-layer index in OutLayers.
+function TForm1.AStarRoute(Start, Goal: TPoint;
+  var OutPath: TArray<TPoint>; var OutLayers: TArray<Integer>): Boolean;
+const
+  BendPenalty = 3;   // extra cost per bend (impedance discontinuity)
+  ViaPenalty = 8;    // extra cost per layer switch (via)
+  DirDx: array[0..3] of Integer = (1, -1, 0, 0);
+  DirDy: array[0..3] of Integer = (0, 0, 1, -1);
+var
+  Open: TArray<TAStarNode>;
+  OpenCount: Integer;
+  GScore: TDictionary<Int64, Integer>;
+  CameFrom: TDictionary<Int64, Int64>;
+  Closed: TDictionary<Int64, Boolean>;
+  Key, FromKey, NextKey: Int64;
+  Node, Next: TAStarNode;
+  d, i, j, k: Integer;
+  NX, NY: Integer;
+  Bends: Integer;
+  W, H, NumLayers: Integer;
+  Swp: TPoint;
+  SwpLayer: Integer;
+  Expanded: Integer;
+  L: Integer;
+  CellKey: Int64;
+  Changed: Boolean;
+
+  function NodeKey(ANode: TAStarNode): Int64;
+  begin
+    // Dir in -1..3 => Dir+1 in 0..4 (5 states per cell), times NumLayers.
+    // Exact encode/decode: no carries regardless of the layer count.
+    Result := ((Int64(ANode.Y) * W + ANode.X) * NumLayers + ANode.Layer) * 5 +
+      (ANode.Dir + 1);
+  end;
+
+  function Heuristic(AX, AY: Integer): Integer;
+  begin
+    Result := Abs(AX - Goal.X) + Abs(AY - Goal.Y);
+  end;
+
+  procedure HeapPush(const ANode: TAStarNode);
+  var
+    idx, parent: Integer;
+    Tmp: TAStarNode;
+  begin
+    idx := OpenCount;
+    Inc(OpenCount);
+    if idx >= Length(Open) then
+      SetLength(Open, OpenCount + 64);
+    Open[idx] := ANode;
+    while idx > 0 do
+    begin
+      parent := (idx - 1) div 2;
+      if (GScore[NodeKey(Open[idx])] + Heuristic(Open[idx].X, Open[idx].Y)) >=
+         (GScore[NodeKey(Open[parent])] + Heuristic(Open[parent].X, Open[parent].Y)) then
+        Break;
+      Tmp := Open[idx];
+      Open[idx] := Open[parent];
+      Open[parent] := Tmp;
+      idx := parent;
+    end;
+  end;
+
+  function HeapPop: TAStarNode;
+  var
+    idx, child, other: Integer;
+    Tmp: TAStarNode;
+    FCur, FChild: Integer;
+  begin
+    Result := Open[0];
+    Dec(OpenCount);
+    if OpenCount > 0 then
+    begin
+      Open[0] := Open[OpenCount];
+      idx := 0;
+      while True do
+      begin
+        child := idx * 2 + 1;
+        if child >= OpenCount then
+          Break;
+        other := child + 1;
+        FCur := GScore[NodeKey(Open[idx])] + Heuristic(Open[idx].X, Open[idx].Y);
+        FChild := GScore[NodeKey(Open[child])] + Heuristic(Open[child].X, Open[child].Y);
+        if (other < OpenCount) and
+           (GScore[NodeKey(Open[other])] + Heuristic(Open[other].X, Open[other].Y) < FChild) then
+          child := other;
+        FChild := GScore[NodeKey(Open[child])] + Heuristic(Open[child].X, Open[child].Y);
+        if FCur <= FChild then
+          Break;
+        Tmp := Open[idx];
+        Open[idx] := Open[child];
+        Open[child] := Tmp;
+        idx := child;
+      end;
+    end;
+  end;
+
+begin
+  Result := False;
+  W := FRouteObstaclesW;
+  H := FRouteObstaclesH;
+  NumLayers := Length(FRouteLayers);
+  if (W <= 0) or (H <= 0) or (NumLayers <= 0) then
+    Exit;
+  if (Start.X < 0) or (Start.X >= W) or (Start.Y < 0) or (Start.Y >= H) or
+     (Goal.X < 0) or (Goal.X >= W) or (Goal.Y < 0) or (Goal.Y >= H) then
+    Exit;
+  if (Start.X = Goal.X) and (Start.Y = Goal.Y) then
+  begin
+    SetLength(OutPath, 1);
+    OutPath[0] := Start;
+    SetLength(OutLayers, 1);
+    OutLayers[0] := 0;
+    Result := True;
+    Exit;
+  end;
+
+  GScore := TDictionary<Int64, Integer>.Create;
+  CameFrom := TDictionary<Int64, Int64>.Create;
+  Closed := TDictionary<Int64, Boolean>.Create;
+  try
+    SetLength(Open, 128);
+    OpenCount := 0;
+
+    // The pin is reachable on every routing layer, so seed the start on all.
+    for L := 0 to NumLayers - 1 do
+    begin
+      Node.X := Start.X;
+      Node.Y := Start.Y;
+      Node.Dir := -1;
+      Node.Layer := L;
+      Node.G := 0;
+      GScore.Add(NodeKey(Node), 0);
+      HeapPush(Node);
+    end;
+
+    // Give up after exploring too much so a hopeless net cannot hang the router.
+    Expanded := 0;
+    while OpenCount > 0 do
+    begin
+      Inc(Expanded);
+      if Expanded > W * H * 8 * NumLayers then
+        Exit; // cannot reach the goal within a reasonable search
+      Node := HeapPop;
+      Key := NodeKey(Node);
+      if Closed.ContainsKey(Key) then
+        Continue;
+      Closed.Add(Key, True);
+      if (Node.X = Goal.X) and (Node.Y = Goal.Y) then
+      begin
+        // Reconstruct (points + layers).
+        SetLength(OutPath, 0);
+        SetLength(OutLayers, 0);
+        FromKey := Key;
+        while True do
+        begin
+          SetLength(OutPath, Length(OutPath) + 1);
+          OutPath[High(OutPath)] := TPoint.Create(Node.X, Node.Y);
+          SetLength(OutLayers, Length(OutLayers) + 1);
+          OutLayers[High(OutLayers)] := Node.Layer;
+          if not CameFrom.TryGetValue(FromKey, FromKey) then
+            Break;
+          CellKey := FromKey div 5;
+          Node.Layer := CellKey mod NumLayers;
+          CellKey := CellKey div NumLayers;
+          Node.X := CellKey mod W;
+          Node.Y := CellKey div W;
+        end;
+        // Reverse both arrays.
+        for i := 0 to (Length(OutPath) div 2) - 1 do
+        begin
+          Swp := OutPath[i];
+          OutPath[i] := OutPath[High(OutPath) - i];
+          OutPath[High(OutPath) - i] := Swp;
+          SwpLayer := OutLayers[i];
+          OutLayers[i] := OutLayers[High(OutLayers) - i];
+          OutLayers[High(OutLayers) - i] := SwpLayer;
+        end;
+        // The state-space search includes direction and layer, so the optimal
+        // walk can revisit a grid cell (with a different state), which draws as
+        // a wire that forks into two parallel tracks and rejoins. Cut the loop
+        // out: a cell revisited after at least one other cell is collapsed to
+        // its first occurrence. (Two consecutive identical cells are a via -
+        // a legal layer change - and are left alone.) Repeat until stable,
+        // because a collapse shifts the indices of later cells.
+        while True do
+        begin
+          Changed := False;
+          i := 0;
+          while i <= High(OutPath) do
+          begin
+            j := i + 1;
+            while j <= High(OutPath) do
+            begin
+              if (j - i > 1) and (OutPath[j].X = OutPath[i].X) and
+                 (OutPath[j].Y = OutPath[i].Y) then
+              begin
+                // Collapse: keep cell i, adopt j's layer so the trace continues
+                // on the correct layer, then delete i+1..j inclusive.
+                OutLayers[i] := OutLayers[j];
+                for k := j + 1 to High(OutPath) do
+                begin
+                  OutPath[k - (j - i)] := OutPath[k];
+                  OutLayers[k - (j - i)] := OutLayers[k];
+                end;
+                SetLength(OutPath, Length(OutPath) - (j - i));
+                SetLength(OutLayers, Length(OutLayers) - (j - i));
+                Changed := True;
+                Break;
+              end;
+              Inc(j);
+            end;
+            if Changed then
+              Break; // restart the whole scan from the beginning
+            Inc(i);
+          end;
+          if not Changed then
+            Break;
+        end;
+        Result := True;
+        Exit;
+      end;
+
+      // Same-layer 4-directional moves.
+      for d := 0 to 3 do
+      begin
+        NX := Node.X + DirDx[d];
+        NY := Node.Y + DirDy[d];
+        if (NX < 0) or (NX >= W) or (NY < 0) or (NY >= H) then
+          Continue;
+        // Hard obstacles (pin geometry) block all blocks except the goal.
+        // Congestion (present usage + history) is a soft cost, not a block.
+        if FRouteObstacles[Node.Layer][NY * W + NX] and
+           not ((NX = Goal.X) and (NY = Goal.Y)) then
+          Continue;
+        Bends := 0;
+        if (Node.Dir >= 0) and (Node.Dir <> d) then
+          Bends := BendPenalty;
+        Next.X := NX;
+        Next.Y := NY;
+        Next.Dir := d;
+        Next.Layer := Node.Layer;
+        Next.G := Node.G + 1 + Bends +
+          FRouteHist[Node.Layer][NY * W + NX] * FRouteHistFactor +
+          FRouteUsage[Node.Layer][NY * W + NX] * FRoutePresFactor;
+        NextKey := NodeKey(Next);
+        if Closed.ContainsKey(NextKey) then
+          Continue;
+        if not GScore.TryGetValue(NextKey, i) or (Next.G < i) then
+        begin
+          GScore.AddOrSetValue(NextKey, Next.G);
+          CameFrom.AddOrSetValue(NextKey, Key);
+          HeapPush(Next);
+        end;
+      end;
+
+      // Via: stay on the same cell but switch to another layer. The target
+      // layer's cell must not be a hard obstacle (except the goal);
+      // congestion is only a soft cost.
+      for L := 0 to NumLayers - 1 do
+      begin
+        if L = Node.Layer then
+          Continue;
+        if FRouteObstacles[L][Node.Y * W + Node.X] and
+           not ((Node.X = Goal.X) and (Node.Y = Goal.Y)) then
+          Continue;
+        Next.X := Node.X;
+        Next.Y := Node.Y;
+        Next.Dir := Node.Dir;
+        Next.Layer := L;
+        Next.G := Node.G + ViaPenalty +
+          FRouteHist[L][Node.Y * W + Node.X] * FRouteHistFactor +
+          FRouteUsage[L][Node.Y * W + Node.X] * FRoutePresFactor;
+        NextKey := NodeKey(Next);
+        if Closed.ContainsKey(NextKey) then
+          Continue;
+        if not GScore.TryGetValue(NextKey, i) or (Next.G < i) then
+        begin
+          GScore.AddOrSetValue(NextKey, Next.G);
+          CameFrom.AddOrSetValue(NextKey, Key);
+          HeapPush(Next);
+        end;
+      end;
+    end;
+  finally
+    GScore.Free;
+    CameFrom.Free;
+    Closed.Free;
+  end;
 end;
 
 procedure TForm1.FormMouseWheel(Sender: TObject; Shift: TShiftState;
@@ -5762,6 +8770,7 @@ begin
     FRoutePanY := 0;
     FRouteZoom := 1.0;
     FRouteNeedsFit := True;
+    BuildRoutingLayers;
     RepaintRoutingPage;
   end;
   if TabControl1.TabIndex = TabPipeline then
@@ -5988,8 +8997,57 @@ begin
 end;
 
 procedure TForm1.ButtonRunRoutingClick(Sender: TObject);
+const
+  MaxFixPasses = 30; // row-insertion passes before giving up
+  MaxPlateau = 4;    // passes without improvement before giving up
+var
+  Pass: Integer;
+  Changed: Boolean;
+  BestOverflow, Stagnant: Integer;
 begin
-  MemoRouting.Lines.Add('Routing not yet implemented.');
+  // Start each run from a clean floorplan: the congestion analysis grows rows
+  // below the worst blocks, accumulating its own expansion state across passes.
+  FLogicRowExtra := nil;
+  FClockRowExtra := nil;
+  BestOverflow := High(Integer);
+  Stagnant := 0;
+  Pass := 0;
+  BuildFloorplan;
+  if FFloorplanErrorCount = 0 then
+    OptimizePlacement;
+  while (Pass < MaxFixPasses) and (FFloorplanErrorCount = 0) do
+  begin
+    Inc(Pass);
+    RunRouting; // fills FRouteUsage / FRouteHist, reports its own progress
+    if FRouteLastOverflow < BestOverflow then
+    begin
+      BestOverflow := FRouteLastOverflow;
+      Stagnant := 0;
+    end
+    else
+      Inc(Stagnant);
+    AnalyzeCongestion(Changed);
+    MemoRouting.Lines.Insert(0, Format(
+      '--- Fix pass %d: %d overused block(s)%s ---',
+      [Pass, FRouteLastOverflow, IfThen(Changed, ', inserting rows',
+        ', no row to insert')]));
+    if FRouteLastOverflow = 0 then
+      Break; // converged
+    if (not Changed) or (Stagnant >= MaxPlateau) then
+      Break; // nothing more can be done (helpers report 'not enough space' when the die is full)
+    // The bias-expansion helpers already rebuilt the floorplan (preserving the
+    // placement's horizontal shape); re-run the placement so the grown bias
+    // rows take effect, then route again.
+    OptimizePlacement;
+  end;
+  MemoRouting.Lines.Add(Format(
+    'Fix loop ended after %d pass(es); final overflow %d block(s).',
+    [Pass, FRouteLastOverflow]));
+  // Bias lines: always routable programmatically, run after the main circuit
+  // routing so the floorplan is settled. Each partition group becomes one track.
+  RouteBiasLines;
+  MemoRouting.Lines.Add(
+    'Bias lines routed from the partition groups.');
 end;
 
 end.

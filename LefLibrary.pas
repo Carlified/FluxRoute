@@ -23,6 +23,11 @@ type
   // cut layers are vias, routing layers carry tracks.
   TLefLayerType = (ltUnknown, ltRouting, ltCut, ltMasterslice, ltOverlap);
 
+  // Which edge of a cell a power/ground pin geometry sits on. The LEF parser
+  // reads this from the per-port comment (e.g. "# top edge, 50uA"); it drives
+  // the bias-line current budgeting during floorplanning.
+  TPortEdge = (peUnknown, peTop, peBottom);
+
   // One top-level LAYER definition from the LEF (a routing metal, a via cut,
   // a masterslice plane, or the overlap layer). Layers are assumed to be
   // listed in stack order (bottom to top).
@@ -40,6 +45,13 @@ type
   public
     Layer: string;
     x1, x2, y1, y2: Double;
+    // Bias-port metadata read from the per-port comment in the LEF
+    // (e.g. "# top edge, 50uA"). Edge = which cell edge the geometry sits on
+    // (power pins are usually split between the top and bottom of a cell);
+    // CurrentUa = the current this pin draws, in microamps. Only meaningful
+    // for power/ground pins (TCell.PowerPorts).
+    Edge: TPortEdge;
+    CurrentUa: Double;
   end;
 
   TPort = class
@@ -242,6 +254,62 @@ begin
     Result := puUnknown;
 end;
 
+// Parses a bias-port comment such as "# top edge, 50uA" or
+// "# bottom edge, 0.25 mA". Sets AEdge to the edge named in the comment
+// (peTop / peBottom; peUnknown if neither is named) and ACurrentUa to the
+// current in microamps (units may be uA, mA or A). Returns False if the
+// comment does not look like a bias comment at all.
+function ParseBiasComment(const AComment: string;
+  var AEdge: TPortEdge; var ACurrentUa: Double): Boolean;
+var
+  Body, First, Second, NumStr, UnitStr: string;
+  Value: Double;
+  i: Integer;
+  Inv: TFormatSettings;
+begin
+  Result := False;
+  AEdge := peUnknown;
+  ACurrentUa := 0;
+  Body := Trim(AComment);
+  // A comment must have a comma to be a bias comment.
+  if Pos(',', Body) = 0 then
+    Exit;
+  First := Trim(Copy(Body, 1, Pos(',', Body) - 1));
+  Second := Trim(Copy(Body, Pos(',', Body) + 1, Length(Body)));
+  if SameText(First, 'top edge') then
+    AEdge := peTop
+  else if SameText(First, 'bottom edge') then
+    AEdge := peBottom
+  else
+    AEdge := peUnknown;
+  // Second part: "<number><unit>", e.g. "50uA", "0.25mA", "1A".
+  Inv := TFormatSettings.Invariant;
+  NumStr := '';
+  UnitStr := '';
+  for i := 1 to Length(Second) do
+    if Second[i] in ['0'..'9', '.', '-', '+'] then
+      NumStr := NumStr + Second[i]
+    else
+    begin
+      UnitStr := Copy(Second, i, Length(Second));
+      Break;
+    end;
+  if (NumStr = '') or (UnitStr = '') then
+    Exit;
+  if not TryStrToFloat(NumStr, Value, Inv) then
+    Exit;
+  if SameText(UnitStr, 'uA') or SameText(UnitStr, 'ua') or
+     SameText(UnitStr, 'u') then
+    ACurrentUa := Value
+  else if SameText(UnitStr, 'mA') or SameText(UnitStr, 'ma') then
+    ACurrentUa := Value * 1000
+  else if SameText(UnitStr, 'A') then
+    ACurrentUa := Value * 1000000
+  else
+    Exit; // unrecognised unit -> not a bias comment
+  Result := True;
+end;
+
 function LoadLefLibrary(const FileName: string): TLibrary;
 var
   i: Integer;
@@ -255,6 +323,10 @@ var
   Shape: TPortShape;
   CurrentLayer: string;
   Inv: TFormatSettings;
+  PendingEdge: TPortEdge;
+  PendingCurrentUa: Double;
+  EdgeTmp: TPortEdge;
+  CurTmp: Double;
 begin
   Result := TLibrary.Create;
   // LEF files always use '.' as the decimal separator; parse invariantly so
@@ -268,6 +340,8 @@ begin
     CurrentLefLayer := nil;
     CurrentLayer := '';
     InVia := False;
+    PendingEdge := peUnknown;
+    PendingCurrentUa := 0;
 
     for i := 0 to Lines.Count - 1 do
     begin
@@ -358,6 +432,8 @@ begin
         CurrentCell.Ports.Add(CurrentPort);
         CurrentCell.PortsByName.AddOrSetValue(CurrentPort.Name, CurrentPort);
         CurrentLayer := '';
+        PendingEdge := peUnknown;
+        PendingCurrentUa := 0;
       end
 
       else if (CurrentCell <> nil) and (CurrentPort <> nil) and
@@ -390,6 +466,20 @@ begin
       end
 
       else if (CurrentCell <> nil) and (CurrentPort <> nil) and
+        StartsText('#', Line) then
+      begin
+        // Bias-port comment immediately before a PORT block, e.g.
+        // "# top edge, 50uA". Remember it so the shapes that follow get the
+        // edge + current metadata.
+        if ParseBiasComment(Copy(Line, 2, Length(Line)),
+          EdgeTmp, CurTmp) then
+        begin
+          PendingEdge := EdgeTmp;
+          PendingCurrentUa := CurTmp;
+        end;
+      end
+
+      else if (CurrentCell <> nil) and (CurrentPort <> nil) and
         StartsText('RECT', Line) then
       begin
         Parts := Line.Split([' '], TStringSplitOptions.ExcludeEmpty);
@@ -399,6 +489,8 @@ begin
         Shape.y1 := StrToFloat(Parts[2], Inv);
         Shape.x2 := StrToFloat(Parts[3], Inv);
         Shape.y2 := StrToFloat(Parts[4], Inv);
+        Shape.Edge := PendingEdge;
+        Shape.CurrentUa := PendingCurrentUa;
         CurrentPort.Shapes.Add(Shape);
       end
 

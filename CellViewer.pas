@@ -500,6 +500,28 @@ begin
   end;
 end;
 
+// Human-readable label for a bias-port edge.
+function EdgeText(AEdge: TPortEdge): string;
+begin
+  case AEdge of
+    peTop:    Result := 'top';
+    peBottom: Result := 'bottom';
+  else
+    Result := 'edge?';
+  end;
+end;
+
+// Human-readable current, in uA when the value is integral else mA.
+function CurrentText(ACurrentUa: Double): string;
+begin
+  if ACurrentUa <= 0 then
+    Result := '?'
+  else if Abs(ACurrentUa - Round(ACurrentUa)) < 0.005 then
+    Result := Format('%.0f uA', [ACurrentUa])
+  else
+    Result := Format('%.3f mA', [ACurrentUa / 1000]);
+end;
+
 procedure TCellViewerForm.BuildCellInfo(const Cell: TCell; Lines: TStrings);
 var
   Inv: TFormatSettings;
@@ -560,8 +582,9 @@ begin
         for j := 0 to Port.Shapes.Count - 1 do
         begin
           Shape := Port.Shapes[j];
-          Power.Add(Format('  %s [%s] %.3f x %.3f um at (%.3f, %.3f)',
-            [Port.Name, Shape.Layer,
+          Power.Add(Format('  %s [%s] %s %s, %.3f x %.3f um at (%.3f, %.3f)',
+            [Port.Name, Shape.Layer, EdgeText(Shape.Edge),
+             CurrentText(Shape.CurrentUa),
              Abs(Shape.x2 - Shape.x1), Abs(Shape.y2 - Shape.y1),
              Shape.x1, Shape.y1], Inv));
         end;

@@ -1,4 +1,4 @@
-unit ProjectData;
+﻿unit ProjectData;
 
 interface
 
@@ -35,6 +35,7 @@ type
     FUtilization: string;
     FBiasCurrent: string;
     FPTLLength: string;
+    FBiasLayer: string;
     procedure LoadFromJson(Root: TJSONObject);
   public
     constructor Create;
@@ -58,6 +59,7 @@ type
     property Utilization: string read FUtilization write FUtilization;
     property BiasCurrent: string read FBiasCurrent write FBiasCurrent;
     property PTLLength: string read FPTLLength write FPTLLength;
+    property BiasLayer: string read FBiasLayer write FBiasLayer;
   end;
 
 // Path of the small "recent projects" preferences file. Kept next to the
@@ -111,6 +113,7 @@ begin
   FUtilization := '';
   FBiasCurrent := '';
   FPTLLength := '';
+  FBiasLayer := '';
 end;
 
 procedure TProjectFile.LoadFromJson(Root: TJSONObject);
@@ -148,6 +151,8 @@ begin
     FBiasCurrent := Root.GetValue<string>('biasCurrent');
   if Root.GetValue('ptlLength') is TJSONValue then
     FPTLLength := Root.GetValue<string>('ptlLength');
+  if Root.GetValue('biasLayer') is TJSONValue then
+    FBiasLayer := Root.GetValue<string>('biasLayer');
 
   FSplitters.Clear;
   Arr := Root.GetValue('splitters') as TJSONArray;
@@ -201,6 +206,7 @@ begin
     Root.AddPair('utilization', FUtilization);
     Root.AddPair('biasCurrent', FBiasCurrent);
     Root.AddPair('ptlLength', FPTLLength);
+    Root.AddPair('biasLayer', FBiasLayer);
 
     Arr := TJSONArray.Create;
     for i := 0 to FSplitters.Count - 1 do
