@@ -110,16 +110,7 @@ type
     Layers: TArray<string>;
   end;
 
-// One A* search node: grid cell + routing layer + the direction the trace came
-// from (for the bend penalty). Dir: 0=E,1=W,2=S,3=N, -1 = start (no direction).
-  TAStarNode = record
-    X, Y: Integer;
-    Dir: Integer;
-    Layer: Integer; // index into FRouteLayers
-    G: Integer;  // steps so far + bend/via penalties
-  end;
-
-  // One point-to-point routing job: a driver pin -> a load pin (a signal net,
+// One point-to-point routing job: a driver pin -> a load pin (a signal net,
   // or one link of a clock net's fan-out). Kind distinguishes them for the
   // summary counts; Start/Goal are the pin grid blocks on the primary layer.
   TRouteJobKind = (rkSignal, rkClock);
@@ -138,6 +129,20 @@ type
     PathLayers: TArray<Integer>;
   end;
   TRouteJobArray = TArray<TRouteJob>;
+
+// A buffer the routing validation has inserted to break up an over-long PTL.
+// The gate lives in the placement model (signal PTLs) or the clock model (clock
+// links); the slot records where it must sit so it can be re-applied after the
+// floorplan rebuilds.
+  TValidationBuffer = record
+    Gate: TGateInstance;
+    NetName: string;
+    IsClock: Boolean; // True if inserted into a clock link (clock model)
+    Band: Integer;    // band the buffer sits in (-1 for the clock trunk)
+    RowType: Integer; // 0 = logic row, 1 = clock row, 2 = clock trunk
+    X: Integer;       // top-left X in grid cells
+    Y: Integer;       // top-left Y in grid cells (absolute; trunk uses it directly)
+  end;
 
 // Snapshot of a placed cell's horizontal position relative to its row, used to
 // preserve the optimized placement when the bias lines are expanded (the
@@ -185,6 +190,8 @@ type
     EditUtilization: TEdit;
     EditBiasCurrent: TEdit;
     EditPTLLength: TEdit;
+    EditFreqGHz: TEdit;
+    EditPTLDelay: TEdit;
     ComboBiasLayer: TComboBox;
     LabelBiasLayer: TLabel;
     ListBoxPlacementErrors: TListBox;
@@ -209,6 +216,7 @@ type
     SplitterErrors: TSplitter;
     ButtonRunRouting: TButton;
     MemoRouting: TMemo;
+    ButtonValidateRouting: TButton;
     SplitterRouting: TSplitter;
     PaintBox4: TPaintBox;
     ButtonBack: TButton;
@@ -244,6 +252,7 @@ procedure ButtonOptimizeClick(Sender: TObject);
     procedure ButtonExpandBiasClick(Sender: TObject);
     procedure CheckBoxToggleChange(Sender: TObject);
     procedure ButtonRunRoutingClick(Sender: TObject);
+    procedure ButtonValidateRoutingClick(Sender: TObject);
     procedure PaintBox1MouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Single);
     procedure PaintBox1MouseMove(Sender: TObject; Shift: TShiftState; X, Y: Single);
     procedure PaintBox1MouseUp(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Single);
@@ -305,16 +314,15 @@ procedure ButtonOptimizeClick(Sender: TObject);
     FRoutingLayerEnabled: TDictionary<string, Boolean>;
     FRouteTraces: TArray<TRoutedTrace>;
     FRouteSignalLayer: string;
-    FRouteShowHeat: Boolean; // overlay the per-block history heat map
     FRouteLayers: TArray<string>;          // routing layer names, in library order
     FRouteObstacles: TArray<TArray<Boolean>>; // [layerIdx][block] pin-geometry blocks
-    FRouteUsage: TArray<TArray<Integer>>;     // [layerIdx][block] present usage (NCR)
-    FRouteHist: TArray<TArray<Integer>>;      // [layerIdx][block] history congestion (NCR)
-    FRoutePresFactor: Integer;                // present-congestion weight (NCR)
-    FRouteHistFactor: Integer;                // history-congestion weight (NCR)
-    FRouteMaxIter: Integer;                   // rip-up-and-reroute iteration cap
-    FRouteLastOverflow: Integer;              // overused blocks from the last run
     FRouteObstaclesW, FRouteObstaclesH: Integer;
+    FRoutingSucceeded: Boolean;  // routing completed with zero failed links
+    FRoutingValidated: Boolean;  // the routing validation loop has run to completion
+    FRouteLengthColor: Boolean;  // trace colouring: length scale vs layer colour
+    FValidationBuffers: TArray<TValidationBuffer>; // buffers validation inserted
+    FValidationBlocked: TStringList;               // failed buffer slots 'band:row:x'
+    FValidationBufIdx: Integer;                    // unique suffix for split net names
     FPlacementErrorCount: Integer;
     FFloorplanErrorCount: Integer;
     FSwitchingTab: Boolean;
@@ -364,6 +372,7 @@ procedure ButtonOptimizeClick(Sender: TObject);
     FPlanLane1W: Integer;               // snapshot: far-right bias lane width
     FPlanLastTotalH: Integer;           // snapshot: last TotalH (bias-fit checks)
     FBiasExpansionDone: Boolean;        // bias expansion has run (latching)
+    FPlacementOptimized: Boolean;       // Optimize Placement has been pressed
     FOrderChanged: Boolean;
     FManhattanItem: TListBoxItem; // live 'total wire length' diagnostic line
     procedure FreeLib;
@@ -449,21 +458,44 @@ procedure ButtonOptimizeClick(Sender: TObject);
     procedure DrawRoutingLegend(Canvas: TCanvas);
     function HslToColor(H, S, L, A: Single): TAlphaColor;
     function RoutingLayerColor(const ALayer: string): TAlphaColor;
+    function LengthColor(T: Double): TAlphaColor;
     procedure RunRouting;
+    procedure RunRoutingValidation;
+    function TraceLengthUm(const ATr: TRoutedTrace; Core: Double): Double;
+    function IsBiasTrace(const ATr: TRoutedTrace): Boolean;
+    function PathLengthUm(const Pts: TArray<TPoint>; Core: Double): Double;
+    procedure BlockTrace(ATraceIdx: Integer);
+    procedure UnblockTrace(ATraceIdx: Integer);
+    function RerouteTrace(ATraceIdx: Integer): Boolean;
+    function FindMinDelayBufferCell: TCell;
+    procedure ReapplyValidationBuffers;
+    procedure RunBiasExpansionAndRouting;
+    function TryInsertBuffer(IsClock: Boolean; const NetName: string;
+      Driver, Load: TGateInstance; const DriverPin, LoadPin: string;
+      APadLoad: Boolean;
+      BufCell: TCell; const InPin, OutPin: string;
+      ABand, ARowType, AX, AY: Integer): Boolean;
+    function InsertBufferForTrace(ATraceIdx: Integer): Boolean;
     procedure DrawRoutedTraces(Canvas: TCanvas);
     function GatePinBlock(G: TGateInstance; const PinName: string;
       ALayer: Integer; var P: TPoint): Boolean;
     function GatePinBlockAt(G: TGateInstance; const PinName: string;
       ALayer, AX, AY: Integer; Rotated: Boolean; var P: TPoint): Boolean;
     procedure BuildRoutingObstacles;
-    function AStarRoute(Start, Goal: TPoint;
+    // A* maze router. If UseLayer >= 0, routes on that single layer only (no
+    // vias); if UseLayer < 0, routes over all layers with via transitions. Hard
+    // pin-geometry blocks are the only obstacles (the goal cell is exempt). The
+    // search is confined to a window around the terminals with an expansion
+    // budget; turns are penalised over going straight. The path (inclusive of
+    // start and goal) goes to OutPath, with each point's routing-layer index in
+    // OutLayers.
+    function LeeRoute(Start, Goal: TPoint; UseLayer: Integer;
       var OutPath: TArray<TPoint>; var OutLayers: TArray<Integer>): Boolean;
     procedure OrderLayer(L: Integer; CrossOnly: Boolean);
     procedure ResolvePlacementOverlaps;
     procedure OptimizePlacement;
     procedure RebuildFloorplanPreserve; // rebuild bias geometry, keep placement
     function BandIndexOfY(Y: Integer): Integer; // band containing grid row Y
-    procedure AnalyzeCongestion(var AChanged: Boolean);
     // Bias-line current-capacity helpers. Each returns True on success; on
     // failure it reports the reason via AddFloorplanError and leaves the layout
     // unchanged.
@@ -523,6 +555,9 @@ begin
   FBiasLaneW := nil;
   FPlanMaxRowW := 0;
   FBiasExpansionDone := False;
+  FPlacementOptimized := False;
+  FRoutingSucceeded := False;
+  FRoutingValidated := False;
   FPlacementModel := nil;
   FreePipelineRows;
   FreePipelineModel;
@@ -731,15 +766,23 @@ begin
       (FPlacementErrorCount = 0);
   if TabControl1.TabIndex = TabFloorplan then
   begin
-    // The bias expansion is a one-shot latch: enabled only once the floorplan
-    // is valid and the placement has been optimised; disabled again once run.
+    // The bias expansion is a one-shot latch: enabled only once the placement
+    // has been optimised and the floorplan is valid; disabled again once run.
     // Progress past the floorplan requires the expansion to have been run.
-    ButtonExpandBias.Enabled := FFloorplanValid and (not FBiasExpansionDone);
+    ButtonExpandBias.Enabled := FPlacementOptimized and FFloorplanValid and
+      (not FBiasExpansionDone);
     ButtonNext.Enabled := ButtonNext.Enabled and
-      (FFloorplanErrorCount = 0) and FBiasExpansionDone;
+      (FFloorplanErrorCount = 0) and (FPlacementErrorCount = 0) and
+      FPlacementOptimized and FBiasExpansionDone;
   end
   else
     ButtonExpandBias.Enabled := False;
+  // Routing page: validation is only available once routing has succeeded, and
+  // the user is locked out of re-routing until the validation loop has run to
+  // completion (so a new wire-length state is never routed over an unverified
+  // one).
+  ButtonRunRouting.Enabled := (not FRoutingSucceeded) or FRoutingValidated;
+  ButtonValidateRouting.Enabled := FRoutingSucceeded and (not FRoutingValidated);
 end;
 
 procedure TForm1.UpdateRecentList;
@@ -866,6 +909,8 @@ begin
   EditUtilization.Text := '60';
   EditBiasCurrent.Text := '5';
   EditPTLLength.Text := '550';
+  EditFreqGHz.Text := '10';
+  EditPTLDelay.Text := '10';
   // Bias-routing layer: default to the first masterslice layer (the usual
   // choice for the bias rail, since it is not a signal-routing layer); leave
   // the current selection if one was already made.
@@ -910,6 +955,10 @@ begin
       EditBiasCurrent.Text := FormatDim2(Core);
     if TryDimParse(EditPTLLength.Text, Core) then
       EditPTLLength.Text := FormatDim2(Core);
+    if TryDimParse(EditFreqGHz.Text, Core) then
+      EditFreqGHz.Text := FormatDim2(Core);
+    if TryDimParse(EditPTLDelay.Text, Core) then
+      EditPTLDelay.Text := FormatDim2(Core);
   finally
     FFormattingPlacement := False;
   end;
@@ -999,6 +1048,14 @@ begin
     AddPlacementMsg('Max bias current must be a valid number.', $FFFF0000, True);
   if not TryDimParse(EditPTLLength.Text, PTL) then
     AddPlacementMsg('Max PTL length must be a valid number.', $FFFF0000, True);
+  if not TryDimParse(EditFreqGHz.Text, Bias) then
+    AddPlacementMsg('Operating frequency must be a valid number.', $FFFF0000, True)
+  else if Bias <= 0 then
+    AddPlacementMsg('Operating frequency must be positive.', $FFFF0000, True);
+  if not TryDimParse(EditPTLDelay.Text, PTL) then
+    AddPlacementMsg('PTL propagation delay must be a valid number.', $FFFF0000, True)
+  else if PTL <= 0 then
+    AddPlacementMsg('PTL propagation delay must be positive.', $FFFF0000, True);
 
   // The bias-routing layer must be a valid selection from the library.
   if FBiasLayer = '' then
@@ -1178,6 +1235,8 @@ begin
   FProject.Utilization := EditUtilization.Text;
   FProject.BiasCurrent := EditBiasCurrent.Text;
   FProject.PTLLength := EditPTLLength.Text;
+  FProject.FreqGHz := EditFreqGHz.Text;
+  FProject.PTLDelay := EditPTLDelay.Text;
   FProject.BiasLayer := FBiasLayer;
   try
     FProject.SaveToFile(FProjectPath);
@@ -1250,6 +1309,14 @@ begin
     EditUtilization.Text := FProject.Utilization;
     EditBiasCurrent.Text := FProject.BiasCurrent;
     EditPTLLength.Text := FProject.PTLLength;
+    EditFreqGHz.Text := FProject.FreqGHz;
+    EditPTLDelay.Text := FProject.PTLDelay;
+    // Older projects have no frequency/delay fields; give them defaults so
+    // the new fields validate instead of appearing empty.
+    if EditFreqGHz.Text = '' then
+      EditFreqGHz.Text := '10';
+    if EditPTLDelay.Text = '' then
+      EditPTLDelay.Text := '10';
     FBiasLayer := FProject.BiasLayer;
     if ComboBiasLayer <> nil then
     begin
@@ -1351,6 +1418,7 @@ begin
   FPadMap := TDictionary<string, TPoint>.Create;
   FRoutingLayers := TStringList.Create;
   FRoutingLayerEnabled := TDictionary<string, Boolean>.Create;
+  FValidationBlocked := TStringList.Create;
   FFlipFlopNames := TStringList.Create;
   FFlipFlopCandidates := TList<TCell>.Create;
   FBufferNames := TStringList.Create;
@@ -1408,14 +1476,6 @@ end;
 procedure TForm1.FormKeyDown(Sender: TObject; var Key: Word;
   var KeyChar: WideChar; Shift: TShiftState);
 begin
-  // H: toggle the per-block history heat map on the routing tab.
-  if (Key = Ord('H')) and (TabControl1.TabIndex = TabRouting) then
-  begin
-    Key := 0;
-    FRouteShowHeat := not FRouteShowHeat;
-    PaintBox4.Repaint;
-    Exit;
-  end;
   // Ctrl+S on Windows, Cmd+S on macOS. Only the explicit save actions open
   // the Save As dialog; everything else saves silently or never asks.
   if (Key = Ord('S')) and ((ssCtrl in Shift) or (ssCommand in Shift)) then
@@ -1491,6 +1551,7 @@ begin
   FPadMap.Free;
   FRoutingLayers.Free;
   FRoutingLayerEnabled.Free;
+  FValidationBlocked.Free;
   FFlipFlopNames.Free;
   FFlipFlopCandidates.Free;
   FBufferNames.Free;
@@ -2851,6 +2912,10 @@ begin
     BuildFloorplan;
   end;
   OptimizePlacement;
+  // The user must have successfully optimised the placement before the bias
+  // expansion (and hence the routing page) becomes available.
+  if (FFloorplanErrorCount = 0) and (FPlacementErrorCount = 0) then
+    FPlacementOptimized := True;
   UpdateUI;
 end;
 
@@ -5349,8 +5414,6 @@ var
   ClkL, ClkIdx: Integer;
   ClkNode: TPlacedClockNode;
   Sp: TSpineComponent;
-  HeatL, HeatMax, HeatV: Integer;
-  HeatT: Single;
 
   function WX(AValue: Single): Single;
   begin
@@ -5581,40 +5644,6 @@ Canvas.Fill.Color := HslColor(0, 0, 0.6, CellAlpha / 255);
       Canvas.FillRect(TRectF.Create(WX(DieW) - BorderHalf, WY(0) - BorderHalf,
         WX(DieW) + BorderHalf, WY(DieH) + BorderHalf), 0, 0, [], 1.0); // right
 
-      // Per-block history heat map (toggle with H), overlaid on top: the
-      // strongest history across all routing layers at each block. Hue runs
-      // from yellow (light congestion) to red (severe); the alpha scales so
-      // uncongested blocks stay invisible.
-      if FRouteShowHeat and (Length(FRouteHist) > 0) and
-         (FRouteObstaclesW > 0) and (FRouteObstaclesH > 0) then
-      begin
-        HeatMax := 0;
-        for HeatL := 0 to High(FRouteHist) do
-          for i := 0 to High(FRouteHist[HeatL]) do
-            if FRouteHist[HeatL][i] > HeatMax then
-              HeatMax := FRouteHist[HeatL][i];
-        if HeatMax > 0 then
-        begin
-          for i := 0 to FRouteObstaclesH - 1 do
-            for j := 0 to FRouteObstaclesW - 1 do
-            begin
-              HeatV := 0;
-              for HeatL := 0 to High(FRouteHist) do
-              begin
-                if FRouteHist[HeatL][i * FRouteObstaclesW + j] > HeatV then
-                  HeatV := FRouteHist[HeatL][i * FRouteObstaclesW + j];
-              end;
-              if HeatV <= 0 then
-                Continue;
-              HeatT := HeatV / HeatMax;
-              Canvas.Fill.Color := HslColor(
-                60 * (1 - HeatT), 1.0, 0.5, 0.15 + 0.55 * HeatT);
-              Canvas.FillRect(TRectF.Create(WX(j * Core), WY(i * Core),
-                WX((j + 1) * Core), WY((i + 1) * Core)), 0, 0, [], 1.0);
-            end;
-        end;
-      end;
-
       // Interactive layer legend, fixed to the top-right of the canvas (screen
       // space, independent of pan/zoom). One row per used layer in library
       // order: a colour box + the layer name. Clicking the box toggles whether
@@ -5641,7 +5670,7 @@ begin
   if Button <> TMouseButton.mbLeft then
     Exit;
   // Hit-test the top-right layer legend first; clicking a colour box toggles
-  // that layer instead of starting a pan.
+  // that layer (or the length-colour toggle) instead of starting a pan.
   if FRoutingLayers.Count > 0 then
   begin
     PanelX := PaintBox4.Width - PanelW - LegendPad;
@@ -5656,6 +5685,16 @@ begin
         ToggleRoutingLayer(FRoutingLayers[i]);
         Exit;
       end;
+    end;
+    // The length-colour toggle row (one past the layers).
+    BoxLeft := PanelX + LegendPad;
+    BoxTop := PanelY + LegendPad + FRoutingLayers.Count * RowH + (RowH - BoxSize) / 2;
+    if (X >= BoxLeft) and (X <= BoxLeft + BoxSize) and
+       (Y >= BoxTop) and (Y <= BoxTop + BoxSize) then
+    begin
+      FRouteLengthColor := not FRouteLengthColor;
+      RepaintRoutingPage;
+      Exit;
     end;
   end;
   FRouteDragging := True;
@@ -5770,8 +5809,44 @@ begin
   Result := HslToColor(216.0 + k * 222.0, 0.65, 0.55, 1.0);
 end;
 
+// The 'spectrogram' colour scale for wire length: blue - cyan - green - yellow
+// - red. T is clamped to [0..1]; 0 = shortest (blue), 1 = at/over the scale cap
+// (red). Piecewise-linear interpolation between the stops.
+function TForm1.LengthColor(T: Double): TAlphaColor;
+const
+  Stops: array[0..4] of record P: Double; R, G, B: Byte; end = (
+    (P: 0.00; R: 0;   G: 0;    B: 255),
+    (P: 0.25; R: 0;   G: 255;  B: 255),
+    (P: 0.50; R: 0;   G: 255;  B: 0),
+    (P: 0.75; R: 255; G: 255;  B: 0),
+    (P: 1.00; R: 255; G: 0;    B: 0));
+var
+  i: Integer;
+  Frac, R, G, B: Double;
+begin
+  if T <= 0 then
+    Result := $FF0000FF
+  else if T >= 1 then
+    Result := $FFFF0000
+  else
+  begin
+    i := 0;
+    while (i < 4) and (T > Stops[i + 1].P) do
+      Inc(i);
+    if Stops[i + 1].P = Stops[i].P then
+      Frac := 0
+    else
+      Frac := (T - Stops[i].P) / (Stops[i + 1].P - Stops[i].P);
+    R := Stops[i].R + (Stops[i + 1].R - Stops[i].R) * Frac;
+    G := Stops[i].G + (Stops[i + 1].G - Stops[i].G) * Frac;
+    B := Stops[i].B + (Stops[i + 1].B - Stops[i].B) * Frac;
+    Result := $FF000000 or (Round(R) shl 16) or (Round(G) shl 8) or Round(B);
+  end;
+end;
+
 // Draws the fixed top-right layer legend. Row order = FRoutingLayers order; a
 // filled colour box means the layer is enabled, an outlined box means hidden.
+// A final 'Length' row toggles length-based (temperature) trace colouring.
 procedure TForm1.DrawRoutingLegend(Canvas: TCanvas);
 const
   LegendPad = 8;       // margin from the canvas top-right corner
@@ -5781,11 +5856,11 @@ const
   PanelW = 70;         // legend panel width (names are short)
 var
   PanelX, PanelY, PanelH: Single;
-  i: Integer;
+  i, x: Integer;
   BoxLeft, BoxTop: Single;
   Enabled: Boolean;
 begin
-  PanelH := LegendPad * 2 + FRoutingLayers.Count * RowH;
+  PanelH := LegendPad * 2 + (FRoutingLayers.Count + 1) * RowH;
   PanelX := PaintBox4.Width - PanelW - LegendPad;
   PanelY := LegendPad;
   // Panel background (semi-transparent) so the grid underneath stays readable.
@@ -5826,13 +5901,49 @@ begin
       PanelX + PanelW - LegendPad, BoxTop + 14),
       FRoutingLayers[i], False, 1.0, [], TTextAlign.Leading, TTextAlign.Center);
   end;
+
+  // Separator above the length-colour toggle.
+  BoxTop := PanelY + LegendPad + FRoutingLayers.Count * RowH;
+  Canvas.Fill.Color := $FF909090;
+  Canvas.FillRect(TRectF.Create(PanelX + LegendPad, BoxTop,
+    PanelX + PanelW - LegendPad, BoxTop + 1), 0, 0, [], 1.0);
+
+  // Length toggle row: gradient box (black->yellow) filled when active, and the
+  // 'Length' caption.
+  BoxLeft := PanelX + LegendPad;
+  BoxTop := PanelY + LegendPad + FRoutingLayers.Count * RowH + (RowH - BoxSize) / 2;
+  if FRouteLengthColor then
+  begin
+    // A mini horizontal temperature gradient.
+    for x := 0 to BoxSize - 1 do
+    begin
+      Canvas.Fill.Color := LengthColor(x / (BoxSize - 1));
+      Canvas.FillRect(TRectF.Create(BoxLeft + x, BoxTop,
+        BoxLeft + x + 1, BoxTop + BoxSize), 0, 0, [], 1.0);
+    end;
+  end
+  else
+  begin
+    Canvas.Fill.Color := $FFFFFFFF;
+    Canvas.FillRect(TRectF.Create(BoxLeft, BoxTop, BoxLeft + BoxSize, BoxTop + BoxSize),
+      0, 0, [], 1.0);
+    Canvas.Fill.Color := $FF606060;
+    Canvas.FillRect(TRectF.Create(BoxLeft, BoxTop, BoxLeft + BoxSize, BoxTop + 1), 0, 0, [], 1.0);
+    Canvas.FillRect(TRectF.Create(BoxLeft, BoxTop + BoxSize - 1, BoxLeft + BoxSize, BoxTop + BoxSize), 0, 0, [], 1.0);
+    Canvas.FillRect(TRectF.Create(BoxLeft, BoxTop, BoxLeft + 1, BoxTop + BoxSize), 0, 0, [], 1.0);
+    Canvas.FillRect(TRectF.Create(BoxLeft + BoxSize - 1, BoxTop, BoxLeft + BoxSize, BoxTop + BoxSize), 0, 0, [], 1.0);
+  end;
+  Canvas.Fill.Color := TAlphaColorRec.Black;
+  Canvas.FillText(TRectF.Create(PanelX + TextX, BoxTop - 4,
+    PanelX + PanelW - LegendPad, BoxTop + 14),
+    'Length', False, 1.0, [], TTextAlign.Leading, TTextAlign.Center);
 end;
 
-// Maze-routes every signal net on the routing layers (vialess, for now).
-// Cost metric: Manhattan length is primary, then a penalty per bend (impedance
-// discontinuity). Nets are routed shortest-first; each net tries the routing
-// layers in order (the first one that succeeds wins), and every trace's cells
-// are marked used so later nets route around earlier ones (no intersections).
+// Maze-routes every signal net and clock link. All nets first try the first
+// routing layer alone (Lee wavefront, no vias); the ones that fail move on to
+// the next layer, one layer at a time, and the still-unrouted nets finally get
+// a multi-layer search with vias. Each wire is blocked on its layer as soon as
+// it is routed, so later nets on that layer route around it.
 procedure TForm1.RunRouting;
 var
   Core: Double;
@@ -5843,15 +5954,14 @@ var
   Pair: TPair<string, TNet>;
   Driver, Load: TGateInstance;
   DriverPin, LoadPin: string;
-  Routed, Skipped, Failed: Integer;
+  Failed: Integer;
   Trace: TRoutedTrace;
   i, j, k, L, ci: Integer;
-  Jobs, BestJobs: TRouteJobArray;
+  Jobs: TRouteJobArray;
   Job: TRouteJob;
   Order: TArray<Integer>;
   TmpIdx: Integer;
   Pt: TPoint;
-  Iter, Overflow, BestOverflow, BestIter: Integer;
   SigRouted, ClkRouted: Integer;
   TreeModel: TBlifModel;
   ClkPos: TDictionary<TGateInstance, TPoint>;
@@ -5860,10 +5970,11 @@ var
   Node: TPlacedClockNode;
   GatePos, DriverPos: TPoint;
   UseClkPad: Boolean;
+  PassRouted, PassFailed: Integer;
 
-  // Adds a job's cells to the present-usage map (via cells count on both the
-  // old and the new layer, matching the trace-drawing).
-  procedure AddUsage(Pth: TArray<TPoint>; PL: TArray<Integer>);
+  // Marks a routed path's cells as hard obstacles on the layers they use, so
+  // later nets on those layers route around them (classic sequential maze).
+  procedure BlockPath(Pth: TArray<TPoint>; PL: TArray<Integer>);
   var
     ii: Integer;
   begin
@@ -5873,10 +5984,28 @@ var
       if (Pt.X < 0) or (Pt.X >= FRouteObstaclesW) or
          (Pt.Y < 0) or (Pt.Y >= FRouteObstaclesH) then
         Continue;
-      Inc(FRouteUsage[PL[ii]][Pt.Y * FRouteObstaclesW + Pt.X]);
-      if (ii > 0) and (PL[ii] <> PL[ii - 1]) then
-        Inc(FRouteUsage[PL[ii - 1]][Pt.Y * FRouteObstaclesW + Pt.X]);
+      if (PL[ii] >= 0) and (PL[ii] <= High(FRouteObstacles)) then
+        FRouteObstacles[PL[ii]][Pt.Y * FRouteObstaclesW + Pt.X] := True;
     end;
+  end;
+
+  // Appends a routed job's path to FRouteTraces and repaints immediately, so
+  // each wire appears on screen as soon as it is routed.
+  procedure PublishTrace(const AJob: TRouteJob);
+  var
+    jj: Integer;
+  begin
+    if not AJob.Routed or (Length(AJob.Path) = 0) then
+      Exit;
+    Trace.NetName := AJob.NetName;
+    Trace.Points := AJob.Path;
+    SetLength(Trace.Layers, Length(AJob.PathLayers));
+    for jj := 0 to High(AJob.PathLayers) do
+      Trace.Layers[jj] := FRouteLayers[AJob.PathLayers[jj]];
+    SetLength(FRouteTraces, Length(FRouteTraces) + 1);
+    FRouteTraces[High(FRouteTraces)] := Trace;
+    PaintBox4.Repaint;
+    Application.ProcessMessages;
   end;
 
   // Builds one TRouteJob for a signal net (from the placement model) or for a
@@ -5921,6 +6050,8 @@ var
 
 begin
   MemoRouting.Lines.Clear;
+  FRoutingSucceeded := False;
+  FRoutingValidated := False;
   if FPlacementModel = nil then
   begin
     MemoRouting.Lines.Add('No placement model to route.');
@@ -5938,7 +6069,8 @@ begin
   end;
 
     // All routing layers, in library order. The first is the primary layer;
-    // subsequent layers are used as fallbacks when the primary is blocked.
+    // subsequent layers are used one at a time for the nets the earlier layer
+    // could not route.
     SetLength(FRouteLayers, 0);
     for i := 0 to FLib.Layers.Count - 1 do
       if FLib.Layers[i].LayerType = ltRouting then
@@ -5957,16 +6089,7 @@ begin
 
     BuildRoutingObstacles;
 
-    // Negotiated-congestion weights and iteration budget.
-    FRoutePresFactor := 1;
-    FRouteHistFactor := 1;
-    FRouteMaxIter := 40;
-    // Show the per-block history heat map while the negotiation runs.
-    FRouteShowHeat := True;
-
     SetLength(FRouteTraces, 0);
-    Routed := 0;
-    Skipped := 0;
     Failed := 0;
     SetLength(Jobs, 0);
 
@@ -5974,6 +6097,13 @@ begin
     for Pair in FPlacementModel.Nets do
     begin
       Net := Pair.Value;
+      // Clock-network nets (the 'clk' root, 'clk_*', and balancing-buffer
+      // outputs '<Leaf>__clkbuf_<n>') are routed by the clock pass below; their
+      // only connections here are clock pins, so treat them as clock nets, not
+      // as skipped signals.
+      if StartsText('clk', Net.Name) or
+         (Pos('__clkbuf_', Net.Name) > 0) then
+        Continue;
       Driver := nil;
       DriverPin := '';
       Load := nil;
@@ -5996,10 +6126,7 @@ begin
         end;
       end;
       if (Driver = nil) and (Load = nil) then
-      begin
-        Inc(Skipped);
         Continue;
-      end;
       PushJob(Net.Name, rkSignal, Driver, DriverPin, Load, LoadPin);
     end;
 
@@ -6034,11 +6161,16 @@ begin
         for Pair in TreeModel.Nets do
         begin
           Net := Pair.Value;
-          if not StartsText('clk', Net.Name) then
-          begin
-            Inc(Skipped);
+          // A clock-network net: the root 'clk', the row/spine/delay nets
+          // ('clk_*'), or a balancing buffer's output net. The latter are named
+          // after the leaf they feed ('<Leaf>__clkbuf_<n>'), so they do NOT
+          // start with 'clk' - only the '__clkbuf_' marker identifies them.
+          // The buffered model also holds every signal net (it is a clone of the
+          // pipeline model); those are not part of the clock tree and are simply
+          // ignored here, not counted as skipped.
+          if not (StartsText('clk', Net.Name) or
+                  (Pos('__clkbuf_', Net.Name) > 0)) then
             Continue;
-          end;
           Driver := nil;
           DriverPin := '';
           UseClkPad := False;
@@ -6054,7 +6186,6 @@ begin
             UseClkPad := True;
           if (Driver = nil) and (not UseClkPad) then
           begin
-            Inc(Skipped);
             Continue;
           end;
           if UseClkPad then
@@ -6062,7 +6193,6 @@ begin
           else if not GatePinBlockAt(Driver, DriverPin, 0,
             ClkPos[Driver].X, ClkPos[Driver].Y, ClkRot[Driver], DriverPos) then
           begin
-            Inc(Skipped);
             Continue;
           end;
           // Each non-driver connection is a point-to-point link.
@@ -6070,15 +6200,17 @@ begin
           begin
             if NC.IsDriver then
               Continue;
+            if NC.Gate = nil then
+            begin
+              Continue;
+            end;
             if not ClkPos.TryGetValue(NC.Gate, GatePos) then
             begin
-              Inc(Skipped);
               Continue;
             end;
             if not GatePinBlockAt(NC.Gate, NC.PinName, 0,
               GatePos.X, GatePos.Y, ClkRot[NC.Gate], Pt) then
             begin
-              Inc(Skipped);
               Continue;
             end;
             Job.NetName := Net.Name;
@@ -6106,8 +6238,8 @@ begin
       end;
     end;
 
-    // Shortest links first (stable insertion order for ties): a good first
-    // guess; later iterations let history drive the negotiation.
+    // Shortest links first (stable insertion order for ties). A short wire is
+    // easy to place first, leaving the longer ones the remaining space.
     SetLength(Order, Length(Jobs));
     for i := 0 to High(Jobs) do
       Order[i] := i;
@@ -6120,89 +6252,74 @@ begin
           Order[j] := TmpIdx;
         end;
 
-    // ---- Negotiated congestion routing (rip-up and re-route) ----
-    // Each iteration re-routes every link once; present usage from earlier
-    // links is a soft cost (never a hard block). After the pass, blocks used
-    // by more than one wire accumulate history, which raises their cost next
-    // iteration so contending links negotiate which one truly needs the block.
-    BestOverflow := High(Integer);
-    BestIter := 0;
-    BestJobs := nil;
-    for Iter := 1 to FRouteMaxIter do
+    // ---- Sequential Lee maze routing ----
+    // Every net first tries the first routing layer alone. The nets that fail
+    // try the second layer alone, and so on through the library's routing
+    // layers. Finally the still-unrouted nets get a multi-layer search where a
+    // via (layer switch) is allowed at any block. A wire is blocked on its
+    // layer as soon as it is routed, so later nets on that layer route around
+    // it instead of overlapping.
+    for L := 0 to High(FRouteLayers) do
     begin
-      // Reset present usage (history is kept across iterations).
-      for j := 0 to High(FRouteUsage) do
-        for i := 0 to High(FRouteUsage[j]) do
-          FRouteUsage[j][i] := 0;
-      Routed := 0;
-      Failed := 0;
+      PassRouted := 0;
+      PassFailed := 0;
       for k := 0 to High(Order) do
       begin
         Job := Jobs[Order[k]];
+        if Job.Routed then
+          Continue;
         if Job.StartValid and Job.GoalValid and
-           AStarRoute(Job.Start, Job.Goal, Path, PathLayers) then
+           LeeRoute(Job.Start, Job.Goal, L, Path, PathLayers) then
         begin
           Job.Routed := True;
           Job.Path := Path;
           Job.PathLayers := PathLayers;
-          AddUsage(Path, PathLayers);
-          Inc(Routed);
+          BlockPath(Path, PathLayers);
+          Inc(PassRouted);
+          PublishTrace(Job);
         end
         else
         begin
           Job.Routed := False;
-          Inc(Failed);
+          Inc(PassFailed);
         end;
         Jobs[Order[k]] := Job;
       end;
-      // Accumulate history on overused blocks and compute total overflow.
-      Overflow := 0;
-      for j := 0 to High(FRouteUsage) do
-        for i := 0 to High(FRouteUsage[j]) do
-          if FRouteUsage[j][i] > 1 then
-          begin
-            Inc(FRouteHist[j][i], FRouteUsage[j][i] - 1);
-            Inc(Overflow, FRouteUsage[j][i] - 1);
-          end;
-      if (Overflow < BestOverflow) or (BestIter = 0) then
-      begin
-        BestOverflow := Overflow;
-        BestIter := Iter;
-        BestJobs := Copy(Jobs);
-      end;
       MemoRouting.Lines.Add(Format(
-        'Iter %d: %d/%d links routed, %d block(s) overused.',
-        [Iter, Routed, Length(Jobs), Overflow]));
-      if Overflow = 0 then
-        Break;
-      if Iter - BestIter >= 10 then
-        Break; // no improvement for a while; keep the best solution
-      // Refresh the trace list from this iteration's routes so the repaint
-      // shows both the current wires and the history heat map.
-      SetLength(FRouteTraces, 0);
-      for k := 0 to High(Jobs) do
-      begin
-        Job := Jobs[k];
-        if not Job.Routed or (Length(Job.Path) = 0) then
-          Continue;
-        Trace.NetName := Job.NetName;
-        Trace.Points := Job.Path;
-        SetLength(Trace.Layers, Length(Job.PathLayers));
-        for j := 0 to High(Job.PathLayers) do
-          Trace.Layers[j] := FRouteLayers[Job.PathLayers[j]];
-        SetLength(FRouteTraces, Length(FRouteTraces) + 1);
-        FRouteTraces[High(FRouteTraces)] := Trace;
-      end;
-      PaintBox4.Repaint;
-      Application.ProcessMessages;
+        'Layer %d (%s): %d routed, %d failed.',
+        [L, FRouteLayers[L], PassRouted, PassFailed]));
     end;
 
-    // Restore the best solution seen (it may be an earlier iteration).
-    if BestIter > 0 then
-      Jobs := BestJobs;
+    // Final pass: vias allowed across all layers, for everything still
+    // unrouted. (This is the only pass that may switch layers mid-wire.)
+    PassRouted := 0;
+    PassFailed := 0;
+    for k := 0 to High(Order) do
+    begin
+      Job := Jobs[Order[k]];
+      if Job.Routed then
+        Continue;
+      if Job.StartValid and Job.GoalValid and
+         LeeRoute(Job.Start, Job.Goal, -1, Path, PathLayers) then
+      begin
+        Job.Routed := True;
+        Job.Path := Path;
+        Job.PathLayers := PathLayers;
+        BlockPath(Path, PathLayers);
+        Inc(PassRouted);
+        PublishTrace(Job);
+      end
+      else
+      begin
+        Job.Routed := False;
+        Inc(PassFailed);
+      end;
+      Jobs[Order[k]] := Job;
+    end;
+    MemoRouting.Lines.Add(Format(
+      'Via pass: %d routed, %d failed.', [PassRouted, PassFailed]));
 
-    // Emit the final traces from the chosen solution.
-    Routed := 0;
+    // Final report.
     Failed := 0;
     SigRouted := 0;
     ClkRouted := 0;
@@ -6214,14 +6331,6 @@ begin
         Inc(Failed);
         Continue;
       end;
-      Trace.NetName := Job.NetName;
-      Trace.Points := Job.Path;
-      SetLength(Trace.Layers, Length(Job.PathLayers));
-      for j := 0 to High(Job.PathLayers) do
-        Trace.Layers[j] := FRouteLayers[Job.PathLayers[j]];
-      SetLength(FRouteTraces, Length(FRouteTraces) + 1);
-      FRouteTraces[High(FRouteTraces)] := Trace;
-      Inc(Routed);
       if Job.Kind = rkSignal then
         Inc(SigRouted)
       else
@@ -6231,34 +6340,10 @@ begin
     MemoRouting.Lines.Add(Format(
       'Routed %d signal net(s) + %d clock link(s) on %d routing layer(s).',
       [SigRouted, ClkRouted, Length(FRouteLayers)]));
-    if Skipped > 0 then
-      MemoRouting.Lines.Add(Format('%d link(s) skipped (clock / unplaced).',
-        [Skipped]));
     if Failed > 0 then
       MemoRouting.Lines.Add(Format('%d link(s) could not be routed.',
         [Failed]));
-    // Convergence report: recompute usage from the emitted solution (Jobs may
-    // have been rolled back to the best iteration) and count remaining overlap.
-    for j := 0 to High(FRouteUsage) do
-      for i := 0 to High(FRouteUsage[j]) do
-        FRouteUsage[j][i] := 0;
-    for i := 0 to High(Jobs) do
-      if Jobs[i].Routed then
-        AddUsage(Jobs[i].Path, Jobs[i].PathLayers);
-    Overflow := 0;
-    for j := 0 to High(FRouteUsage) do
-      for i := 0 to High(FRouteUsage[j]) do
-        if FRouteUsage[j][i] > 1 then
-          Inc(Overflow, FRouteUsage[j][i] - 1);
-    FRouteLastOverflow := Overflow;
-    if Overflow > 0 then
-      MemoRouting.Lines.Add(Format(
-        'WARNING: routing did NOT converge - %d block(s) still carry more than one wire after %d iteration(s).',
-        [Overflow, BestIter]))
-    else
-      MemoRouting.Lines.Add(Format(
-        'Routing converged in %d iteration(s): every block carries at most one wire.',
-        [BestIter]));
+  FRoutingSucceeded := (Failed = 0);
   RepaintRoutingPage;
 end;
 
@@ -6369,21 +6454,13 @@ begin
 
   FRouteObstaclesW := W;
   FRouteObstaclesH := H;
-  // One obstacle + usage + history map per routing layer.
+  // One obstacle map per routing layer.
   SetLength(FRouteObstacles, Length(FRouteLayers));
-  SetLength(FRouteUsage, Length(FRouteLayers));
-  SetLength(FRouteHist, Length(FRouteLayers));
   for j := 0 to High(FRouteLayers) do
   begin
     SetLength(FRouteObstacles[j], W * H);
-    SetLength(FRouteUsage[j], W * H);
-    SetLength(FRouteHist[j], W * H);
     for i := 0 to W * H - 1 do
-    begin
       FRouteObstacles[j][i] := False;
-      FRouteUsage[j][i] := 0;
-      FRouteHist[j][i] := 0;
-    end;
   end;
 
   // Logic cells (in FPlacedComponents), unrotated.
@@ -6419,129 +6496,6 @@ end;
 // insertion this pass are ignored (many offenders on the same row collapse to
 // one row insertion). AChanged reports whether any row grew, so the caller can
 // rebuild and reroute.
-procedure TForm1.AnalyzeCongestion(var AChanged: Boolean);
-type
-  TProblemBlock = record
-    X, Y: Integer;
-    Usage, Hist: Integer;
-  end;
-var
-  Pool: TArray<TProblemBlock>;
-  PB: TProblemBlock;
-  i, j, k, L, idx, Band, W, H, RowH: Integer;
-  RowY0, RowY1, ClkY0, ClkY1: Integer;
-  Count: Integer;
-  TmpPB: TProblemBlock;
-  RowKey: Int64;
-  RowInserted: TDictionary<Int64, Boolean>;
-begin
-  AChanged := False;
-  if (Length(FRouteUsage) = 0) or (Length(FPlanBandStarts) = 0) or
-     (Length(FPlacedComponents) = 0) then
-    Exit;
-  W := FRouteObstaclesW;
-  H := FRouteObstaclesH;
-  if (W <= 0) or (H <= 0) then
-    Exit;
-  RowH := FPlanRowHBlocks;
-
-  // 1. Pool every overused block.
-  SetLength(Pool, 0);
-  for L := 0 to High(FRouteUsage) do
-    for idx := 0 to High(FRouteUsage[L]) do
-      if FRouteUsage[L][idx] > 1 then
-      begin
-        PB.X := idx mod W;
-        PB.Y := idx div W;
-        PB.Usage := FRouteUsage[L][idx];
-        PB.Hist := FRouteHist[L][idx];
-        SetLength(Pool, Length(Pool) + 1);
-        Pool[High(Pool)] := PB;
-      end;
-  if Length(Pool) = 0 then
-    Exit;
-
-  // 2. Rank by usage (desc), history (desc); take the worst 20% (min 1).
-  for i := 0 to High(Pool) - 1 do
-    for j := i + 1 to High(Pool) do
-      if (Pool[j].Usage > Pool[i].Usage) or
-         ((Pool[j].Usage = Pool[i].Usage) and (Pool[j].Hist > Pool[i].Hist)) then
-      begin
-        TmpPB := Pool[i];
-        Pool[i] := Pool[j];
-        Pool[j] := TmpPB;
-      end;
-  Count := (Length(Pool) + 4) div 5;
-  if Count < 1 then
-    Count := 1;
-
-  // 3. Grow a bias row for each offending block's row; blocks sharing a row (or
-  //    a band between rows) collapse to a single insertion. RowKey encodes the
-  //    target: band*2 = logic row, band*2+1 = clock row. The row growth goes
-  //    through the same bias-expansion helpers the 'Expand Bias Lines' button
-  //    uses, so the congestion fixes and the manual expansion stay consistent.
-  //    A LOGIC-row block grows that band's MIDDLE bias row (the bias zone
-  //    directly below the logic cells); a CLOCK-row block grows the bias row
-  //    below the clock cells (the next band's top bias, or the bottom-most bias
-  //    row for the last band). Each distinct target is decided against the
-  //    CURRENT geometry first, then grown (the helpers rebuild as they grow, so
-  //    the band-to-block mapping must not be re-derived after a rebuild).
-  RowInserted := TDictionary<Int64, Boolean>.Create;
-  try
-    for k := 0 to Count - 1 do
-    begin
-      PB := Pool[k];
-      Band := BandIndexOfY(PB.Y);
-      if Band < 0 then
-        Continue;
-      RowY0 := BandLogicRowY(Band);
-      RowY1 := RowY0 + RowH; // logic-row cell region
-      ClkY0 := BandClockRowY(Band);
-      ClkY1 := ClkY0 + RowH; // clock-row cell region
-      if (PB.Y >= RowY0) and (PB.Y < RowY1) then
-        RowKey := Band * 2 // logic row
-      else if (PB.Y >= ClkY0) and (PB.Y < ClkY1) then
-        RowKey := Band * 2 + 1 // clock row
-      else
-        RowKey := Band * 2; // between rows -> grow the space between layers
-      if RowInserted.ContainsKey(RowKey) then
-        Continue; // this row already got its insertion this pass
-      RowInserted.Add(RowKey, True);
-    end;
-    for RowKey in RowInserted.Keys do
-    begin
-      Band := RowKey div 2;
-      if RowKey mod 2 = 0 then
-      begin
-        // Logic row (or between rows): grow the band's middle bias row, the
-        // bias zone between the logic and clock cells.
-        if IncreaseBiasRowHeight(Band, 1, 1) then
-          AChanged := True
-        else
-          Break; // die is full; no further rows will fit this pass
-      end
-      else
-      begin
-        // Clock row: grow the bias row below the clock cells - the next band's
-        // top bias row, or the bottom-most bias row for the last band.
-        if Band + 1 < Length(FBiasRowH) then
-        begin
-          if IncreaseBiasRowHeight(Band + 1, 0, 1) then
-            AChanged := True
-          else
-            Break; // die is full
-        end
-        else if IncreaseTopBottomBiasRow(False, 1) then
-          AChanged := True
-        else
-          Break; // die is full
-      end;
-    end;
-  finally
-    RowInserted.Free;
-  end;
-end;
-
 // Increase the height of a band's TOP (Which=0) or MIDDLE (Which=1) bias row by
 // ByRows cells. Reports 'not enough space for the bias lines' and leaves the
 // layout unchanged if the die has no room for the taller row.
@@ -7336,32 +7290,1021 @@ begin
   RepaintRoutingPage;
 end;
 
-// Draws the routed traces with each trace's layer colour, as a polyline
-// through the block centres.
+// Total routed length of one trace, in um: the sum of Manhattan distances
+// between consecutive grid blocks, scaled by the core block size. Consecutive
+// points are adjacent (or a via hop), so this is the wire's real length.
+function TForm1.TraceLengthUm(const ATr: TRoutedTrace; Core: Double): Double;
+var
+  k: Integer;
+begin
+  Result := 0;
+  for k := 0 to High(ATr.Points) - 1 do
+    Result := Result + (Abs(ATr.Points[k + 1].X - ATr.Points[k].X) +
+      Abs(ATr.Points[k + 1].Y - ATr.Points[k].Y)) * Core;
+end;
+
+// A bias trace is a constant-voltage distribution line (net name 'bias_*'), not
+// a PTL: it has no timing or propagation constraints, so it is excluded from
+// the PTL validation (length limit, weighted scale, dashing).
+function TForm1.IsBiasTrace(const ATr: TRoutedTrace): Boolean;
+begin
+  Result := StartsText('bias_', ATr.NetName);
+end;
+
+// Total length of a raw grid-block polyline, in um (used while re-routing).
+function TForm1.PathLengthUm(const Pts: TArray<TPoint>; Core: Double): Double;
+var
+  k: Integer;
+begin
+  Result := 0;
+  for k := 0 to High(Pts) - 1 do
+    Result := Result + (Abs(Pts[k + 1].X - Pts[k].X) +
+      Abs(Pts[k + 1].Y - Pts[k].Y)) * Core;
+end;
+
+// Marks one trace's cells as obstacles on their layers (like RunRouting's
+// BlockPath, but reusable). Layers holds layer NAMES.
+procedure TForm1.BlockTrace(ATraceIdx: Integer);
+var
+  ii, L: Integer;
+  Pt: TPoint;
+begin
+  for ii := 0 to High(FRouteTraces[ATraceIdx].Points) do
+  begin
+    Pt := FRouteTraces[ATraceIdx].Points[ii];
+    if (Pt.X < 0) or (Pt.X >= FRouteObstaclesW) or
+       (Pt.Y < 0) or (Pt.Y >= FRouteObstaclesH) then
+      Continue;
+    if ii <= High(FRouteTraces[ATraceIdx].Layers) then
+    begin
+      L := FRoutingLayers.IndexOf(FRouteTraces[ATraceIdx].Layers[ii]);
+      if (L >= 0) and (L <= High(FRouteObstacles)) then
+        FRouteObstacles[L][Pt.Y * FRouteObstaclesW + Pt.X] := True;
+    end;
+  end;
+end;
+
+// Removes one trace's cells from the obstacle maps (the inverse of BlockTrace),
+// freeing the space so a re-route can use it.
+procedure TForm1.UnblockTrace(ATraceIdx: Integer);
+var
+  ii, L: Integer;
+  Pt: TPoint;
+begin
+  for ii := 0 to High(FRouteTraces[ATraceIdx].Points) do
+  begin
+    Pt := FRouteTraces[ATraceIdx].Points[ii];
+    if (Pt.X < 0) or (Pt.X >= FRouteObstaclesW) or
+       (Pt.Y < 0) or (Pt.Y >= FRouteObstaclesH) then
+      Continue;
+    if ii <= High(FRouteTraces[ATraceIdx].Layers) then
+    begin
+      L := FRoutingLayers.IndexOf(FRouteTraces[ATraceIdx].Layers[ii]);
+      if (L >= 0) and (L <= High(FRouteObstacles)) then
+        FRouteObstacles[L][Pt.Y * FRouteObstaclesW + Pt.X] := False;
+    end;
+  end;
+end;
+
+// Rips up one trace and re-routes it between the same endpoints through the
+// usual passes (layer 0, layer 1, ..., then vias), keeping the shortest route
+// found. Returns True if that route is under the PTL length limit; otherwise
+// the (shorter) route is still applied and False is returned so the caller
+// proceeds to buffer insertion. If nothing routes at all, the original trace
+// and its blocking are restored.
+function TForm1.RerouteTrace(ATraceIdx: Integer): Boolean;
+var
+  Core, Limit, Len, BestLen: Double;
+  Start, Goal: TPoint;
+  L, i: Integer;
+  Path, BestPath: TArray<TPoint>;
+  Layers, BestLayers: TArray<Integer>;
+  FoundAny: Boolean;
+begin
+  Result := False;
+  if (ATraceIdx < 0) or (ATraceIdx > High(FRouteTraces)) then
+    Exit;
+  if Length(FRouteTraces[ATraceIdx].Points) < 2 then
+    Exit;
+  if not (TryDimParse(EditCoreSize.Text, Core) and (Core > 0)) then
+    Core := FPlanCore;
+  if not (TryDimParse(EditPTLLength.Text, Limit) and (Limit > 0)) then
+    Exit;
+  Start := FRouteTraces[ATraceIdx].Points[0];
+  Goal := FRouteTraces[ATraceIdx].Points[High(FRouteTraces[ATraceIdx].Points)];
+  UnblockTrace(ATraceIdx); // free the current wire's space for the search
+  FoundAny := False;
+  BestLen := MaxDouble;
+  BestPath := nil;
+  BestLayers := nil;
+  for L := 0 to High(FRouteLayers) do
+    if LeeRoute(Start, Goal, L, Path, Layers) then
+    begin
+      FoundAny := True;
+      Len := PathLengthUm(Path, Core);
+      if Len < BestLen then
+      begin
+        BestLen := Len;
+        BestPath := Path;
+        BestLayers := Layers;
+      end;
+    end;
+  if LeeRoute(Start, Goal, -1, Path, Layers) then
+  begin
+    FoundAny := True;
+    Len := PathLengthUm(Path, Core);
+    if Len < BestLen then
+    begin
+      BestLen := Len;
+      BestPath := Path;
+      BestLayers := Layers;
+    end;
+  end;
+  if FoundAny then
+  begin
+    FRouteTraces[ATraceIdx].Points := BestPath;
+    SetLength(FRouteTraces[ATraceIdx].Layers, Length(BestLayers));
+    for i := 0 to High(BestLayers) do
+      FRouteTraces[ATraceIdx].Layers[i] := FRouteLayers[BestLayers[i]];
+    BlockTrace(ATraceIdx);
+    Result := BestLen <= Limit;
+  end
+  else
+    BlockTrace(ATraceIdx); // nothing routed: put the original wire back
+end;
+
+// The buffer type to use for length-breaking: the user's buffer list, choosing
+// the cell with the smallest propagation delay.
+function TForm1.FindMinDelayBufferCell: TCell;
+var
+  i: Integer;
+  Cell, Best, First: TCell;
+  Delay, BestDelay: Double;
+begin
+  Result := nil;
+  Best := nil;
+  First := nil;
+  BestDelay := MaxDouble;
+  if FLib = nil then
+    Exit;
+  for i := 0 to FBufferNames.Count - 1 do
+  begin
+    Cell := FLib.FindCell(FBufferNames[i]);
+    if Cell = nil then
+      Continue;
+    if First = nil then
+      First := Cell;
+    Delay := CellDelayPs(Cell);
+    if (Delay >= 0) and (Delay < BestDelay) then
+    begin
+      BestDelay := Delay;
+      Best := Cell;
+    end;
+  end;
+  if Best = nil then
+    Best := First;
+  Result := Best;
+end;
+
+// Re-applies every validation buffer's chosen slot after a floorplan rebuild
+// wiped the placement. Signal buffers (logic cells) go back into
+// FPlacedComponents/FGatePlacement; clock-link buffers are located in
+// FClockSubtree (where BuildClockSubtreePlacements placed them) and moved to
+// their slot. The row Y is recomputed for the current band geometry; X is
+// clamped to the current row span.
+procedure TForm1.ReapplyValidationBuffers;
+var
+  i, i2, W, H, Y, X: Integer;
+  VB: TValidationBuffer;
+  P: TPlacedComponent;
+  L, ci: Integer;
+  Found: Boolean;
+begin
+  if Length(FPlanBandStarts) = 0 then
+    Exit;
+  for i := 0 to High(FValidationBuffers) do
+  begin
+    VB := FValidationBuffers[i];
+    if (VB.Gate = nil) or (VB.Gate.Cell = nil) then
+      Continue;
+    W := Round(VB.Gate.Cell.Width / FPlanCore);
+    if W < 1 then
+      W := 1;
+    H := Round(VB.Gate.Cell.Height / FPlanCore);
+    if H < 1 then
+      H := 1;
+    if VB.RowType = 0 then
+      Y := BandLogicRowY(VB.Band) + ((FPlanRowHBlocks - H) div 2)
+    else if VB.RowType = 1 then
+      Y := BandClockRowY(VB.Band) + ((FPlanRowHBlocks - H) div 2)
+    else
+      Y := VB.Y;
+    X := VB.X;
+    if VB.RowType = 2 then
+    begin
+      // Clock trunk column: recompute the current trunk position and clamp X/Y
+      // to the trunk's column / the full stack.
+      if X < FPlanXRight + FPlanLane0W then
+        X := FPlanXRight + FPlanLane0W;
+      if X + W > FPlanXRight + FPlanLane0W + FPlanRowHBlocks then
+        X := FPlanXRight + FPlanLane0W + FPlanRowHBlocks - W;
+      if Length(FPlanBandStarts) > 0 then
+      begin
+        if Y < FPlanBandStarts[0] then
+          Y := FPlanBandStarts[0];
+        if Y + H > FPlanBandStarts[High(FPlanBandStarts)] +
+           FPlanBandHeight[High(FPlanBandStarts)] + FBottomBiasH then
+          Y := FPlanBandStarts[High(FPlanBandStarts)] +
+            FPlanBandHeight[High(FPlanBandStarts)] + FBottomBiasH - H;
+      end;
+    end
+    else
+    begin
+      if X < FPlanXLeft then
+        X := FPlanXLeft;
+      if X + W > FPlanXRight then
+        X := FPlanXRight - W;
+      if X < FPlanXLeft then
+        X := FPlanXLeft;
+    end;
+    VB.X := X;
+    VB.Y := Y;
+    FValidationBuffers[i] := VB;
+
+    if VB.IsClock then
+    begin
+      Found := False;
+      for L := 0 to High(FClockSubtree) do
+        for ci := 0 to High(FClockSubtree[L]) do
+          if FClockSubtree[L][ci].Gate = VB.Gate then
+          begin
+            FClockSubtree[L][ci].X := X;
+            FClockSubtree[L][ci].Y := Y;
+            Found := True;
+            Break;
+          end;
+      if Found then
+        FGatePlacement.AddOrSetValue(VB.Gate, TPoint.Create(X, Y));
+    end
+    else
+    begin
+      Found := False;
+      for i2 := 0 to High(FPlacedComponents) do
+        if FPlacedComponents[i2].Gate = VB.Gate then
+        begin
+          FPlacedComponents[i2].X := X;
+          FPlacedComponents[i2].Y := Y;
+          Found := True;
+          Break;
+        end;
+      if not Found then
+      begin
+        P.Gate := VB.Gate;
+        P.InstanceName := Format('%s_vb', [VB.Gate.CellName]);
+        P.CellName := VB.Gate.CellName;
+        P.ClockLevel := -1;
+        P.X := X;
+        P.Y := Y;
+        P.W := W;
+        P.H := H;
+        SetLength(FPlacedComponents, Length(FPlacedComponents) + 1);
+        FPlacedComponents[High(FPlacedComponents)] := P;
+      end;
+      FGatePlacement.AddOrSetValue(VB.Gate, TPoint.Create(X, Y));
+    end;
+  end;
+end;
+
+// Re-runs the bias expansion (rows/lanes grown for the current port set) and
+// the routing after a buffer insertion. Re-applies the validation buffers in
+// the new geometry first. RunRouting clears the memo, so the validation log is
+// preserved and the routing's own report is appended to it.
+procedure TForm1.RunBiasExpansionAndRouting;
+var
+  Saved, Report: TStringList;
+begin
+  ButtonExpandBiasClick(nil);
+  ReapplyValidationBuffers;
+  Saved := TStringList.Create;
+  Report := TStringList.Create;
+  try
+    Saved.Assign(MemoRouting.Lines);
+    RunRouting;
+    Report.Assign(MemoRouting.Lines);
+    MemoRouting.Lines.Assign(Saved);
+    MemoRouting.Lines.AddStrings(Report);
+  finally
+    Saved.Free;
+    Report.Free;
+  end;
+  // Bias lines after the main routing (RunRouting clears FRouteTraces, so the
+  // bias traces must be appended afterwards, as in ButtonRunRoutingClick).
+  RouteBiasLines;
+end;
+
+// Attempts to insert a minimum-delay buffer that splits NetName (whose load is
+// Load at LoadPin) so the two new PTLs are each under the length limit. The
+// buffer is added to the placement (or clock) model's netlist, placed at the
+// given slot, and the bias expansion + routing are re-run. If the circuit fails
+// to route with the buffer there, the netlist is reverted and False returned so
+// the caller can mark the slot unusable and try another.
+function TForm1.TryInsertBuffer(IsClock: Boolean; const NetName: string;
+  Driver, Load: TGateInstance; const DriverPin, LoadPin: string;
+  APadLoad: Boolean;
+  BufCell: TCell; const InPin, OutPin: string;
+  ABand, ARowType, AX, AY: Integer): Boolean;
+var
+  Model: TBlifModel;
+  Net: TNet;
+  OrigConn: TList<TNetConnection>;
+  NewNetName: string;
+  NewNet: TNet;
+  NC: TNetConnection;
+  BufGate: TGateInstance;
+  Conn: TPinConnection;
+  VB: TValidationBuffer;
+  InPort, OutPort: TPort;
+  InNetName, OutNetName: string;
+begin
+  Result := False;
+  if IsClock then
+  begin
+    Model := FClockBufferedModel;
+    if Model = nil then
+      Model := FClockModel;
+  end
+  else
+    Model := FPlacementModel;
+  if (Model = nil) or (BufCell = nil) then
+    Exit;
+  // A pad-terminated (output) net has no gate load; only normal nets need one.
+  if (not APadLoad) and (Load = nil) then
+    Exit;
+  if not Model.Nets.TryGetValue(NetName, Net) then
+    Exit;
+  OrigConn := TList<TNetConnection>.Create;
+  try
+    OrigConn.AddRange(Net.Connections);
+
+    // Build the buffer gate and split the net around it (see the pad/normal
+    // branches below for which side keeps the original net name).
+    BufGate := TGateInstance.Create;
+    BufGate.CellName := BufCell.Name;
+    BufGate.Cell := BufCell;
+    BufGate.ClockLevel := -1;
+    InPort := BufCell.FindPort(InPin);
+    OutPort := BufCell.FindPort(OutPin);
+    // A net name unique in the model (buffers from earlier validation runs may
+    // already occupy some suffixes).
+    repeat
+      NewNetName := Format('%s__vbuf_%d', [NetName, FValidationBufIdx]);
+      Inc(FValidationBufIdx);
+    until not Model.Nets.ContainsKey(NewNetName);
+
+    // The buffer's input/output net names depend on which side keeps the
+    // original net: for a normal net the input joins the original net and the
+    // output drives a fresh net; for an output net (pad load) the pad is keyed
+    // to the original net NAME, so the output stays on it and the driver side
+    // moves to the fresh net.
+    if APadLoad then
+    begin
+      InNetName := NewNetName;
+      OutNetName := NetName;
+    end
+    else
+    begin
+      InNetName := NetName;
+      OutNetName := NewNetName;
+    end;
+
+    Net.Connections.Clear;
+    if APadLoad then
+    begin
+      // Output net: the buffer's OUTPUT drives the original (pad) net; the
+      // original driver gate moves onto the fresh net with the buffer's input.
+      for NC in OrigConn do
+        if not ((NC.Gate = Driver) and (NC.PinName = DriverPin)) then
+          Net.Connections.Add(NC);
+      NC.Gate := BufGate;
+      NC.PinName := OutPin;
+      NC.IsDriver := True;
+      Net.Connections.Add(NC);
+      NewNet := Model.FindOrCreateNet(NewNetName);
+      NC.Gate := Driver;
+      NC.PinName := DriverPin;
+      NC.IsDriver := True;
+      NewNet.Connections.Add(NC);
+      NC.Gate := BufGate;
+      NC.PinName := InPin;
+      NC.IsDriver := False;
+      NewNet.Connections.Add(NC);
+    end
+    else
+    begin
+      // Normal net: the buffer's input joins the original net, its output
+      // drives a fresh net to the original load.
+      for NC in OrigConn do
+        if not ((NC.Gate = Load) and (NC.PinName = LoadPin)) then
+          Net.Connections.Add(NC);
+      NC.Gate := BufGate;
+      NC.PinName := InPin;
+      NC.IsDriver := False;
+      Net.Connections.Add(NC);
+      NewNet := Model.FindOrCreateNet(NewNetName);
+      NC.Gate := BufGate;
+      NC.PinName := OutPin;
+      NC.IsDriver := True;
+      NewNet.Connections.Add(NC);
+      NC.Gate := Load;
+      NC.PinName := LoadPin;
+      NC.IsDriver := False;
+      NewNet.Connections.Add(NC);
+    end;
+
+    Conn := TPinConnection.Create;
+    Conn.PinName := InPin;
+    Conn.NetName := InNetName;
+    Conn.Port := InPort;
+    BufGate.Connections.Add(Conn);
+    Conn := TPinConnection.Create;
+    Conn.PinName := OutPin;
+    Conn.NetName := OutNetName;
+    Conn.Port := OutPort;
+    BufGate.Connections.Add(Conn);
+    Model.Gates.Add(BufGate);
+
+    // Record the slot so ReapplyValidationBuffers keeps it across rebuilds.
+    VB.Gate := BufGate;
+    VB.NetName := NetName;
+    VB.IsClock := IsClock;
+    VB.Band := ABand;
+    VB.RowType := ARowType;
+    VB.X := AX;
+    VB.Y := AY;
+    SetLength(FValidationBuffers, Length(FValidationBuffers) + 1);
+    FValidationBuffers[High(FValidationBuffers)] := VB;
+
+    RunBiasExpansionAndRouting;
+    if FRoutingSucceeded then
+    begin
+      MemoRouting.Lines.Add(Format(
+        '  buffer %s inserted on %s (band %d, row %d, x %d, y %d).',
+        [BufCell.Name, NetName, ABand, ARowType, AX, AY]));
+      Result := True;
+      Exit;
+    end;
+
+    // The circuit no longer routes with the buffer there: revert the netlist.
+    Model.Gates.Remove(BufGate);
+    BufGate.Free;
+    Model.Nets.Remove(NewNetName);
+    Net.Connections.Clear;
+    Net.Connections.AddRange(OrigConn);
+    SetLength(FValidationBuffers, Length(FValidationBuffers) - 1);
+    RunBiasExpansionAndRouting; // restore the clean derived state
+  finally
+    OrigConn.Free;
+  end;
+end;
+
+// Inserts a buffer to break up the over-limit trace at ATraceIdx. Resolves the
+// trace's net/driver/load (signal net in the placement model, or clock link in
+// the clock model), searches every free logic/clock-row/trunk slot, and tries
+// the slots in score order. Returns True if a buffer was successfully placed
+// and the circuit re-routed; False if no usable location exists.
+function TForm1.InsertBufferForTrace(ATraceIdx: Integer): Boolean;
+const
+  MaxReachLeeway = 0.1; // max-reach packing target = Limit * (1 - leeway)
+type
+  TCand = record
+    Band, RowType, X, Y: Integer;
+    Score: Double;
+  end;
+var
+  Core, Limit, R1u, R2u, MaxR, MinR, Score, CurLen, Cap: Double;
+  UseBalanced: Boolean;
+  NetName: string;
+  IsClock: Boolean;
+  TreeModel: TBlifModel;
+  Net: TNet;
+  NC: TNetConnection;
+  Driver, Load: TGateInstance;
+  DriverPin, LoadPin: string;
+  IsPadLoad: Boolean;
+  BufCell: TCell;
+  InPort, OutPort: TPort;
+  InPin, OutPin: string;
+  Src, Dst, Pt: TPoint;
+  ClkPos: TDictionary<TGateInstance, TPoint>;
+  ClkRot: TDictionary<TGateInstance, Boolean>;
+  Sp: TSpineComponent;
+  Node: TPlacedClockNode;
+  L, ci, k: Integer;
+  NumBands, Band, RowType, X, Y, W, H, Bx, By: Integer;
+  TrunkX0, StackTop, StackBottom: Integer;
+  Cands: TArray<TCand>;
+  C, TmpC: TCand;
+  a, b: Integer;
+  Key: string;
+  Overlap: Boolean;
+  i2: Integer;
+
+  function RectOverlap(X1, Y1, W1, H1, X2, Y2, W2, H2: Integer): Boolean;
+  begin
+    Result := (X1 < X2 + W2) and (X2 < X1 + W1) and
+              (Y1 < Y2 + H2) and (Y2 < Y1 + H1);
+  end;
+
+  // Evaluates one slot (X, Y) for the current (Band, RowType): rejects it if it
+  // overlaps a placed cell (pure floorplan geometry - routed wires are ignored,
+  // everything is re-routed after insertion) or sits on an endpoint pin, else
+  // records it with a residual-reach score.
+  procedure Consider(X, Y: Integer);
+  var
+    i2, L, ci, k: Integer;
+  begin
+    Bx := X + W div 2;
+    By := Y + H div 2;
+    R1u := (Abs(Src.X - Bx) + Abs(Src.Y - By)) * Core;
+    R2u := (Abs(Bx - Dst.X) + Abs(By - Dst.Y)) * Core;
+    if R1u > R2u then
+    begin
+      MaxR := R1u;
+      MinR := R2u;
+    end
+    else
+    begin
+      MaxR := R2u;
+      MinR := R1u;
+    end;
+    if MinR <= 0 then
+      Exit;
+    // Dual-mode scoring: for a wire that only needs one more buffer, minimise
+    // the LONGER residual (balanced split - short segments, little detour,
+    // shorter total). For a long wire needing several buffers, pack to the
+    // max-reach target (buffer ~Cap from the nearer end) so each covers as much
+    // wire as possible and the count stays near-optimal.
+    if UseBalanced then
+      Score := -(MaxR * 10.0 + (R1u + R2u))
+    else
+      Score := Cap - Abs(MinR - Cap);
+    Key := Format('%d:%d:%d:%d', [Band, RowType, X, Y]);
+    if FValidationBlocked.IndexOf(Key) >= 0 then
+      Exit;
+    Overlap := False;
+    for i2 := 0 to High(FPlacedComponents) do
+      if RectOverlap(X, Y, W, H, FPlacedComponents[i2].X,
+        FPlacedComponents[i2].Y, FPlacedComponents[i2].W,
+        FPlacedComponents[i2].H) then
+      begin
+        Overlap := True;
+        Break;
+      end;
+    if not Overlap then
+      for L := 0 to High(FClockSubtree) do
+        for ci := 0 to High(FClockSubtree[L]) do
+          if (not FClockSubtree[L][ci].IsLeaf) and
+             RectOverlap(X, Y, W, H, FClockSubtree[L][ci].X,
+               FClockSubtree[L][ci].Y, FClockSubtree[L][ci].W,
+               FClockSubtree[L][ci].H) then
+          begin
+            Overlap := True;
+            Break;
+          end;
+    if not Overlap then
+      for k := 0 to High(FSpine) do
+        if RectOverlap(X, Y, W, H, FSpine[k].X, FSpine[k].Y,
+          FSpine[k].W, FSpine[k].H) then
+        begin
+          Overlap := True;
+          Break;
+        end;
+    if Overlap then
+      Exit;
+    SetLength(Cands, Length(Cands) + 1);
+    Cands[High(Cands)].Band := Band;
+    Cands[High(Cands)].RowType := RowType;
+    Cands[High(Cands)].X := X;
+    Cands[High(Cands)].Y := Y;
+    Cands[High(Cands)].Score := Score;
+  end;
+
+begin
+  Result := False;
+  if (ATraceIdx < 0) or (ATraceIdx > High(FRouteTraces)) then
+    Exit;
+  if Length(FRouteTraces[ATraceIdx].Points) < 2 then
+    Exit;
+  if not (TryDimParse(EditCoreSize.Text, Core) and (Core > 0)) then
+    Core := FPlanCore;
+  if not (TryDimParse(EditPTLLength.Text, Limit) and (Limit > 0)) then
+    Exit;
+
+  // Dual-mode placement. If the current wire needs only ONE more buffer to be
+  // under the limit (length <= 2*Limit), split it evenly - short segments, good
+  // margin, short total wire. If it needs several, pack the segments to the
+  // max-reach target so the buffer count stays near the optimum (over-inserting
+  // buffers is costly for clock performance).
+  CurLen := TraceLengthUm(FRouteTraces[ATraceIdx], Core);
+  UseBalanced := CurLen <= 2 * Limit;
+  Cap := Limit * (1 - MaxReachLeeway);
+
+  BufCell := FindMinDelayBufferCell;
+  if BufCell = nil then
+  begin
+    MemoRouting.Lines.Add('  no usable buffer cell in the library.');
+    Exit;
+  end;
+  InPort := nil;
+  OutPort := nil;
+  for k := 0 to BufCell.Ports.Count - 1 do
+    if BufCell.Ports[k].Direction = pdOutput then
+      OutPort := BufCell.Ports[k]
+    else if BufCell.Ports[k].Direction = pdInput then
+      InPort := BufCell.Ports[k];
+  if (InPort = nil) or (OutPort = nil) then
+  begin
+    MemoRouting.Lines.Add(Format('  buffer %s has no single input/output pin.',
+      [BufCell.Name]));
+    Exit;
+  end;
+  InPin := InPort.Name;
+  OutPin := OutPort.Name;
+
+  NetName := FRouteTraces[ATraceIdx].NetName;
+  IsClock := StartsText('clk', NetName) or (Pos('__clkbuf_', NetName) > 0);
+  Src := FRouteTraces[ATraceIdx].Points[0];
+  Dst := FRouteTraces[ATraceIdx].Points[High(FRouteTraces[ATraceIdx].Points)];
+  Driver := nil;
+  Load := nil;
+  DriverPin := '';
+  LoadPin := '';
+  IsPadLoad := False;
+
+  if IsClock then
+  begin
+    TreeModel := FClockBufferedModel;
+    if TreeModel = nil then
+      TreeModel := FClockModel;
+    if TreeModel = nil then
+      Exit;
+    if not TreeModel.Nets.TryGetValue(NetName, Net) then
+      Exit;
+    ClkPos := TDictionary<TGateInstance, TPoint>.Create;
+    ClkRot := TDictionary<TGateInstance, Boolean>.Create;
+    try
+      for k := 0 to High(FSpine) do
+      begin
+        Sp := FSpine[k];
+        if Sp.Gate <> nil then
+        begin
+          ClkPos.AddOrSetValue(Sp.Gate, TPoint.Create(Sp.X, Sp.Y));
+          ClkRot.AddOrSetValue(Sp.Gate, Sp.Rotated);
+        end;
+      end;
+      for L := 0 to High(FClockSubtree) do
+        for ci := 0 to High(FClockSubtree[L]) do
+        begin
+          Node := FClockSubtree[L][ci];
+          if Node.Gate <> nil then
+          begin
+            ClkPos.AddOrSetValue(Node.Gate, TPoint.Create(Node.X, Node.Y));
+            ClkRot.AddOrSetValue(Node.Gate, False);
+          end;
+        end;
+      for NC in Net.Connections do
+      begin
+        if NC.IsDriver then
+          Continue;
+        if not ClkPos.ContainsKey(NC.Gate) then
+          Continue;
+        if GatePinBlockAt(NC.Gate, NC.PinName, 0,
+          ClkPos[NC.Gate].X, ClkPos[NC.Gate].Y, ClkRot[NC.Gate], Pt) and
+           (Pt.X = Dst.X) and (Pt.Y = Dst.Y) then
+        begin
+          Load := NC.Gate;
+          LoadPin := NC.PinName;
+          Break;
+        end;
+      end;
+    finally
+      ClkPos.Free;
+      ClkRot.Free;
+    end;
+  end
+  else
+  begin
+    if (FPlacementModel = nil) or
+       (not FPlacementModel.Nets.TryGetValue(NetName, Net)) then
+      Exit;
+    for NC in Net.Connections do
+      if NC.IsDriver and FGatePlacement.ContainsKey(NC.Gate) then
+      begin
+        Driver := NC.Gate;
+        DriverPin := NC.PinName;
+        Break;
+      end;
+    for NC in Net.Connections do
+    begin
+      if NC.IsDriver then
+        Continue;
+      if not FGatePlacement.ContainsKey(NC.Gate) then
+        Continue;
+      if GatePinBlock(NC.Gate, NC.PinName, 0, Pt) and
+         (Pt.X = Dst.X) and (Pt.Y = Dst.Y) then
+      begin
+        Load := NC.Gate;
+        LoadPin := NC.PinName;
+        Break;
+      end;
+    end;
+  end;
+  if Load = nil then
+  begin
+    // A primary output net has no gate load: its load is the output pad, which
+    // RunRouting reaches via GetPad(NetName). Support it by keeping the original
+    // net name on the buffer->pad side (so the pad stays keyed to it) and moving
+    // the driver gate onto a fresh net with the buffer's input.
+    if (not IsClock) and FPadMap.ContainsKey(NetName) and (Driver <> nil) then
+      IsPadLoad := True
+    else
+    begin
+      MemoRouting.Lines.Add(Format('  cannot resolve %s load pin.', [NetName]));
+      Exit;
+    end;
+  end;
+
+  // Buffer footprint in grid cells.
+  W := Round(BufCell.Width / Core);
+  if W < 1 then
+    W := 1;
+  H := Round(BufCell.Height / Core);
+  if H < 1 then
+    H := 1;
+
+  // Enumerate every free slot and score it by residual reach: logic rows,
+  // clock rows, and the clock trunk column (the only region that may still have
+  // space when the rows are packed). Routed wires are deliberately ignored -
+  // the check is pure floorplan geometry, since everything is re-routed.
+  NumBands := Length(FPlanBandStarts);
+  TrunkX0 := FPlanXRight + FPlanLane0W;
+  StackTop := 0;
+  StackBottom := 0;
+  if NumBands > 0 then
+  begin
+    StackTop := FPlanBandStarts[0];
+    StackBottom := FPlanBandStarts[NumBands - 1] +
+      FPlanBandHeight[NumBands - 1] + FBottomBiasH;
+  end;
+  SetLength(Cands, 0);
+  for Band := 0 to NumBands - 1 do
+  begin
+    // Logic rows.
+    if H <= FPlanRowHBlocks then
+    begin
+      RowType := 0;
+      for X := FPlanXLeft to FPlanXRight - W do
+        Consider(X, BandLogicRowY(Band) + ((FPlanRowHBlocks - H) div 2));
+    end;
+    // Clock rows.
+    if H <= FPlanRowHBlocks then
+    begin
+      RowType := 1;
+      for X := FPlanXLeft to FPlanXRight - W do
+        Consider(X, BandClockRowY(Band) + ((FPlanRowHBlocks - H) div 2));
+    end;
+  end;
+  // Clock trunk column: the trunk cells are rotated and centred in a column of
+  // width FPlanRowHBlocks, so free space remains beside them; the buffer's
+  // width (unrotated) must fit the column and its height the stack.
+  if (W <= FPlanRowHBlocks) and (H <= StackBottom - StackTop) then
+  begin
+    Band := -1;
+    RowType := 2;
+    for X := TrunkX0 to TrunkX0 + FPlanRowHBlocks - W do
+      for Y := StackTop to StackBottom - H do
+        Consider(X, Y);
+  end;
+
+  if Length(Cands) = 0 then
+  begin
+    MemoRouting.Lines.Add(Format(
+      '  no free buffer slot satisfies the length split for %s.', [NetName]));
+    Exit;
+  end;
+
+  // Sort by score descending (best split per the current mode: balanced for
+  // short wires, max-reach packing for long ones).
+  for a := 1 to High(Cands) do
+  begin
+    TmpC := Cands[a];
+    b := a - 1;
+    while (b >= 0) and (Cands[b].Score < TmpC.Score) do
+    begin
+      Cands[b + 1] := Cands[b];
+      Dec(b);
+    end;
+    Cands[b + 1] := TmpC;
+  end;
+
+  for a := 0 to High(Cands) do
+  begin
+    C := Cands[a];
+    if TryInsertBuffer(IsClock, NetName, Driver, Load, DriverPin, LoadPin,
+      IsPadLoad, BufCell, InPin, OutPin, C.Band, C.RowType, C.X, C.Y) then
+    begin
+      Result := True;
+      Exit;
+    end;
+    FValidationBlocked.Add(Format('%d:%d:%d:%d', [C.Band, C.RowType, C.X, C.Y]));
+  end;
+  MemoRouting.Lines.Add(Format(
+    '  every buffer slot for %s made the circuit unroutable.', [NetName]));
+end;
+
+// Routing validation loop: repeatedly find the longest PTL over the length
+// limit and fix it. A wire whose length is much longer than its endpoints'
+// Manhattan span is ripped up and re-routed (layer passes, then vias - same as
+// the routing stage); if that cannot get it under the limit, or the wire is
+// simply long (no detour), a minimum-delay buffer is inserted to break the run
+// into two shorter PTLs. Buffers are inserted into the layout AND the netlist,
+// then the bias expansion and routing are re-run; a location that makes the
+// circuit unroutable is marked unusable and the next candidate tried. The loop
+// ends when every PTL is within the limit, or fails when no buffer location is
+// available (the rows do not span the die, so a slot may simply not exist).
+procedure TForm1.RunRoutingValidation;
+var
+  Core, Limit, Len, Man, BestLen: Double;
+  i, BestIdx: Integer;
+  Pt0, Pt1: TPoint;
+begin
+  if Length(FRouteTraces) = 0 then
+  begin
+    MemoRouting.Lines.Add('No routed traces to validate.');
+    FRoutingValidated := True;
+    Exit;
+  end;
+  if not (TryDimParse(EditCoreSize.Text, Core) and (Core > 0)) then
+    Core := FPlanCore;
+  if not (TryDimParse(EditPTLLength.Text, Limit) and (Limit > 0)) then
+  begin
+    MemoRouting.Lines.Add('Set a PTL length limit before validating.');
+    FRoutingValidated := True;
+    Exit;
+  end;
+  // A fresh validation session: the buffers inserted on a previous run stay in
+  // the netlist (they are now part of the circuit) but are re-applied fresh.
+  FValidationBuffers := nil;
+  FValidationBlocked.Clear;
+  MemoRouting.Lines.Add('--- Routing validation ---');
+  MemoRouting.Lines.Add(Format('PTL length limit: %s um', [EditPTLLength.Text]));
+
+  repeat
+    // The longest over-limit PTL is fixed first (most impactful).
+    BestIdx := -1;
+    BestLen := 0;
+    for i := 0 to High(FRouteTraces) do
+    begin
+      if IsBiasTrace(FRouteTraces[i]) then
+        Continue;
+      Len := TraceLengthUm(FRouteTraces[i], Core);
+      if (Len > Limit) and (Len > BestLen) then
+      begin
+        BestLen := Len;
+        BestIdx := i;
+      end;
+    end;
+    if BestIdx < 0 then
+      Break; // every PTL is within the limit
+
+    Pt0 := FRouteTraces[BestIdx].Points[0];
+    Pt1 := FRouteTraces[BestIdx].Points[High(FRouteTraces[BestIdx].Points)];
+    Man := (Abs(Pt1.X - Pt0.X) + Abs(Pt1.Y - Pt0.Y)) * Core;
+    MemoRouting.Lines.Add(Format('  %s: %.2f um (Manhattan span %.2f um)',
+      [FRouteTraces[BestIdx].NetName, BestLen, Man]));
+
+    // The routed length exceeding the Manhattan span means the wire took a
+    // detour; rip it up and re-route through the usual passes (a straight line
+    // is always at least worth attempting - the router may find a shorter one).
+    if (Man > 0) and (BestLen > Man) then
+    begin
+      MemoRouting.Lines.Add('    detour: ripping up and re-routing...');
+      if RerouteTrace(BestIdx) then
+      begin
+        MemoRouting.Lines.Add('    re-routed under the limit.');
+        RepaintRoutingPage;
+        Continue; // re-scan; other over-limit wires are fixed next
+      end
+      else
+        MemoRouting.Lines.Add('    re-route did not reach the limit; inserting a buffer.');
+    end;
+
+    if not InsertBufferForTrace(BestIdx) then
+    begin
+      MemoRouting.Lines.Add(Format(
+        'VALIDATION FAILED: no usable buffer location on %s.',
+        [FRouteTraces[BestIdx].NetName]));
+      FRoutingValidated := True;
+      RepaintRoutingPage;
+      Exit;
+    end;
+    // InsertBufferForTrace re-ran the bias expansion + routing; re-scan.
+    RepaintRoutingPage;
+  until False;
+
+  MemoRouting.Lines.Add('All PTL lengths are within the limit.');
+  FRoutingValidated := True;
+  RepaintRoutingPage;
+end;
+
+// Draws the routed traces as a polyline through the block centres. With the
+// length-colour toggle off, each trace uses its layer's colour; with it on,
+// PTL wires are coloured on the blue-to-red spectrogram scale, capped at the
+// user-specified PTL length limit (falling back to the longest wire if no
+// limit is set), and dashed past the limit. Bias (constant-voltage) lines are
+// always drawn in their layer colour, solid, and never affect the scale.
 procedure TForm1.DrawRoutedTraces(Canvas: TCanvas);
+const
+  TraceThick = 2.0; // fixed trace width (visibility, not length, is encoded)
 var
   Core: Double;
+  Limit: Double;
+  ScaleCap: Double;
   i, k: Integer;
   Clr: TAlphaColor;
   X1, Y1, X2, Y2: Single;
+  Len, MaxLen, t: Double;
+  Found: Boolean;
 begin
   if Length(FRouteTraces) = 0 then
     Exit;
   if not (TryDimParse(EditCoreSize.Text, Core) and (Core > 0)) then
     Core := FPlanCore;
+  if not (TryDimParse(EditPTLLength.Text, Limit) and (Limit > 0)) then
+    Limit := 0;
   Canvas.Stroke.Kind := TBrushKind.Solid;
-  Canvas.Stroke.Thickness := 2;
+  Canvas.Stroke.Thickness := TraceThick;
+
+  // Fallback scale cap: the longest PTL trace (only used when no limit is set).
+  MaxLen := 0;
+  Found := False;
+  for i := 0 to High(FRouteTraces) do
+  begin
+    if IsBiasTrace(FRouteTraces[i]) then
+      Continue;
+    Found := True;
+    Len := TraceLengthUm(FRouteTraces[i], Core);
+    if Len > MaxLen then MaxLen := Len;
+  end;
+  if not Found then
+    MaxLen := 1;
+  if MaxLen <= 0 then
+    MaxLen := 1;
+  if Limit > 0 then
+    ScaleCap := Limit
+  else
+    ScaleCap := MaxLen;
+
   for i := 0 to High(FRouteTraces) do
   begin
     if Length(FRouteTraces[i].Layers) <= 1 then
       Continue;
-    // Draw each segment in its own layer's colour; via cells are the point
-    // where the layer changes (both colours join there).
+    if IsBiasTrace(FRouteTraces[i]) then
+    begin
+      // Constant-voltage lines: layer colour, always solid.
+      Canvas.Stroke.Dash := TStrokeDash.Solid;
+    end
+    else if FRouteLengthColor then
+    begin
+      Len := TraceLengthUm(FRouteTraces[i], Core);
+      // Spectrogram scale, capped at the PTL length limit (max colour).
+      t := Len / ScaleCap;
+      if t < 0 then t := 0;
+      if t > 1 then t := 1;
+      // Past the PTL length limit: draw dashed (length mode only).
+      if (Limit > 0) and (Len > Limit) then
+        Canvas.Stroke.Dash := TStrokeDash.Dash
+      else
+        Canvas.Stroke.Dash := TStrokeDash.Solid;
+    end
+    else
+      Canvas.Stroke.Dash := TStrokeDash.Solid;
+    // Draw each segment; via cells are the point where the layer changes
+    // (both colours join there).
     for k := 0 to High(FRouteTraces[i].Points) - 1 do
     begin
       if not RoutingLayerEnabled(FRouteTraces[i].Layers[k]) then
         Continue;
-      Clr := RoutingLayerColor(FRouteTraces[i].Layers[k]);
+      if IsBiasTrace(FRouteTraces[i]) or (not FRouteLengthColor) then
+        Clr := RoutingLayerColor(FRouteTraces[i].Layers[k])
+      else
+      begin
+        Len := TraceLengthUm(FRouteTraces[i], Core);
+        t := Len / ScaleCap;
+        if t < 0 then t := 0;
+        if t > 1 then t := 1;
+        Clr := LengthColor(t);
+      end;
       // Keep the trace opaque against the pale die body.
       Clr := (Clr and $FFFFFF) or $FF000000;
       Canvas.Stroke.Color := Clr;
@@ -7372,6 +8315,7 @@ begin
       Canvas.DrawLine(TPointF.Create(X1, Y1), TPointF.Create(X2, Y2), 1.0);
     end;
   end;
+  Canvas.Stroke.Dash := TStrokeDash.Solid;
 end;
 
 // Returns the grid block of a gate's pin on a specific routing layer (ALayer
@@ -7455,6 +8399,20 @@ begin
     // The cell nearest the shape centre, guaranteed inside the covered range.
     P.X := BX0 + ((BX1 - BX0) div 2);
     P.Y := BY0 + ((BY1 - BY0) div 2);
+    // Clamp into the die grid: cells sitting at the very edge (e.g. a spine
+    // buffer stacked to the trunk top, or an overflow buffer hugging the right
+    // die edge) can resolve a pin block one past the boundary, which would make
+    // the Lee router bail out on its bounds check.
+    if FRouteObstaclesW > 0 then
+    begin
+      if P.X < 0 then P.X := 0;
+      if P.X >= FRouteObstaclesW then P.X := FRouteObstaclesW - 1;
+    end;
+    if FRouteObstaclesH > 0 then
+    begin
+      if P.Y < 0 then P.Y := 0;
+      if P.Y >= FRouteObstaclesH then P.Y := FRouteObstaclesH - 1;
+    end;
     Result := True;
     Exit;
   end;
@@ -7476,108 +8434,140 @@ begin
     P.X := Trunc((AX * Core + CellW / 2) / Core);
     P.Y := Trunc((AY * Core + CellH / 2) / Core);
   end;
+  // Clamp into the die grid (see the shape path above).
+  if FRouteObstaclesW > 0 then
+  begin
+    if P.X < 0 then P.X := 0;
+    if P.X >= FRouteObstaclesW then P.X := FRouteObstaclesW - 1;
+  end;
+  if FRouteObstaclesH > 0 then
+  begin
+    if P.Y < 0 then P.Y := 0;
+    if P.Y >= FRouteObstaclesH then P.Y := FRouteObstaclesH - 1;
+  end;
   Result := True;
 end;
 
-// A* maze router between two grid blocks over all routing layers. Manhattan
-// distance is the primary cost; a bend adds a penalty and a via (layer switch)
-// adds a larger penalty, so the router prefers straight, via-less routes but
-// will use other layers when the way is blocked. Pin-geometry blocks are hard
-// obstacles (except the goal cell); present usage and history congestion add a
-// soft cost, so links can share a block temporarily and the outer negotiation
-// loop resolves contention. Returns the path (inclusive of start and goal) in
-// OutPath and each point's routing-layer index in OutLayers.
-function TForm1.AStarRoute(Start, Goal: TPoint;
+// A* maze router between two grid blocks. When UseLayer >= 0 the search is
+// confined to that single routing layer (no vias); when UseLayer < 0 it
+// searches over all routing layers, with a via allowed at every cell (a layer
+// switch on the same block). Pin-geometry blocks are hard obstacles; only the
+// goal cell is exempt so a wire can always reach its pin.
+// The heuristic is Manhattan distance to the goal (admissible: every step
+// costs at least 1). Moving straight costs 1 per block; turning costs an extra
+// TurnPenalty, so A* prefers straight runs over wiggly ones. A via costs
+// ViaPenalty.
+// The search is confined to a window around the two terminals (Start..Goal
+// plus a margin that grows with the Manhattan distance), so short nets only
+// touch a small part of the die. Ties in the open heap are broken toward the
+// goal (smaller h), and a hard expansion budget aborts hopeless searches.
+// Returns the path (inclusive of start and goal) in OutPath and each point's
+// routing-layer index in OutLayers.
+function TForm1.LeeRoute(Start, Goal: TPoint; UseLayer: Integer;
   var OutPath: TArray<TPoint>; var OutLayers: TArray<Integer>): Boolean;
 const
-  BendPenalty = 3;   // extra cost per bend (impedance discontinuity)
-  ViaPenalty = 8;    // extra cost per layer switch (via)
   DirDx: array[0..3] of Integer = (1, -1, 0, 0);
   DirDy: array[0..3] of Integer = (0, 0, 1, -1);
+  TurnPenalty = 3; // extra cost for a turn (vs. going straight)
+  ViaPenalty = 8;  // extra cost for a via (layer switch)
+  DirCount = 5;    // states per cell-layer: Dir+1 in 0..4 (0 = no direction)
+  MinMargin = 16;  // minimum window margin in blocks
+  MaxMargin = 128; // maximum window margin in blocks
+  MarginDiv = 3;   // margin = max(MinMargin, dist div MarginDiv)
 var
-  Open: TArray<TAStarNode>;
-  OpenCount: Integer;
-  GScore: TDictionary<Int64, Integer>;
-  CameFrom: TDictionary<Int64, Int64>;
-  Closed: TDictionary<Int64, Boolean>;
-  Key, FromKey, NextKey: Int64;
-  Node, Next: TAStarNode;
-  d, i, j, k: Integer;
-  NX, NY: Integer;
-  Bends: Integer;
-  W, H, NumLayers: Integer;
+  W, H, NumLayers, MaxLayer, TotalStates: Integer;
+  WinX0, WinY0, WinX1, WinY1, WinW, WinH: Integer;
+  Margin, Dist: Integer;
+  gScore: TArray<Integer>;
+  Parent: TArray<Integer>;
+  Closed: TArray<Boolean>;
+  Heap: TArray<Integer>;
+  HeapCount: Integer;
+  S, NS: Integer;
+  CurLayer, EffLayer, CurX, CurY: Integer;
+  CurDir, Nx, Ny, d, L, i: Integer;
+  NewG, TurnCost: Integer;
+  Expanded, ExpansionLimit: Integer;
+  lx, ly: Integer;
   Swp: TPoint;
   SwpLayer: Integer;
-  Expanded: Integer;
-  L: Integer;
-  CellKey: Int64;
-  Changed: Boolean;
 
-  function NodeKey(ANode: TAStarNode): Int64;
+  // State id over the WINDOW-local grid: ((ly*WinW+lx)*MaxLayer+Layer)*DirCount
+  // + (Dir+1), Dir in -1..3. lx = X - WinX0, ly = Y - WinY0.
+  function StateId(lx, ly, Layer, Dir: Integer): Integer;
   begin
-    // Dir in -1..3 => Dir+1 in 0..4 (5 states per cell), times NumLayers.
-    // Exact encode/decode: no carries regardless of the layer count.
-    Result := ((Int64(ANode.Y) * W + ANode.X) * NumLayers + ANode.Layer) * 5 +
-      (ANode.Dir + 1);
+    Result := (((ly * WinW + lx) * MaxLayer + Layer) * DirCount) + (Dir + 1);
   end;
 
-  function Heuristic(AX, AY: Integer): Integer;
-  begin
-    Result := Abs(AX - Goal.X) + Abs(AY - Goal.Y);
-  end;
-
-  procedure HeapPush(const ANode: TAStarNode);
+  // Manhattan distance from the state's cell to the goal (global coords).
+  function Heuristic(S: Integer): Integer;
   var
-    idx, parent: Integer;
-    Tmp: TAStarNode;
+    cell, hx, hy: Integer;
   begin
-    idx := OpenCount;
-    Inc(OpenCount);
-    if idx >= Length(Open) then
-      SetLength(Open, OpenCount + 64);
-    Open[idx] := ANode;
+    cell := (S div DirCount) div MaxLayer;
+    hy := cell div WinW;
+    hx := cell mod WinW;
+    Result := Abs((hx + WinX0) - Goal.X) + Abs((hy + WinY0) - Goal.Y);
+  end;
+
+  // A is preferred over B when its f (= g+h) is lower; on equal f the one
+  // closer to the goal (smaller h) is popped first, pushing the search toward
+  // the goal instead of flaring sideways.
+  function LessThan(A, B: Integer): Boolean;
+  var
+    fA, fB, hA, hB: Integer;
+  begin
+    fA := gScore[A] + Heuristic(A);
+    fB := gScore[B] + Heuristic(B);
+    hA := Heuristic(A);
+    hB := Heuristic(B);
+    Result := (fA < fB) or ((fA = fB) and (hA < hB));
+  end;
+
+  procedure HeapPush(S: Integer);
+  var
+    idx, par, Tmp: Integer;
+  begin
+    idx := HeapCount;
+    Inc(HeapCount);
+    if idx >= Length(Heap) then
+      SetLength(Heap, HeapCount + 64);
+    Heap[idx] := S;
     while idx > 0 do
     begin
-      parent := (idx - 1) div 2;
-      if (GScore[NodeKey(Open[idx])] + Heuristic(Open[idx].X, Open[idx].Y)) >=
-         (GScore[NodeKey(Open[parent])] + Heuristic(Open[parent].X, Open[parent].Y)) then
+      par := (idx - 1) div 2;
+      if not LessThan(S, Heap[par]) then
         Break;
-      Tmp := Open[idx];
-      Open[idx] := Open[parent];
-      Open[parent] := Tmp;
-      idx := parent;
+      Tmp := Heap[idx];
+      Heap[idx] := Heap[par];
+      Heap[par] := Tmp;
+      idx := par;
     end;
   end;
 
-  function HeapPop: TAStarNode;
+  function HeapPop: Integer;
   var
-    idx, child, other: Integer;
-    Tmp: TAStarNode;
-    FCur, FChild: Integer;
+    idx, child, other, Tmp: Integer;
   begin
-    Result := Open[0];
-    Dec(OpenCount);
-    if OpenCount > 0 then
+    Result := Heap[0];
+    Dec(HeapCount);
+    if HeapCount > 0 then
     begin
-      Open[0] := Open[OpenCount];
+      Heap[0] := Heap[HeapCount];
       idx := 0;
       while True do
       begin
         child := idx * 2 + 1;
-        if child >= OpenCount then
+        if child >= HeapCount then
           Break;
         other := child + 1;
-        FCur := GScore[NodeKey(Open[idx])] + Heuristic(Open[idx].X, Open[idx].Y);
-        FChild := GScore[NodeKey(Open[child])] + Heuristic(Open[child].X, Open[child].Y);
-        if (other < OpenCount) and
-           (GScore[NodeKey(Open[other])] + Heuristic(Open[other].X, Open[other].Y) < FChild) then
+        if (other < HeapCount) and LessThan(Heap[other], Heap[child]) then
           child := other;
-        FChild := GScore[NodeKey(Open[child])] + Heuristic(Open[child].X, Open[child].Y);
-        if FCur <= FChild then
+        if not LessThan(Heap[child], Heap[idx]) then
           Break;
-        Tmp := Open[idx];
-        Open[idx] := Open[child];
-        Open[child] := Tmp;
+        Tmp := Heap[idx];
+        Heap[idx] := Heap[child];
+        Heap[child] := Tmp;
         idx := child;
       end;
     end;
@@ -7593,187 +8583,201 @@ begin
   if (Start.X < 0) or (Start.X >= W) or (Start.Y < 0) or (Start.Y >= H) or
      (Goal.X < 0) or (Goal.X >= W) or (Goal.Y < 0) or (Goal.Y >= H) then
     Exit;
+  if UseLayer >= NumLayers then
+    Exit;
   if (Start.X = Goal.X) and (Start.Y = Goal.Y) then
   begin
     SetLength(OutPath, 1);
     OutPath[0] := Start;
     SetLength(OutLayers, 1);
     OutLayers[0] := 0;
+    if UseLayer >= 0 then
+      OutLayers[0] := UseLayer;
     Result := True;
     Exit;
   end;
 
-  GScore := TDictionary<Int64, Integer>.Create;
-  CameFrom := TDictionary<Int64, Int64>.Create;
-  Closed := TDictionary<Int64, Boolean>.Create;
-  try
-    SetLength(Open, 128);
-    OpenCount := 0;
+  if UseLayer >= 0 then
+    MaxLayer := 1
+  else
+    MaxLayer := NumLayers;
 
-    // The pin is reachable on every routing layer, so seed the start on all.
+  // Search window: the terminal bounding box plus a margin that scales with the
+  // Manhattan distance, clamped to the die. A shortest path never needs to leave
+  // a comfortable box around its terminals, so this bounds the state space.
+  Dist := Abs(Goal.X - Start.X) + Abs(Goal.Y - Start.Y);
+  Margin := Dist div MarginDiv;
+  if Margin < MinMargin then
+    Margin := MinMargin;
+  if Margin > MaxMargin then
+    Margin := MaxMargin;
+  WinX0 := Start.X;
+  if Goal.X < WinX0 then
+    WinX0 := Goal.X;
+  WinX1 := Start.X;
+  if Goal.X > WinX1 then
+    WinX1 := Goal.X;
+  WinY0 := Start.Y;
+  if Goal.Y < WinY0 then
+    WinY0 := Goal.Y;
+  WinY1 := Start.Y;
+  if Goal.Y > WinY1 then
+    WinY1 := Goal.Y;
+  Dec(WinX0, Margin);
+  if WinX0 < 0 then
+    WinX0 := 0;
+  Inc(WinX1, Margin);
+  if WinX1 >= W then
+    WinX1 := W - 1;
+  Dec(WinY0, Margin);
+  if WinY0 < 0 then
+    WinY0 := 0;
+  Inc(WinY1, Margin);
+  if WinY1 >= H then
+    WinY1 := H - 1;
+  WinW := WinX1 - WinX0 + 1;
+  WinH := WinY1 - WinY0 + 1;
+
+  TotalStates := WinW * WinH * MaxLayer * DirCount;
+  SetLength(gScore, TotalStates);
+  SetLength(Parent, TotalStates);
+  SetLength(Closed, TotalStates);
+  SetLength(Heap, 128);
+  for i := 0 to TotalStates - 1 do
+  begin
+    gScore[i] := High(Integer) div 4;
+    Closed[i] := False;
+  end;
+  HeapCount := 0;
+
+  // Expansion budget: a few passes over the window's cells. Since the window
+  // already bounds the search, this only aborts genuinely hopeless cases.
+  ExpansionLimit := WinW * WinH * MaxLayer * 3;
+  if ExpansionLimit < 512 then
+    ExpansionLimit := 512;
+  Expanded := 0;
+
+  // Seed the start on the layer(s) the search is allowed to use. The start
+  // cell is not obstacle-checked (it is a pin block), and it has no incoming
+  // direction (Dir = -1), so a turn away from it is not penalised.
+  if UseLayer >= 0 then
+  begin
+    S := StateId(Start.X - WinX0, Start.Y - WinY0, 0, -1);
+    gScore[S] := 0;
+    Parent[S] := -1;
+    HeapPush(S);
+  end
+  else
     for L := 0 to NumLayers - 1 do
     begin
-      Node.X := Start.X;
-      Node.Y := Start.Y;
-      Node.Dir := -1;
-      Node.Layer := L;
-      Node.G := 0;
-      GScore.Add(NodeKey(Node), 0);
-      HeapPush(Node);
+      S := StateId(Start.X - WinX0, Start.Y - WinY0, L, -1);
+      gScore[S] := 0;
+      Parent[S] := -1;
+      HeapPush(S);
     end;
 
-    // Give up after exploring too much so a hopeless net cannot hang the router.
-    Expanded := 0;
-    while OpenCount > 0 do
+  while HeapCount > 0 do
+  begin
+    S := HeapPop;
+    if Closed[S] then
+      Continue;
+    Closed[S] := True;
+    Inc(Expanded);
+    if Expanded > ExpansionLimit then
+      Exit; // budget exceeded: give up on this route
+    CurLayer := (S div DirCount) mod MaxLayer;
+    lx := ((S div DirCount) div MaxLayer) mod WinW;
+    ly := ((S div DirCount) div MaxLayer) div WinW;
+    CurX := lx + WinX0;
+    CurY := ly + WinY0;
+    CurDir := (S mod DirCount) - 1;
+    // In single-layer mode MaxLayer = 1, so the state's layer is always 0; the
+    // obstacles to consult are on UseLayer. In multi-layer mode the state layer
+    // is the real layer.
+    if UseLayer >= 0 then
+      EffLayer := UseLayer
+    else
+      EffLayer := CurLayer;
+
+    if (CurX = Goal.X) and (CurY = Goal.Y) then
     begin
-      Inc(Expanded);
-      if Expanded > W * H * 8 * NumLayers then
-        Exit; // cannot reach the goal within a reasonable search
-      Node := HeapPop;
-      Key := NodeKey(Node);
-      if Closed.ContainsKey(Key) then
+      // Reconstruct the path by walking parents back to the start.
+      SetLength(OutPath, 0);
+      SetLength(OutLayers, 0);
+      NS := S;
+      while NS >= 0 do
+      begin
+        CurLayer := (NS div DirCount) mod MaxLayer;
+        lx := ((NS div DirCount) div MaxLayer) mod WinW;
+        ly := ((NS div DirCount) div MaxLayer) div WinW;
+        SetLength(OutPath, Length(OutPath) + 1);
+        OutPath[High(OutPath)] :=
+          TPoint.Create(lx + WinX0, ly + WinY0);
+        SetLength(OutLayers, Length(OutLayers) + 1);
+        if UseLayer >= 0 then
+          OutLayers[High(OutLayers)] := UseLayer
+        else
+          OutLayers[High(OutLayers)] := CurLayer;
+        NS := Parent[NS];
+      end;
+      // Reverse both arrays so the path runs start -> goal.
+      for i := 0 to (Length(OutPath) div 2) - 1 do
+      begin
+        Swp := OutPath[i];
+        OutPath[i] := OutPath[High(OutPath) - i];
+        OutPath[High(OutPath) - i] := Swp;
+        SwpLayer := OutLayers[i];
+        OutLayers[i] := OutLayers[High(OutLayers) - i];
+        OutLayers[High(OutLayers) - i] := SwpLayer;
+      end;
+      Result := True;
+      Exit;
+    end;
+
+    // Same-layer 4-directional moves. A move that keeps the current heading
+    // costs 1; changing heading adds TurnPenalty. Moves stay inside the window.
+    for d := 0 to 3 do
+    begin
+      Nx := CurX + DirDx[d];
+      Ny := CurY + DirDy[d];
+      if (Nx < WinX0) or (Nx > WinX1) or (Ny < WinY0) or (Ny > WinY1) then
         Continue;
-      Closed.Add(Key, True);
-      if (Node.X = Goal.X) and (Node.Y = Goal.Y) then
+      if FRouteObstacles[EffLayer][Ny * W + Nx] and
+         not ((Nx = Goal.X) and (Ny = Goal.Y)) then
+        Continue;
+      TurnCost := 0;
+      if CurDir >= 0 then
+        if CurDir <> d then
+          TurnCost := TurnPenalty;
+      NewG := gScore[S] + 1 + TurnCost;
+      NS := StateId(Nx - WinX0, Ny - WinY0, CurLayer, d);
+      if (not Closed[NS]) and (NewG < gScore[NS]) then
       begin
-        // Reconstruct (points + layers).
-        SetLength(OutPath, 0);
-        SetLength(OutLayers, 0);
-        FromKey := Key;
-        while True do
-        begin
-          SetLength(OutPath, Length(OutPath) + 1);
-          OutPath[High(OutPath)] := TPoint.Create(Node.X, Node.Y);
-          SetLength(OutLayers, Length(OutLayers) + 1);
-          OutLayers[High(OutLayers)] := Node.Layer;
-          if not CameFrom.TryGetValue(FromKey, FromKey) then
-            Break;
-          CellKey := FromKey div 5;
-          Node.Layer := CellKey mod NumLayers;
-          CellKey := CellKey div NumLayers;
-          Node.X := CellKey mod W;
-          Node.Y := CellKey div W;
-        end;
-        // Reverse both arrays.
-        for i := 0 to (Length(OutPath) div 2) - 1 do
-        begin
-          Swp := OutPath[i];
-          OutPath[i] := OutPath[High(OutPath) - i];
-          OutPath[High(OutPath) - i] := Swp;
-          SwpLayer := OutLayers[i];
-          OutLayers[i] := OutLayers[High(OutLayers) - i];
-          OutLayers[High(OutLayers) - i] := SwpLayer;
-        end;
-        // The state-space search includes direction and layer, so the optimal
-        // walk can revisit a grid cell (with a different state), which draws as
-        // a wire that forks into two parallel tracks and rejoins. Cut the loop
-        // out: a cell revisited after at least one other cell is collapsed to
-        // its first occurrence. (Two consecutive identical cells are a via -
-        // a legal layer change - and are left alone.) Repeat until stable,
-        // because a collapse shifts the indices of later cells.
-        while True do
-        begin
-          Changed := False;
-          i := 0;
-          while i <= High(OutPath) do
-          begin
-            j := i + 1;
-            while j <= High(OutPath) do
-            begin
-              if (j - i > 1) and (OutPath[j].X = OutPath[i].X) and
-                 (OutPath[j].Y = OutPath[i].Y) then
-              begin
-                // Collapse: keep cell i, adopt j's layer so the trace continues
-                // on the correct layer, then delete i+1..j inclusive.
-                OutLayers[i] := OutLayers[j];
-                for k := j + 1 to High(OutPath) do
-                begin
-                  OutPath[k - (j - i)] := OutPath[k];
-                  OutLayers[k - (j - i)] := OutLayers[k];
-                end;
-                SetLength(OutPath, Length(OutPath) - (j - i));
-                SetLength(OutLayers, Length(OutLayers) - (j - i));
-                Changed := True;
-                Break;
-              end;
-              Inc(j);
-            end;
-            if Changed then
-              Break; // restart the whole scan from the beginning
-            Inc(i);
-          end;
-          if not Changed then
-            Break;
-        end;
-        Result := True;
-        Exit;
+        gScore[NS] := NewG;
+        Parent[NS] := S;
+        HeapPush(NS);
       end;
+    end;
 
-      // Same-layer 4-directional moves.
-      for d := 0 to 3 do
-      begin
-        NX := Node.X + DirDx[d];
-        NY := Node.Y + DirDy[d];
-        if (NX < 0) or (NX >= W) or (NY < 0) or (NY >= H) then
-          Continue;
-        // Hard obstacles (pin geometry) block all blocks except the goal.
-        // Congestion (present usage + history) is a soft cost, not a block.
-        if FRouteObstacles[Node.Layer][NY * W + NX] and
-           not ((NX = Goal.X) and (NY = Goal.Y)) then
-          Continue;
-        Bends := 0;
-        if (Node.Dir >= 0) and (Node.Dir <> d) then
-          Bends := BendPenalty;
-        Next.X := NX;
-        Next.Y := NY;
-        Next.Dir := d;
-        Next.Layer := Node.Layer;
-        Next.G := Node.G + 1 + Bends +
-          FRouteHist[Node.Layer][NY * W + NX] * FRouteHistFactor +
-          FRouteUsage[Node.Layer][NY * W + NX] * FRoutePresFactor;
-        NextKey := NodeKey(Next);
-        if Closed.ContainsKey(NextKey) then
-          Continue;
-        if not GScore.TryGetValue(NextKey, i) or (Next.G < i) then
-        begin
-          GScore.AddOrSetValue(NextKey, Next.G);
-          CameFrom.AddOrSetValue(NextKey, Key);
-          HeapPush(Next);
-        end;
-      end;
-
-      // Via: stay on the same cell but switch to another layer. The target
-      // layer's cell must not be a hard obstacle (except the goal);
-      // congestion is only a soft cost.
+    // Via transitions (multi-layer search only): switch layers on the spot.
+    // The heading is unchanged, so no turn penalty applies.
+    if UseLayer < 0 then
       for L := 0 to NumLayers - 1 do
       begin
-        if L = Node.Layer then
+        if L = CurLayer then
           Continue;
-        if FRouteObstacles[L][Node.Y * W + Node.X] and
-           not ((Node.X = Goal.X) and (Node.Y = Goal.Y)) then
+        if FRouteObstacles[L][CurY * W + CurX] and
+           not ((CurX = Goal.X) and (CurY = Goal.Y)) then
           Continue;
-        Next.X := Node.X;
-        Next.Y := Node.Y;
-        Next.Dir := Node.Dir;
-        Next.Layer := L;
-        Next.G := Node.G + ViaPenalty +
-          FRouteHist[L][Node.Y * W + Node.X] * FRouteHistFactor +
-          FRouteUsage[L][Node.Y * W + Node.X] * FRoutePresFactor;
-        NextKey := NodeKey(Next);
-        if Closed.ContainsKey(NextKey) then
-          Continue;
-        if not GScore.TryGetValue(NextKey, i) or (Next.G < i) then
+        NewG := gScore[S] + ViaPenalty;
+        NS := StateId(CurX - WinX0, CurY - WinY0, L, CurDir);
+        if (not Closed[NS]) and (NewG < gScore[NS]) then
         begin
-          GScore.AddOrSetValue(NextKey, Next.G);
-          CameFrom.AddOrSetValue(NextKey, Key);
-          HeapPush(Next);
+          gScore[NS] := NewG;
+          Parent[NS] := S;
+          HeapPush(NS);
         end;
       end;
-    end;
-  finally
-    GScore.Free;
-    CameFrom.Free;
-    Closed.Free;
   end;
 end;
 
@@ -8735,9 +9739,12 @@ begin
   // re-fires this handler; the Floorplan branch below does the rebuild.
   if FSwitchingTab then
     Exit;
-  // The Routing tab is only reachable once the placement is clean: reject the
-  // switch and bounce back to the Floorplan tab while it still has errors.
-  if (TabControl1.TabIndex = TabRouting) and (FFloorplanErrorCount > 0) then
+  // The Routing tab is only reachable after the placement has been optimised
+  // AND the bias lines expanded, with no placement or floorplan errors. Reject
+  // the switch and bounce back to the Floorplan tab otherwise.
+  if (TabControl1.TabIndex = TabRouting) and
+     not (FPlacementOptimized and FBiasExpansionDone and
+          (FFloorplanErrorCount = 0) and (FPlacementErrorCount = 0)) then
   begin
     FSwitchingTab := True;
     try
@@ -8997,57 +10004,31 @@ begin
 end;
 
 procedure TForm1.ButtonRunRoutingClick(Sender: TObject);
-const
-  MaxFixPasses = 30; // row-insertion passes before giving up
-  MaxPlateau = 4;    // passes without improvement before giving up
-var
-  Pass: Integer;
-  Changed: Boolean;
-  BestOverflow, Stagnant: Integer;
 begin
-  // Start each run from a clean floorplan: the congestion analysis grows rows
-  // below the worst blocks, accumulating its own expansion state across passes.
+  // Start from a clean floorplan so every run routes the same placement.
   FLogicRowExtra := nil;
   FClockRowExtra := nil;
-  BestOverflow := High(Integer);
-  Stagnant := 0;
-  Pass := 0;
   BuildFloorplan;
   if FFloorplanErrorCount = 0 then
     OptimizePlacement;
-  while (Pass < MaxFixPasses) and (FFloorplanErrorCount = 0) do
-  begin
-    Inc(Pass);
-    RunRouting; // fills FRouteUsage / FRouteHist, reports its own progress
-    if FRouteLastOverflow < BestOverflow then
-    begin
-      BestOverflow := FRouteLastOverflow;
-      Stagnant := 0;
-    end
-    else
-      Inc(Stagnant);
-    AnalyzeCongestion(Changed);
-    MemoRouting.Lines.Insert(0, Format(
-      '--- Fix pass %d: %d overused block(s)%s ---',
-      [Pass, FRouteLastOverflow, IfThen(Changed, ', inserting rows',
-        ', no row to insert')]));
-    if FRouteLastOverflow = 0 then
-      Break; // converged
-    if (not Changed) or (Stagnant >= MaxPlateau) then
-      Break; // nothing more can be done (helpers report 'not enough space' when the die is full)
-    // The bias-expansion helpers already rebuilt the floorplan (preserving the
-    // placement's horizontal shape); re-run the placement so the grown bias
-    // rows take effect, then route again.
-    OptimizePlacement;
-  end;
-  MemoRouting.Lines.Add(Format(
-    'Fix loop ended after %d pass(es); final overflow %d block(s).',
-    [Pass, FRouteLastOverflow]));
+  // Maze route: all nets on the first layer, then the next layer for the
+  // failures, ... then a via pass. Reports its own per-layer progress.
+  RunRouting;
   // Bias lines: always routable programmatically, run after the main circuit
   // routing so the floorplan is settled. Each partition group becomes one track.
   RouteBiasLines;
   MemoRouting.Lines.Add(
     'Bias lines routed from the partition groups.');
+  // Validation-inserted buffers (ClockLevel -1, so BuildFloorplan skips them)
+  // must be re-applied to the layout after the rebuild.
+  ReapplyValidationBuffers;
+  UpdateUI;
+end;
+
+procedure TForm1.ButtonValidateRoutingClick(Sender: TObject);
+begin
+  RunRoutingValidation;
+  UpdateUI;
 end;
 
 end.

@@ -35,6 +35,8 @@ type
     FUtilization: string;
     FBiasCurrent: string;
     FPTLLength: string;
+    FFreqGHz: string;
+    FPTLDelay: string;
     FBiasLayer: string;
     procedure LoadFromJson(Root: TJSONObject);
   public
@@ -59,6 +61,8 @@ type
     property Utilization: string read FUtilization write FUtilization;
     property BiasCurrent: string read FBiasCurrent write FBiasCurrent;
     property PTLLength: string read FPTLLength write FPTLLength;
+    property FreqGHz: string read FFreqGHz write FFreqGHz;
+    property PTLDelay: string read FPTLDelay write FPTLDelay;
     property BiasLayer: string read FBiasLayer write FBiasLayer;
   end;
 
@@ -113,6 +117,8 @@ begin
   FUtilization := '';
   FBiasCurrent := '';
   FPTLLength := '';
+  FFreqGHz := '';
+  FPTLDelay := '';
   FBiasLayer := '';
 end;
 
@@ -151,6 +157,10 @@ begin
     FBiasCurrent := Root.GetValue<string>('biasCurrent');
   if Root.GetValue('ptlLength') is TJSONValue then
     FPTLLength := Root.GetValue<string>('ptlLength');
+  if Root.GetValue('freqGHz') is TJSONValue then
+    FFreqGHz := Root.GetValue<string>('freqGHz');
+  if Root.GetValue('ptlDelay') is TJSONValue then
+    FPTLDelay := Root.GetValue<string>('ptlDelay');
   if Root.GetValue('biasLayer') is TJSONValue then
     FBiasLayer := Root.GetValue<string>('biasLayer');
 
@@ -206,6 +216,8 @@ begin
     Root.AddPair('utilization', FUtilization);
     Root.AddPair('biasCurrent', FBiasCurrent);
     Root.AddPair('ptlLength', FPTLLength);
+    Root.AddPair('freqGHz', FFreqGHz);
+    Root.AddPair('ptlDelay', FPTLDelay);
     Root.AddPair('biasLayer', FBiasLayer);
 
     Arr := TJSONArray.Create;

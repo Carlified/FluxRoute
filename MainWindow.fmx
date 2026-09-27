@@ -1,4 +1,4 @@
-object Form1: TForm1
+﻿object Form1: TForm1
   Left = 0
   Top = 0
   Caption = 'FluxRoute'
@@ -604,7 +604,7 @@ object Form1: TForm1
       object LayoutPlacementTop: TLayout
         Align = Top
         Size.Width = 640.000000000000000000
-        Size.Height = 304.000000000000000000
+        Size.Height = 376.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 1
         object LabelPlacementTitle: TLabel
@@ -738,7 +738,7 @@ object Form1: TForm1
           Size.Width = 170.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
-          Text = 'Target utilization (%):'
+          Text = 'Target utilization:'
           TabOrder = 17
         end
         object EditUtilization: TEdit
@@ -767,7 +767,7 @@ object Form1: TForm1
           Size.Width = 170.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
-          Text = 'Max bias current (uA):'
+          Text = 'Max bias current:'
           TabOrder = 20
         end
         object EditBiasCurrent: TEdit
@@ -781,13 +781,22 @@ object Form1: TForm1
           OnChange = EditPlacementChanged
           OnKeyDown = EditPlacementKeyDown
         end
+        object LabelBiasCurrentSuffix: TLabel
+          Position.X = 278.000000000000000000
+          Position.Y = 188.000000000000000000
+          Size.Width = 40.000000000000000000
+          Size.Height = 20.000000000000000000
+          Size.PlatformDefault = False
+          Text = 'uA'
+          TabOrder = 21
+        end
         object LabelPTLLength: TLabel
           Position.X = 24.000000000000000000
           Position.Y = 220.000000000000000000
           Size.Width = 170.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
-          Text = 'Max PTL length (um):'
+          Text = 'Max PTL length:'
           TabOrder = 22
         end
         object EditPTLLength: TEdit
@@ -801,9 +810,76 @@ object Form1: TForm1
           OnChange = EditPlacementChanged
           OnKeyDown = EditPlacementKeyDown
         end
-        object LabelBiasLayer: TLabel
+        object LabelPTLSuffix: TLabel
+          Position.X = 278.000000000000000000
+          Position.Y = 220.000000000000000000
+          Size.Width = 40.000000000000000000
+          Size.Height = 20.000000000000000000
+          Size.PlatformDefault = False
+          Text = 'um'
+          TabOrder = 23
+        end
+        object LabelFreq: TLabel
           Position.X = 24.000000000000000000
           Position.Y = 252.000000000000000000
+          Size.Width = 170.000000000000000000
+          Size.Height = 20.000000000000000000
+          Size.PlatformDefault = False
+          Text = 'Operating frequency:'
+          TabOrder = 26
+        end
+        object EditFreqGHz: TEdit
+          Touch.InteractiveGestures = [LongTap, DoubleTap]
+          TabOrder = 27
+          Position.X = 200.000000000000000000
+          Position.Y = 248.000000000000000000
+          Size.Width = 70.000000000000000000
+          Size.Height = 26.000000000000000000
+          Size.PlatformDefault = False
+          OnChange = EditPlacementChanged
+          OnKeyDown = EditPlacementKeyDown
+        end
+        object LabelFreqSuffix: TLabel
+          Position.X = 278.000000000000000000
+          Position.Y = 252.000000000000000000
+          Size.Width = 40.000000000000000000
+          Size.Height = 20.000000000000000000
+          Size.PlatformDefault = False
+          Text = 'GHz'
+          TabOrder = 27
+        end
+        object LabelPTLDelay: TLabel
+          Position.X = 24.000000000000000000
+          Position.Y = 284.000000000000000000
+          Size.Width = 170.000000000000000000
+          Size.Height = 20.000000000000000000
+          Size.PlatformDefault = False
+          Text = 'PTL propagation delay:'
+          TabOrder = 28
+        end
+        object EditPTLDelay: TEdit
+          Touch.InteractiveGestures = [LongTap, DoubleTap]
+          TabOrder = 29
+          Position.X = 200.000000000000000000
+          Position.Y = 280.000000000000000000
+          Size.Width = 70.000000000000000000
+          Size.Height = 26.000000000000000000
+          Size.PlatformDefault = False
+          OnChange = EditPlacementChanged
+          OnKeyDown = EditPlacementKeyDown
+        end
+        object LabelPTLDelaySuffix: TLabel
+          Position.X = 278.000000000000000000
+          Position.Y = 284.000000000000000000
+          Size.Width = 60.000000000000000000
+          Size.Height = 20.000000000000000000
+          Size.PlatformDefault = False
+          Text = 'ps/um'
+          TabOrder = 29
+        end
+        object LabelBiasLayer: TLabel
+          Position.X = 24.000000000000000000
+          Position.Y = 316.000000000000000000
           Size.Width = 170.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
@@ -813,8 +889,8 @@ object Form1: TForm1
         object ComboBiasLayer: TComboBox
           Touch.InteractiveGestures = [LongTap, DoubleTap]
           Position.X = 200.000000000000000000
-          Position.Y = 248.000000000000000000
-          Size.Width = 140.000000000000000000
+          Position.Y = 312.000000000000000000
+          Size.Width = 70.000000000000000000
           Size.Height = 26.000000000000000000
           Size.PlatformDefault = False
           TabOrder = 25
@@ -822,7 +898,7 @@ object Form1: TForm1
         end
         object LabelPlacementErrors: TLabel
           Position.X = 24.000000000000000000
-          Position.Y = 284.000000000000000000
+          Position.Y = 348.000000000000000000
           Size.Width = 592.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
@@ -1039,11 +1115,21 @@ object Form1: TForm1
           Align = Client
           Margins.Top = 8.000000000000000000
           Size.Width = 192.000000000000000000
-          Size.Height = 368.000000000000000000
+          Size.Height = 336.000000000000000000
           Size.PlatformDefault = False
           TabOrder = 1
           Viewport.Width = 192.000000000000000000
-          Viewport.Height = 368.000000000000000000
+          Viewport.Height = 336.000000000000000000
+        end
+        object ButtonValidateRouting: TButton
+          Align = Bottom
+          Size.Width = 192.000000000000000000
+          Size.Height = 32.000000000000000000
+          Size.PlatformDefault = False
+          Text = 'Validate Routing'
+          TextSettings.Trimming = None
+          TabOrder = 2
+          OnClick = ButtonValidateRoutingClick
         end
       end
       object SplitterRouting: TSplitter
