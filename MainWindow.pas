@@ -192,6 +192,7 @@ type
     EditPTLLength: TEdit;
     EditFreqGHz: TEdit;
     EditPTLDelay: TEdit;
+    EditPulseWidth: TEdit;
     ComboBiasLayer: TComboBox;
     LabelBiasLayer: TLabel;
     ListBoxPlacementErrors: TListBox;
@@ -477,6 +478,7 @@ procedure ButtonOptimizeClick(Sender: TObject);
       ABand, ARowType, AX, AY: Integer): Boolean;
     function InsertBufferForTrace(ATraceIdx: Integer): Boolean;
     procedure DrawRoutedTraces(Canvas: TCanvas);
+    procedure DrawResonancePulses(Canvas: TCanvas; Core, ScaleCap: Double);
     function GatePinBlock(G: TGateInstance; const PinName: string;
       ALayer: Integer; var P: TPoint): Boolean;
     function GatePinBlockAt(G: TGateInstance; const PinName: string;
@@ -911,6 +913,7 @@ begin
   EditPTLLength.Text := '550';
   EditFreqGHz.Text := '10';
   EditPTLDelay.Text := '10';
+  EditPulseWidth.Text := '5';
   // Bias-routing layer: default to the first masterslice layer (the usual
   // choice for the bias rail, since it is not a signal-routing layer); leave
   // the current selection if one was already made.
@@ -959,6 +962,8 @@ begin
       EditFreqGHz.Text := FormatDim2(Core);
     if TryDimParse(EditPTLDelay.Text, Core) then
       EditPTLDelay.Text := FormatDim2(Core);
+    if TryDimParse(EditPulseWidth.Text, Core) then
+      EditPulseWidth.Text := FormatDim2(Core);
   finally
     FFormattingPlacement := False;
   end;
@@ -1056,6 +1061,10 @@ begin
     AddPlacementMsg('PTL propagation delay must be a valid number.', $FFFF0000, True)
   else if PTL <= 0 then
     AddPlacementMsg('PTL propagation delay must be positive.', $FFFF0000, True);
+  if not TryDimParse(EditPulseWidth.Text, PTL) then
+    AddPlacementMsg('Pulse width must be a valid number.', $FFFF0000, True)
+  else if PTL <= 0 then
+    AddPlacementMsg('Pulse width must be positive.', $FFFF0000, True);
 
   // The bias-routing layer must be a valid selection from the library.
   if FBiasLayer = '' then
@@ -1237,6 +1246,7 @@ begin
   FProject.PTLLength := EditPTLLength.Text;
   FProject.FreqGHz := EditFreqGHz.Text;
   FProject.PTLDelay := EditPTLDelay.Text;
+  FProject.PulseWidth := EditPulseWidth.Text;
   FProject.BiasLayer := FBiasLayer;
   try
     FProject.SaveToFile(FProjectPath);
@@ -1311,12 +1321,15 @@ begin
     EditPTLLength.Text := FProject.PTLLength;
     EditFreqGHz.Text := FProject.FreqGHz;
     EditPTLDelay.Text := FProject.PTLDelay;
-    // Older projects have no frequency/delay fields; give them defaults so
-    // the new fields validate instead of appearing empty.
+    EditPulseWidth.Text := FProject.PulseWidth;
+    // Older projects have no frequency/delay/pulse fields; give them defaults
+    // so the new fields validate instead of appearing empty.
     if EditFreqGHz.Text = '' then
       EditFreqGHz.Text := '10';
     if EditPTLDelay.Text = '' then
       EditPTLDelay.Text := '10';
+    if EditPulseWidth.Text = '' then
+      EditPulseWidth.Text := '5';
     FBiasLayer := FProject.BiasLayer;
     if ComboBiasLayer <> nil then
     begin
@@ -5406,7 +5419,7 @@ var
   R: TRectF;
   ClipState: TCanvasSaveState;
   DieW, DieH, Core: Double;
-  Cols, Rows, i, j: Integer;
+  Cols, Rows, i: Integer;
   X, Y: Single;
   BlockPx, WorldX0, WorldX1, WorldY0, WorldY1: Single;
   I0, I1, J0, J1: Integer;
@@ -5597,9 +5610,6 @@ Canvas.Fill.Color := HslColor(0, 0, 0.6, CellAlpha / 255);
             Sp.Gate.Cell.Width, Sp.Gate.Cell.Height, Sp.Rotated);
       end;
 
-      // Routed traces (on the signal layer), drawn under the grid.
-      DrawRoutedTraces(Canvas);
-
       // Grid of core-block-sized squares (culled to the visible area).
       BlockPx := Core * FRouteZoom;
       if (BlockPx >= MinBlockPx) and (FRouteZoom > 0) then
@@ -5643,6 +5653,10 @@ Canvas.Fill.Color := HslColor(0, 0, 0.6, CellAlpha / 255);
         WX(0) + BorderHalf, WY(DieH) + BorderHalf), 0, 0, [], 1.0); // left
       Canvas.FillRect(TRectF.Create(WX(DieW) - BorderHalf, WY(0) - BorderHalf,
         WX(DieW) + BorderHalf, WY(DieH) + BorderHalf), 0, 0, [], 1.0); // right
+
+      // Routed traces (and the Debug resonance overlay), drawn last so they sit
+      // on top of the grid and die boundary.
+      DrawRoutedTraces(Canvas);
 
       // Interactive layer legend, fixed to the top-right of the canvas (screen
       // space, independent of pan/zoom). One row per used layer in library
@@ -5936,7 +5950,7 @@ begin
   Canvas.Fill.Color := TAlphaColorRec.Black;
   Canvas.FillText(TRectF.Create(PanelX + TextX, BoxTop - 4,
     PanelX + PanelW - LegendPad, BoxTop + 14),
-    'Length', False, 1.0, [], TTextAlign.Leading, TTextAlign.Center);
+    'Debug', False, 1.0, [], TTextAlign.Leading, TTextAlign.Center);
 end;
 
 // Maze-routes every signal net and clock link. All nets first try the first
@@ -7807,7 +7821,6 @@ var
   a, b: Integer;
   Key: string;
   Overlap: Boolean;
-  i2: Integer;
 
   function RectOverlap(X1, Y1, W1, H1, X2, Y2, W2, H2: Integer): Boolean;
   begin
@@ -8277,10 +8290,6 @@ begin
     else if FRouteLengthColor then
     begin
       Len := TraceLengthUm(FRouteTraces[i], Core);
-      // Spectrogram scale, capped at the PTL length limit (max colour).
-      t := Len / ScaleCap;
-      if t < 0 then t := 0;
-      if t > 1 then t := 1;
       // Past the PTL length limit: draw dashed (length mode only).
       if (Limit > 0) and (Len > Limit) then
         Canvas.Stroke.Dash := TStrokeDash.Dash
@@ -8314,6 +8323,194 @@ begin
       Y2 := FRoutePanY + (FRouteTraces[i].Points[k + 1].Y + 0.5) * Core * FRouteZoom;
       Canvas.DrawLine(TPointF.Create(X1, Y1), TPointF.Create(X2, Y2), 1.0);
     end;
+  end;
+  Canvas.Stroke.Dash := TStrokeDash.Solid;
+  // In Debug mode, overlay the resonant-length problem markers.
+  if FRouteLengthColor then
+    DrawResonancePulses(Canvas, Core, ScaleCap);
+end;
+
+// Debug overlay for resonant wire lengths. A reflection at an impedance
+// discontinuity (port, bend, via) bounces back and interferes with the next
+// signal when a segment between discontinuities is a multiple of the resonant
+// length Lr = speed / (2*f), with speed = 1 / PTL-delay, i.e.
+// Lr = 500 / (frequency_GHz * delay_ps_per_um) um. Each routed PTL is split
+// into straight sections (between bends and vias); at every multiple of Lr a
+// filled rectangle marks the danger band: +/-pulseWidth/2 along the wire and
+// +/-DangerHalfWidthBlocks across it. The markers use the wire's own colour.
+procedure TForm1.DrawResonancePulses(Canvas: TCanvas;
+  Core, ScaleCap: Double);
+const
+  DangerHalfWidthBlocks = 0.25; // danger-band rectangle half-width, core blocks (scales with zoom)
+var
+  FreqGHz, Delay, Lr, PulseW, TraceLen, SecLen: Double;
+  i, d, Ux, Uy, Px, Py, segD, segLen: Integer;
+  Clr: TAlphaColor;
+  SecStartX, SecStartY: Double;
+  SecDir: Integer;
+  a, b: TPoint;
+  t: Double;
+
+  // Axis direction of a grid segment: 0=+X, 1=-X, 2=+Y, 3=-Y, <0 = not a
+  // simple axis move (zero-length via/duplicate or (unexpected) diagonal).
+  function SegDir(dx, dy: Integer): Integer;
+  begin
+    if (dx = 0) and (dy = 0) then
+      Result := -2
+    else if dy = 0 then
+    begin
+      if dx > 0 then Result := 0 else Result := 1;
+    end
+    else if dx = 0 then
+    begin
+      if dy > 0 then Result := 2 else Result := 3;
+    end
+    else
+      Result := -1;
+  end;
+
+  procedure DirUnit(Dd: Integer);
+  begin
+    case Dd of
+      0: begin Ux := 1; Uy := 0; end;
+      1: begin Ux := -1; Uy := 0; end;
+      2: begin Ux := 0; Uy := 1; end;
+    else Ux := 0; Uy := -1;
+    end;
+  end;
+
+  // A filled rectangle marking the resonance danger band centred at along-wire
+  // CUm: +/-HalfBaseUm along the wire (the pulse-width band) and
+  // +/-DangerHalfWidthBlocks across it. The along-wire extent is clamped
+  // numerically to the section [0, SecLen], so a marker at an end is drawn only
+  // up to the wire; the perpendicular extent is far smaller than the die. Wires
+  // are Manhattan, so the result is an axis-aligned screen rectangle.
+  procedure FillDangerRect(CUm, HalfBaseUm: Double);
+  var
+    Lo, Hi, Mid, HalfLenBlocks, Cx, Cy, ExX, ExY: Double;
+  begin
+    Lo := CUm - HalfBaseUm;
+    if Lo < 0 then
+      Lo := 0;
+    Hi := CUm + HalfBaseUm;
+    if Hi > SecLen then
+      Hi := SecLen;
+    if Hi <= Lo then
+      Exit; // marker entirely off the section
+    Mid := (Lo + Hi) / 2;                    // along-wire centre, um
+    HalfLenBlocks := (Hi - Lo) / 2 / Core;   // along-wire half-length, blocks
+    Cx := SecStartX + Ux * (Mid / Core);
+    Cy := SecStartY + Uy * (Mid / Core);
+    ExX := Abs(Ux) * HalfLenBlocks + Abs(Px) * DangerHalfWidthBlocks;
+    ExY := Abs(Uy) * HalfLenBlocks + Abs(Py) * DangerHalfWidthBlocks;
+    Canvas.Fill.Color := Clr;
+    Canvas.FillRect(TRectF.Create(
+      FRoutePanX + (Cx - ExX + 0.5) * Core * FRouteZoom,
+      FRoutePanY + (Cy - ExY + 0.5) * Core * FRouteZoom,
+      FRoutePanX + (Cx + ExX + 0.5) * Core * FRouteZoom,
+      FRoutePanY + (Cy + ExY + 0.5) * Core * FRouteZoom), 0, 0, [], 1.0);
+  end;
+
+  // Draws the danger rectangles along the straight section accumulated so far,
+  // one per resonant multiple.
+  procedure FlushSection;
+  var
+    n, MaxN: Integer;
+  begin
+    if (SecLen <= 0) or (SecDir < 0) or (PulseW <= 0) or (Lr <= 0) then
+      Exit;
+    DirUnit(SecDir);
+    if (SecDir = 0) or (SecDir = 1) then
+    begin
+      Px := 0; Py := 1; // wire horizontal
+    end
+    else
+    begin
+      Px := 1; Py := 0; // wire vertical
+    end;
+    if (SecLen + PulseW / 2) / Lr > 100000 then
+      MaxN := 100000
+    else
+      MaxN := Trunc((SecLen + PulseW / 2) / Lr);
+    if MaxN < 0 then
+      MaxN := 0;
+    for n := 1 to MaxN do
+      FillDangerRect(n * Lr, PulseW / 2);
+  end;
+
+begin
+  if not (TryDimParse(EditFreqGHz.Text, FreqGHz) and (FreqGHz > 0)) then
+    Exit;
+  if not (TryDimParse(EditPTLDelay.Text, Delay) and (Delay > 0)) then
+    Exit;
+  if not (TryDimParse(EditPulseWidth.Text, PulseW) and (PulseW > 0)) then
+    Exit;
+  Lr := 500.0 / (FreqGHz * Delay); // resonant length, um
+  if Lr <= 0 then
+    Exit;
+  Canvas.Stroke.Kind := TBrushKind.Solid;
+  Canvas.Stroke.Thickness := 1.5;
+  Canvas.Fill.Kind := TBrushKind.Solid;
+  for i := 0 to High(FRouteTraces) do
+  begin
+    if IsBiasTrace(FRouteTraces[i]) then
+      Continue; // constant-voltage lines do not resonate
+    if Length(FRouteTraces[i].Points) < 2 then
+      Continue;
+    // Match the wire colour: the length scale (Debug mode always colours by
+    // length).
+    TraceLen := TraceLengthUm(FRouteTraces[i], Core);
+    if ScaleCap > 0 then
+      t := TraceLen / ScaleCap
+    else
+      t := 0;
+    if t < 0 then t := 0;
+    if t > 1 then t := 1;
+    Clr := (LengthColor(t) and $FFFFFF) or $FF000000;
+
+    // Walk the trace, grouping collinear same-layer segments into sections. A
+    // via (layer change) or a bend (direction change) is a discontinuity.
+    SecDir := -1;
+    SecLen := 0;
+    for d := 0 to High(FRouteTraces[i].Points) - 1 do
+    begin
+      a := FRouteTraces[i].Points[d];
+      b := FRouteTraces[i].Points[d + 1];
+      if not SameText(FRouteTraces[i].Layers[d], FRouteTraces[i].Layers[d + 1]) then
+      begin
+        FlushSection;
+        SecDir := -1;
+        SecLen := 0;
+        Continue; // via
+      end;
+      segD := SegDir(b.X - a.X, b.Y - a.Y);
+      if segD < 0 then
+      begin
+        FlushSection;
+        SecDir := -1;
+        SecLen := 0;
+        Continue;
+      end;
+      segLen := Abs(b.X - a.X) + Abs(b.Y - a.Y);
+      if SecDir = -1 then
+      begin
+        SecDir := segD;
+        SecStartX := a.X;
+        SecStartY := a.Y;
+        SecLen := segLen * Core;
+      end
+      else if segD = SecDir then
+        SecLen := SecLen + segLen * Core
+      else
+      begin
+        FlushSection;
+        SecDir := segD;
+        SecStartX := a.X;
+        SecStartY := a.Y;
+        SecLen := segLen * Core;
+      end;
+    end;
+    FlushSection;
   end;
   Canvas.Stroke.Dash := TStrokeDash.Solid;
 end;
@@ -8491,6 +8688,9 @@ var
   lx, ly: Integer;
   Swp: TPoint;
   SwpLayer: Integer;
+  LrUm, PulseWUm, CoreUm, FreqGHz, Delay: Double;
+  ResonanceOn: Boolean;
+  RunLen: TArray<Integer>; // straight-run length (blocks) of the best path to a state
 
   // State id over the WINDOW-local grid: ((ly*WinW+lx)*MaxLayer+Layer)*DirCount
   // + (Dir+1), Dir in -1..3. lx = X - WinX0, ly = Y - WinY0.
@@ -8508,6 +8708,28 @@ var
     hy := cell div WinW;
     hx := cell mod WinW;
     Result := Abs((hx + WinX0) - Goal.X) + Abs((hy + WinY0) - Goal.Y);
+  end;
+
+  // Resonance guard: a straight run ending here is forbidden if its length is
+  // within half a pulse width of an integer multiple of the resonant length.
+  // RunBlocks is the straight-run length in grid blocks.
+  function InDangerZone(RunBlocks: Integer): Boolean;
+  var
+    RunUm, Nearest: Double;
+    n: Integer;
+  begin
+    Result := False;
+    if (not ResonanceOn) or (RunBlocks <= 0) then
+      Exit;
+    RunUm := RunBlocks * CoreUm;
+    if RunUm / LrUm > 1.0e7 then
+      Exit; // absurd configuration (Lr far below a block): nothing sensible to flag
+    n := Round(RunUm / LrUm);
+    if n < 1 then
+      Exit; // shorter than the first harmonic
+    Nearest := n * LrUm;
+    if Abs(RunUm - Nearest) <= PulseWUm / 2 then
+      Result := True;
   end;
 
   // A is preferred over B when its f (= g+h) is lower; on equal f the one
@@ -8602,6 +8824,21 @@ begin
   else
     MaxLayer := NumLayers;
 
+  // Resonance guard parameters: resonant length Lr = 500/(f*delay) um, with the
+  // forbidden band +/- half the pulse width around each multiple of Lr. Off (no
+  // pruning) if the configuration is incomplete.
+  if not (TryDimParse(EditCoreSize.Text, CoreUm) and (CoreUm > 0)) then
+    CoreUm := FPlanCore;
+  ResonanceOn := (CoreUm > 0) and
+    (TryDimParse(EditFreqGHz.Text, FreqGHz) and (FreqGHz > 0)) and
+    (TryDimParse(EditPTLDelay.Text, Delay) and (Delay > 0)) and
+    (TryDimParse(EditPulseWidth.Text, PulseWUm) and (PulseWUm > 0));
+  if ResonanceOn then
+  begin
+    LrUm := 500.0 / (FreqGHz * Delay);
+    ResonanceOn := LrUm > 0;
+  end;
+
   // Search window: the terminal bounding box plus a margin that scales with the
   // Manhattan distance, clamped to the die. A shortest path never needs to leave
   // a comfortable box around its terminals, so this bounds the state space.
@@ -8642,11 +8879,13 @@ begin
   SetLength(gScore, TotalStates);
   SetLength(Parent, TotalStates);
   SetLength(Closed, TotalStates);
+  SetLength(RunLen, TotalStates);
   SetLength(Heap, 128);
   for i := 0 to TotalStates - 1 do
   begin
     gScore[i] := High(Integer) div 4;
     Closed[i] := False;
+    RunLen[i] := 0;
   end;
   HeapCount := 0;
 
@@ -8701,6 +8940,10 @@ begin
 
     if (CurX = Goal.X) and (CurY = Goal.Y) then
     begin
+      // The last straight ends at the goal (a port): if that final run lands in
+      // the resonance danger zone, reject this arrival and keep searching.
+      if InDangerZone(RunLen[S]) then
+        Continue;
       // Reconstruct the path by walking parents back to the start.
       SetLength(OutPath, 0);
       SetLength(OutLayers, 0);
@@ -8746,15 +8989,24 @@ begin
          not ((Nx = Goal.X) and (Ny = Goal.Y)) then
         Continue;
       TurnCost := 0;
-      if CurDir >= 0 then
-        if CurDir <> d then
-          TurnCost := TurnPenalty;
+      if (CurDir >= 0) and (CurDir <> d) then
+      begin
+        // A turn ends the current straight run: deny it if that run lands in the
+        // resonance danger zone (the path must carry on straight instead).
+        if InDangerZone(RunLen[S]) then
+          Continue;
+        TurnCost := TurnPenalty;
+      end;
       NewG := gScore[S] + 1 + TurnCost;
       NS := StateId(Nx - WinX0, Ny - WinY0, CurLayer, d);
       if (not Closed[NS]) and (NewG < gScore[NS]) then
       begin
         gScore[NS] := NewG;
         Parent[NS] := S;
+        if TurnCost > 0 then
+          RunLen[NS] := 1 // a new run starts on the turn
+        else
+          RunLen[NS] := RunLen[S] + 1; // continue the run
         HeapPush(NS);
       end;
     end;
@@ -8769,12 +9021,17 @@ begin
         if FRouteObstacles[L][CurY * W + CurX] and
            not ((CurX = Goal.X) and (CurY = Goal.Y)) then
           Continue;
+        // A via is a discontinuity: it ends the current straight run, so deny it
+        // if that run lands in the resonance danger zone.
+        if InDangerZone(RunLen[S]) then
+          Continue;
         NewG := gScore[S] + ViaPenalty;
         NS := StateId(CurX - WinX0, CurY - WinY0, L, CurDir);
         if (not Closed[NS]) and (NewG < gScore[NS]) then
         begin
           gScore[NS] := NewG;
           Parent[NS] := S;
+          RunLen[NS] := 0; // the via starts a fresh run
           HeapPush(NS);
         end;
       end;

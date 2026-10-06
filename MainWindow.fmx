@@ -604,7 +604,7 @@
       object LayoutPlacementTop: TLayout
         Align = Top
         Size.Width = 640.000000000000000000
-        Size.Height = 376.000000000000000000
+        Size.Height = 300.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 1
         object LabelPlacementTitle: TLabel
@@ -763,8 +763,8 @@
         end
         object LabelBiasCurrent: TLabel
           Position.X = 24.000000000000000000
-          Position.Y = 188.000000000000000000
-          Size.Width = 170.000000000000000000
+          Position.Y = 176.000000000000000000
+          Size.Width = 144.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
           Text = 'Max bias current:'
@@ -773,8 +773,8 @@
         object EditBiasCurrent: TEdit
           Touch.InteractiveGestures = [LongTap, DoubleTap]
           TabOrder = 21
-          Position.X = 200.000000000000000000
-          Position.Y = 184.000000000000000000
+          Position.X = 170.000000000000000000
+          Position.Y = 172.000000000000000000
           Size.Width = 70.000000000000000000
           Size.Height = 26.000000000000000000
           Size.PlatformDefault = False
@@ -782,47 +782,18 @@
           OnKeyDown = EditPlacementKeyDown
         end
         object LabelBiasCurrentSuffix: TLabel
-          Position.X = 278.000000000000000000
-          Position.Y = 188.000000000000000000
+          Position.X = 248.000000000000000000
+          Position.Y = 176.000000000000000000
           Size.Width = 40.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
           Text = 'uA'
           TabOrder = 21
         end
-        object LabelPTLLength: TLabel
-          Position.X = 24.000000000000000000
-          Position.Y = 220.000000000000000000
-          Size.Width = 170.000000000000000000
-          Size.Height = 20.000000000000000000
-          Size.PlatformDefault = False
-          Text = 'Max PTL length:'
-          TabOrder = 22
-        end
-        object EditPTLLength: TEdit
-          Touch.InteractiveGestures = [LongTap, DoubleTap]
-          TabOrder = 23
-          Position.X = 200.000000000000000000
-          Position.Y = 216.000000000000000000
-          Size.Width = 70.000000000000000000
-          Size.Height = 26.000000000000000000
-          Size.PlatformDefault = False
-          OnChange = EditPlacementChanged
-          OnKeyDown = EditPlacementKeyDown
-        end
-        object LabelPTLSuffix: TLabel
-          Position.X = 278.000000000000000000
-          Position.Y = 220.000000000000000000
-          Size.Width = 40.000000000000000000
-          Size.Height = 20.000000000000000000
-          Size.PlatformDefault = False
-          Text = 'um'
-          TabOrder = 23
-        end
         object LabelFreq: TLabel
-          Position.X = 24.000000000000000000
-          Position.Y = 252.000000000000000000
-          Size.Width = 170.000000000000000000
+          Position.X = 304.000000000000000000
+          Position.Y = 176.000000000000000000
+          Size.Width = 144.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
           Text = 'Operating frequency:'
@@ -831,8 +802,8 @@
         object EditFreqGHz: TEdit
           Touch.InteractiveGestures = [LongTap, DoubleTap]
           TabOrder = 27
-          Position.X = 200.000000000000000000
-          Position.Y = 248.000000000000000000
+          Position.X = 450.000000000000000000
+          Position.Y = 172.000000000000000000
           Size.Width = 70.000000000000000000
           Size.Height = 26.000000000000000000
           Size.PlatformDefault = False
@@ -840,18 +811,47 @@
           OnKeyDown = EditPlacementKeyDown
         end
         object LabelFreqSuffix: TLabel
-          Position.X = 278.000000000000000000
-          Position.Y = 252.000000000000000000
+          Position.X = 528.000000000000000000
+          Position.Y = 176.000000000000000000
           Size.Width = 40.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
           Text = 'GHz'
           TabOrder = 27
         end
-        object LabelPTLDelay: TLabel
+        object LabelPTLLength: TLabel
           Position.X = 24.000000000000000000
-          Position.Y = 284.000000000000000000
-          Size.Width = 170.000000000000000000
+          Position.Y = 208.000000000000000000
+          Size.Width = 144.000000000000000000
+          Size.Height = 20.000000000000000000
+          Size.PlatformDefault = False
+          Text = 'Max PTL length:'
+          TabOrder = 22
+        end
+        object EditPTLLength: TEdit
+          Touch.InteractiveGestures = [LongTap, DoubleTap]
+          TabOrder = 23
+          Position.X = 170.000000000000000000
+          Position.Y = 204.000000000000000000
+          Size.Width = 70.000000000000000000
+          Size.Height = 26.000000000000000000
+          Size.PlatformDefault = False
+          OnChange = EditPlacementChanged
+          OnKeyDown = EditPlacementKeyDown
+        end
+        object LabelPTLSuffix: TLabel
+          Position.X = 248.000000000000000000
+          Position.Y = 208.000000000000000000
+          Size.Width = 40.000000000000000000
+          Size.Height = 20.000000000000000000
+          Size.PlatformDefault = False
+          Text = 'um'
+          TabOrder = 23
+        end
+        object LabelPTLDelay: TLabel
+          Position.X = 304.000000000000000000
+          Position.Y = 208.000000000000000000
+          Size.Width = 144.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
           Text = 'PTL propagation delay:'
@@ -860,8 +860,8 @@
         object EditPTLDelay: TEdit
           Touch.InteractiveGestures = [LongTap, DoubleTap]
           TabOrder = 29
-          Position.X = 200.000000000000000000
-          Position.Y = 280.000000000000000000
+          Position.X = 450.000000000000000000
+          Position.Y = 204.000000000000000000
           Size.Width = 70.000000000000000000
           Size.Height = 26.000000000000000000
           Size.PlatformDefault = False
@@ -869,18 +869,47 @@
           OnKeyDown = EditPlacementKeyDown
         end
         object LabelPTLDelaySuffix: TLabel
-          Position.X = 278.000000000000000000
-          Position.Y = 284.000000000000000000
-          Size.Width = 60.000000000000000000
+          Position.X = 528.000000000000000000
+          Position.Y = 208.000000000000000000
+          Size.Width = 56.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
           Text = 'ps/um'
           TabOrder = 29
         end
-        object LabelBiasLayer: TLabel
+        object LabelPulseWidth: TLabel
           Position.X = 24.000000000000000000
-          Position.Y = 316.000000000000000000
-          Size.Width = 170.000000000000000000
+          Position.Y = 240.000000000000000000
+          Size.Width = 144.000000000000000000
+          Size.Height = 20.000000000000000000
+          Size.PlatformDefault = False
+          Text = 'Pulse width:'
+          TabOrder = 30
+        end
+        object EditPulseWidth: TEdit
+          Touch.InteractiveGestures = [LongTap, DoubleTap]
+          TabOrder = 31
+          Position.X = 170.000000000000000000
+          Position.Y = 236.000000000000000000
+          Size.Width = 70.000000000000000000
+          Size.Height = 26.000000000000000000
+          Size.PlatformDefault = False
+          OnChange = EditPlacementChanged
+          OnKeyDown = EditPlacementKeyDown
+        end
+        object LabelPulseWidthSuffix: TLabel
+          Position.X = 248.000000000000000000
+          Position.Y = 240.000000000000000000
+          Size.Width = 40.000000000000000000
+          Size.Height = 20.000000000000000000
+          Size.PlatformDefault = False
+          Text = 'um'
+          TabOrder = 31
+        end
+        object LabelBiasLayer: TLabel
+          Position.X = 304.000000000000000000
+          Position.Y = 240.000000000000000000
+          Size.Width = 144.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
           Text = 'Bias routing layer:'
@@ -888,8 +917,8 @@
         end
         object ComboBiasLayer: TComboBox
           Touch.InteractiveGestures = [LongTap, DoubleTap]
-          Position.X = 200.000000000000000000
-          Position.Y = 312.000000000000000000
+          Position.X = 450.000000000000000000
+          Position.Y = 236.000000000000000000
           Size.Width = 70.000000000000000000
           Size.Height = 26.000000000000000000
           Size.PlatformDefault = False
@@ -898,7 +927,7 @@
         end
         object LabelPlacementErrors: TLabel
           Position.X = 24.000000000000000000
-          Position.Y = 348.000000000000000000
+          Position.Y = 272.000000000000000000
           Size.Width = 592.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
