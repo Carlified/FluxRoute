@@ -1,8 +1,16 @@
-program PnRGUI;
+﻿program PnRGUI;
 
 uses
   System.StartUpCopy,
   FMX.Forms,
+  UGeometry in 'UGeometry.pas',
+  UPhysics in 'UPhysics.pas',
+  UColors in 'UColors.pas',
+  UNetNaming in 'UNetNaming.pas',
+  URoutingLegend in 'URoutingLegend.pas',
+  UDesignConfig in 'UDesignConfig.pas',
+  UConstants in 'UConstants.pas',
+  PlacementTypes in 'PlacementTypes.pas',
   MainWindow in 'MainWindow.pas' {Form1},
   CellViewer in 'CellViewer.pas',
   BlifLibrary in 'BlifLibrary.pas',

@@ -76,7 +76,7 @@
         Size.Width = 624.000000000000000000
         Size.Height = 20.000000000000000000
         Size.PlatformDefault = False
-        Text = 
+        Text =
           'Open a previous project to pick up where you left off, or start ' +
           'a new one.'
         TabOrder = 2
@@ -170,7 +170,7 @@
         Size.Width = 624.000000000000000000
         Size.Height = 28.000000000000000000
         Size.PlatformDefault = False
-        Text = 
+        Text =
           'Load a LEF file, then a library folder. Double-click a cell to v' +
           'iew it.'
         TabOrder = 1
@@ -189,7 +189,7 @@
         Size.Height = 32.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 2
-        object Button1: TButton
+        object btnLoadLef: TButton
           Margins.Right = 4.000000000000000000
           Size.Width = 300.000000000000000000
           Size.Height = 32.000000000000000000
@@ -197,9 +197,9 @@
           TabOrder = 2
           Text = 'Load LEF file'
           TextSettings.Trimming = None
-          OnClick = Button1Click
+          OnClick = btnLoadLefClick
         end
-        object Button3: TButton
+        object btnLoadLibrary: TButton
           Enabled = False
           Margins.Left = 4.000000000000000000
           Position.X = 308.000000000000000000
@@ -209,7 +209,7 @@
           TabOrder = 4
           Text = 'Load Library'
           TextSettings.Trimming = None
-          OnClick = Button3Click
+          OnClick = btnLoadLibraryClick
         end
       end
       object MemoLayers: TMemo
@@ -230,7 +230,7 @@
         Viewport.Width = 200.000000000000000000
         Viewport.Height = 312.000000000000000000
       end
-      object ListBox1: TListBox
+      object lstCells: TListBox
         Align = Client
         Enabled = False
         Margins.Left = 16.000000000000000000
@@ -272,7 +272,7 @@
         Size.Width = 624.000000000000000000
         Size.Height = 20.000000000000000000
         Size.PlatformDefault = False
-        Text = 
+        Text =
           'Double-click a cell on the left to add it, or double-click it in' +
           ' the list on the right to remove it.'
         TabOrder = 1
@@ -419,7 +419,7 @@
       Text = 'BLIF'
       ExplicitSize.cx = 640.000000000000000000
       ExplicitSize.cy = 408.000000000000000000
-      object Button5: TButton
+      object btnLoadBlif: TButton
         Align = Top
         Enabled = False
         Margins.Left = 16.000000000000000000
@@ -433,9 +433,9 @@
         TabOrder = 1
         Text = 'Load BLIF file'
         TextSettings.Trimming = None
-        OnClick = Button5Click
+        OnClick = btnLoadBlifClick
       end
-      object Memo1: TMemo
+      object memoNetlist: TMemo
         Touch.InteractiveGestures = [Pan, LongTap, DoubleTap]
         DataDetectorTypes = []
         ReadOnly = True
@@ -1185,7 +1185,7 @@
     Size.Height = 56.000000000000000000
     Size.PlatformDefault = False
     TabOrder = 10
-    object Label1: TLabel
+    object lblStatus: TLabel
       Align = Client
       Margins.Left = 12.000000000000000000
       Margins.Top = 12.000000000000000000

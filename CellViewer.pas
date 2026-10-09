@@ -15,7 +15,8 @@ uses
   Posix.SysWait,
   {$ENDIF}
   LefLibrary,
-  VerilogTiming;
+  VerilogTiming,
+  UColors;
 
 type
   TPolygonShape = record
@@ -429,7 +430,7 @@ begin
   FFilesSplitter.Width := 5;
   FFilesSplitter.Margins.Top := 8;
   FFilesSplitter.Margins.Bottom := 8;
-  FFilesSplitter.Fill.Color := $FF909090;
+  FFilesSplitter.Fill.Color := PalGrey;
   FFilesSplitter.Stroke.Kind := TBrushKind.None;
   FFilesSplitter.HitTest := True;
   FFilesSplitter.Cursor := crHSplit;
@@ -700,9 +701,6 @@ begin
 end;
 
 procedure TCellViewerForm.PaintShapes(Sender: TObject; Canvas: TCanvas);
-const
-  LayerColors: array[0..5] of TAlphaColor = (
-    $B34488CC, $B388AA44, $B3CC8844, $B38844CC, $B344CCAA, $B3CC4488);
 var
   R: TRectF;
   Scale, Ox, Oy, W, H: Double;
@@ -739,7 +737,8 @@ begin
       Pts[k].Y := (FBounds.Top + FBounds.Bottom - FShapes[i].Points[k].Y)
         * Scale + Oy;
     end;
-    Canvas.Fill.Color := LayerColors[FShapes[i].Layer mod Length(LayerColors)];
+    Canvas.Fill.Color := UColors.CellShapeLayerColors[FShapes[i].Layer mod
+    Length(UColors.CellShapeLayerColors)];
     Canvas.FillPolygon(Pts, 1.0);
   end;
 end;

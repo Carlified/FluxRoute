@@ -148,6 +148,14 @@
         <DelphiCompile Include="$(MainSource)">
             <MainSource>MainSource</MainSource>
         </DelphiCompile>
+        <DCCReference Include="UGeometry.pas"/>
+        <DCCReference Include="UPhysics.pas"/>
+        <DCCReference Include="UColors.pas"/>
+        <DCCReference Include="UNetNaming.pas"/>
+        <DCCReference Include="URoutingLegend.pas"/>
+        <DCCReference Include="UDesignConfig.pas"/>
+        <DCCReference Include="UConstants.pas"/>
+        <DCCReference Include="PlacementTypes.pas"/>
         <DCCReference Include="MainWindow.pas">
             <Form>Form1</Form>
             <FormType>fmx</FormType>
@@ -161,6 +169,13 @@
         <DCCReference Include="PipelineAnalysis.pas"/>
         <DCCReference Include="FlipFlopInsert.pas"/>
         <DCCReference Include="ClockNetwork.pas"/>
+        <DCCReference Include="ProjectData.pas"/>
+        <None Include="ClockPage.inc"/>
+        <None Include="ConfigIO.inc"/>
+        <None Include="FloorPlan.inc"/>
+        <None Include="Pipeline.inc"/>
+        <None Include="Placement.inc"/>
+        <None Include="Routing.inc"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>
@@ -204,6 +219,24 @@
                         <Overwrite>true</Overwrite>
                     </Platform>
                 </DeployFile>
+                <DeployFile LocalName="ClockPage.inc" Configuration="Debug" Class="ProjectFile">
+                    <Platform Name="Win64">
+                        <RemoteDir>.\</RemoteDir>
+                        <Overwrite>true</Overwrite>
+                    </Platform>
+                </DeployFile>
+                <DeployFile LocalName="ConfigIO.inc" Configuration="Debug" Class="ProjectFile">
+                    <Platform Name="Win64">
+                        <RemoteDir>.\</RemoteDir>
+                        <Overwrite>true</Overwrite>
+                    </Platform>
+                </DeployFile>
+                <DeployFile LocalName="FloorPlan.inc" Configuration="Debug" Class="ProjectFile">
+                    <Platform Name="Win64">
+                        <RemoteDir>.\</RemoteDir>
+                        <Overwrite>true</Overwrite>
+                    </Platform>
+                </DeployFile>
                 <DeployFile LocalName="OSXARM64\Debug\PnRGUI.dSYM" Configuration="Debug" Class="ProjectOSXDebug">
                     <Platform Name="OSXARM64">
                         <RemoteName>PnRGUI</RemoteName>
@@ -227,9 +260,39 @@
                         <Overwrite>true</Overwrite>
                     </Platform>
                 </DeployFile>
+                <DeployFile LocalName="Pipeline.inc" Configuration="Debug" Class="ProjectFile">
+                    <Platform Name="Win64">
+                        <RemoteDir>.\</RemoteDir>
+                        <Overwrite>true</Overwrite>
+                    </Platform>
+                </DeployFile>
+                <DeployFile LocalName="Placement.inc" Configuration="Debug" Class="ProjectFile">
+                    <Platform Name="Win64">
+                        <RemoteDir>.\</RemoteDir>
+                        <Overwrite>true</Overwrite>
+                    </Platform>
+                </DeployFile>
+                <DeployFile LocalName="Routing.inc" Configuration="Debug" Class="ProjectFile">
+                    <Platform Name="Win64">
+                        <RemoteDir>.\</RemoteDir>
+                        <Overwrite>true</Overwrite>
+                    </Platform>
+                </DeployFile>
                 <DeployFile LocalName="Win32\Debug\PnRGUI.exe" Configuration="Debug" Class="ProjectOutput">
                     <Platform Name="Win32">
                         <RemoteName>PnRGUI.exe</RemoteName>
+                        <Overwrite>true</Overwrite>
+                    </Platform>
+                </DeployFile>
+                <DeployFile LocalName="Win64\Debug\PnRGUI.exe" Configuration="Debug" Class="ProjectOutput">
+                    <Platform Name="Win64">
+                        <RemoteName>PnRGUI.exe</RemoteName>
+                        <Overwrite>true</Overwrite>
+                    </Platform>
+                </DeployFile>
+                <DeployFile LocalName="Win64\Debug\PnRGUI.rsm" Configuration="Debug" Class="DebugSymbols">
+                    <Platform Name="Win64">
+                        <RemoteName>PnRGUI.rsm</RemoteName>
                         <Overwrite>true</Overwrite>
                     </Platform>
                 </DeployFile>

@@ -1,0 +1,31 @@
+program PnRGUI;
+
+uses
+  System.StartUpCopy,
+  FMX.Forms,
+  UGeometry in 'UGeometry.pas',
+  UPhysics in 'UPhysics.pas',
+  UColors in 'UColors.pas',
+  UNetNaming in 'UNetNaming.pas',
+  URoutingLegend in 'URoutingLegend.pas',
+  UDesignConfig in 'UDesignConfig.pas',
+  PlacementTypes in 'PlacementTypes.pas',
+  MainWindow in 'MainWindow.pas' {Form1},
+  CellViewer in 'CellViewer.pas',
+  BlifLibrary in 'BlifLibrary.pas',
+  LefLibrary in 'LefLibrary.pas',
+  VerilogTiming in 'VerilogTiming.pas',
+  SplitterInsert in 'SplitterInsert.pas',
+  PipelineConfig in 'PipelineConfig.pas',
+  PipelineAnalysis in 'PipelineAnalysis.pas',
+  FlipFlopInsert in 'FlipFlopInsert.pas',
+  ClockNetwork in 'ClockNetwork.pas',
+  ProjectData in 'ProjectData.pas';
+
+{$R *.res}
+
+begin
+  Application.Initialize;
+  Application.CreateForm(TForm1, Form1);
+  Application.Run;
+end.

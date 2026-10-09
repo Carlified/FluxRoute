@@ -1,28 +1,7 @@
 ﻿unit ClockNetwork;
 
-{
-  Counter-flow clock network construction for the wave-pipelined netlist.
-
-  Built AFTER flip-flop insertion, on a deep copy of the DFF-inserted model
-  (the pipeline view never shows the clock). Structure:
-
-    clk (PI) -> [tap: highest row's H-tree]
-             -> [CLOCK_DELAY stage] -> [tap: next row's H-tree]
-             -> ...
-
-  - Every clocked gate's clock pin is rewired off the raw clock net onto its
-    own row's distribution tree; the raw clock net keeps only the spine.
-  - Row trees use the library's real splitters via the DP-based
-    InsertSplitterTreeForNet (each splitter output drives exactly one load).
-  - CLOCK_DELAY stages are synthetic cells carrying a continuous DelayPs
-    parameter (discretized only at export). The ordered stage list returned
-    in TClockNetworkInfo.Stages is the tuning registry: stage j sits between
-    the subtree of row(top-j) and row(top-j-1).
-  - Stage delays are seeded per cell by a two-way search from each row's
-    splitter: the clock-tree path to a cell minus (the previous row's tree
-    path to its data driver plus the data path to the cell), clamped to 0:
-      DelayPs(stage) = max_C treeDist(C) - (treeDist(P) + dataDelay(P->C))
-}
+// Counter-flow clock network built after DFF insertion: each row's real-splitter
+// tree taps clk through tunable synthetic CLOCK_DELAY stages (TClockNetworkInfo.Stages).
 
 interface
 
@@ -34,7 +13,8 @@ uses
   LefLibrary,
   BlifLibrary,
   PipelineConfig,
-  SplitterInsert;
+  SplitterInsert,
+  UNetNaming;
 
 const
   CLOCK_DELAY_CELL_NAME = 'CLOCK_DELAY';
@@ -68,21 +48,15 @@ type
 // True if the gate is a synthetic clock-network delay element.
 function IsClockDelayGate(const Gate: TGateInstance): Boolean;
 
-// Builds the clock network into AModel in place. SplitterTypes must contain
-// at least one splitter cell present in Lib. BufferTypes (may be empty) lists
-// the buffer cells used to balance arrival times along each row's tree.
-// Diagnostics (rows found, tree depths, stage seeds) are appended to Errors.
-// Returns the registry object describing the built network; nil if there was
-// nothing to build.
+// Builds the clock network into AModel in place (SplitterTypes must name a library
+// splitter; BufferTypes may be empty); diagnostics go to Errors, registry returned.
 function BuildClockNetwork(AModel: TBlifModel; Lib: TLibrary;
   const SplitterTypes: TArray<TSplitterType>;
   const BufferTypes: TArray<TBufferType>;
   Errors: TStrings): TClockNetworkInfo;
 
-// Replaces the synthetic CLOCK_DELAY spine elements with real buffer chains
-// (minimum length meeting each element's seeded delay; removed entirely when
-// the delay requirement is zero). Run after BuildClockNetwork, once the stage
-// delays are known. The spine buffer gates keep the stage's clock level.
+// Replaces each synthetic CLOCK_DELAY spine element with a real buffer chain long
+// enough for its seeded delay; run after BuildClockNetwork. Spine gates keep the level.
 procedure ReplaceClockDelaysWithBuffers(AModel: TBlifModel; Lib: TLibrary;
   const BufferTypes: TArray<TBufferType>; Errors: TStrings);
 
@@ -201,10 +175,8 @@ begin
   Result := Walk(ANetName, 0);
 end;
 
-// DFS the clock distribution tree rooted at ARowNet, recording the
-// cumulative splitter delay from the row's tap net to every clocked leaf.
-// Interior splitter delays are summed per-type (handles >2-output cells);
-// the leaves' own clk->q delays are NOT included.
+// DFS the clock tree rooted at ARowNet, mapping each clocked leaf to its cumulative
+// splitter delay from the tap net (the leaves' own clk->q is not included).
 procedure BuildTreeDistances(AModel: TBlifModel; const ARowNet: string;
   const SplitterDelays: TDictionary<string, Double>;
   Dist: TDictionary<TGateInstance, Double>);
@@ -240,10 +212,8 @@ begin
   Walk(ARowNet, 0);
 end;
 
-// Traces G's DATA inputs back (against the nets' driving direction) to the
-// nearest clocked driver. Returns that driver P and the delay from P's
-// output to G's input: P's clk->q plus any non-clocked gates in between.
-// For multi-input gates the largest arrival (worst case) is returned.
+// Walks G's data inputs back to the nearest clocked driver P, returning the path
+// delay (P's clk->q plus unclocked gates); worst case over a multi-input gate.
 function DataArrivalFromClocked(AModel: TBlifModel; G: TGateInstance;
   Delays: TDictionary<string, Double>;
   out P: TGateInstance; out Dly: Double): Boolean;
@@ -365,11 +335,11 @@ begin
   for k := 1 to Count do
   begin
     Inc(NetCounter);
-    ChildName := Format('%s__clkbuf_%d', [Leaf.CellName, NetCounter]);
+    ChildName := ClockBufNetName(Leaf.CellName, NetCounter);
     while AModel.Nets.ContainsKey(ChildName) do
     begin
       Inc(NetCounter);
-      ChildName := Format('%s__clkbuf_%d', [Leaf.CellName, NetCounter]);
+      ChildName := ClockBufNetName(Leaf.CellName, NetCounter);
     end;
 
     Gate := TGateInstance.Create;
@@ -410,11 +380,8 @@ begin
   AModel.Nets[PrevNet].Connections.Add(NC);
 end;
 
-// Coin-change: find the combination of buffer types (unbounded counts)
-// whose total delay is closest to Deficit. Fills Counts (one entry per
-// BufferTypes entry; zeroed first). Ties prefer an undershoot (a leaf
-// arriving slightly early is safer than slightly late). Delays are scaled
-// to 0.01 ps units so the DP operates on integers.
+// Coin-change: picks buffer types (unbounded) whose total delay is closest to
+// Deficit, filling Counts (ties prefer undershoot); delays scaled to 0.01 ps for DP.
 procedure BestBufferChange(const Deficit: Double;
   const BufferTypes: TArray<TBufferType>; var Counts: TArray<Integer>);
 const
@@ -501,10 +468,8 @@ begin
   end;
 end;
 
-// Pads the faster branches of a row's clock tree with the selected buffers
-// so all leaves arrive as close to the slowest leaf as possible. Buffers are
-// inserted only on the leaf-side branches, as many in a row as needed, using
-// a coin-change search over the available buffer delays.
+// Pads the faster branches of a row's tree with buffers so all leaves arrive near
+// the slowest leaf; counts chosen by coin-change over the available buffer delays.
 procedure BalanceRowTree(AModel: TBlifModel; Lib: TLibrary;
   const BufferTypes: TArray<TBufferType>; const ARowNet: string;
   const TreeDelays: TDictionary<string, Double>;
@@ -671,7 +636,7 @@ begin
     BufCounter := 0;
     for i := 0 to High(RowNetNames) do
     begin
-      RowNetNames[i] := Format('clk_row_%d', [Info.Rows[i]]);
+      RowNetNames[i] := ClockRowNetName(Info.Rows[i]);
       AModel.FindOrCreateNet(RowNetNames[i]);
       RowGateCount[i] := 0;
       TreeDepth[i] := 0;
@@ -724,11 +689,8 @@ begin
     Errors.Add(Format('Clock network: %d component(s) remain on the clock net.',
       [LeftCount]));
 
-    // Wire up every clocked gate whose clock pin was never connected at all
-    // (the BLIF files omit clk= lines, so ordinary logic gates arrive with a
-    // dangling clock input). Attach each such pin to its row's tap net so the
-    // distribution tree actually reaches every clocked component, not just
-    // the flip-flops created during insertion.
+    // Wire up clocked gates whose clock pin was never connected (BLIF omits clk=
+    // lines): attach each to its row's tap net so the tree reaches every clocked cell.
     for i := 0 to AModel.Gates.Count - 1 do
     begin
       Gate := AModel.Gates[i];
@@ -773,11 +735,7 @@ begin
         [Info.Rows[i], RowGateCount[i]]));
 
     // ---- 3. Spine taps + splitter trees ----------------------------------
-    // Counter-flow chain, bottom (source) up:
-    //   clk -> SPLITTER_S0 -> {row0 tree | DELAY_0 -> SPLITTER_S1 -> ...}
-    // Each junction splitter legally fans the clock into (a) this layer's
-    // distribution tree and (b) the delay leading to the next layer down.
-    // Stages[j] sits between the tap of Rows[j] and the tap of Rows[j+1].
+    // clk -> splitters/delays down the trunk; each junction fans its row's tree plus the delay down (Stages[j] between Rows[j] and Rows[j+1]).
     TapNet := ClockNetName;
     for RowIdx := 0 to Info.Rows.Count - 1 do
     begin
@@ -847,7 +805,7 @@ begin
 
       if RowIdx < Info.Rows.Count - 1 then
       begin
-        DelayNetName := Format('clk_delay_%d', [RowIdx + 1]);
+        DelayNetName := ClockDelayNetName(RowIdx + 1);
         Conn := TPinConnection.Create;
         Conn.Port := OutB;
         Conn.PinName := OutB.Name;
@@ -872,7 +830,7 @@ begin
         if RowIdx = Info.Rows.Count - 2 then
           SpineNetName := RowNetNames[RowIdx + 1]
         else
-          SpineNetName := Format('clk_spine_%d', [RowIdx + 1]);
+          SpineNetName := ClockSpineNetName(RowIdx + 1);
         Gate := TGateInstance.Create;
         Gate.CellName := CLOCK_DELAY_CELL_NAME;
         Gate.Cell := Lib.FindCell(CLOCK_DELAY_CELL_NAME);
@@ -931,14 +889,7 @@ begin
     end;
 
     // ---- 4. Seed stage delays (per-cell two-way search) -----------------
-    // For stage i (connecting Rows[i] -> Rows[i+1]), start at the splitter
-    // for Rows[i] and, for every clocked cell C in that row, follow both
-    // outputs until reaching C:
-    //   outA: clock tree down to C        -> treeDist(C)
-    //   outB: delay -> next row tree -> P -> treeDist(P) + dataDelay(P->C)
-    // where P is C's nearest clocked data driver. The delay is the max over
-    // C of treeDist(C) - (treeDist(P) + dataDelay), clamped to 0. The final
-    // row has no splitter/delay, so it is never the "current" row here.
+    // Stage delay = max over clocked C of treeDist(C) - (treeDist(P) + dataDelay(P->C)), clamped >= 0 (P = C's nearest clocked data driver).
     TreeDistU := TDictionary<TGateInstance, Double>.Create;
     TreeDistL := TDictionary<TGateInstance, Double>.Create;
     try
@@ -994,11 +945,8 @@ begin
   end;
 end;
 
-// Replaces every synthetic CLOCK_DELAY spine element with a real buffer chain
-// that meets its seeded delay, or (zero delay requirement) removes the element
-// and merges its nets. The minimum-length chain uses the highest-delay buffer
-// type (count = ceil(D / max delay)). Buffers keep the stage's clock level so
-// they can be placed on that row's subtree layer.
+// Replaces each synthetic CLOCK_DELAY element with a real buffer chain meeting its
+// seeded delay (zero delay removes it); chain uses the max-delay type, ceil(D/max).
 procedure ReplaceClockDelaysWithBuffers(AModel: TBlifModel; Lib: TLibrary;
   const BufferTypes: TArray<TBufferType>; Errors: TStrings);
 var
@@ -1083,7 +1031,7 @@ begin
         begin
           if k < Count then
           begin
-            NewNet := Format('clk_delay_%d_buf_%d', [i, k]);
+            NewNet := ClockDelayBufNetName(i, k);
             AModel.FindOrCreateNet(NewNet);
           end
           else
