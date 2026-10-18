@@ -287,7 +287,7 @@ begin
   NumStr := '';
   UnitStr := '';
   for i := 1 to Length(Second) do
-    if Second[i] in ['0'..'9', '.', '-', '+'] then
+    if CharInSet(Second[i], ['0'..'9', '.', '-', '+']) then
       NumStr := NumStr + Second[i]
     else
     begin

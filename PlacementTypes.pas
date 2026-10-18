@@ -7,10 +7,23 @@
 interface
 
 uses
+  System.Types,
   LefLibrary,
   BlifLibrary;
 
 type
+  // One routed trace: the net's polyline through grid-block centres, with the
+  // routing-layer name of every point. A straight run (consecutive same-layer,
+  // collinear points) is a PTL (or bias) segment; a point where the layer
+  // changes is a via; a direction change is a bend. Declared here (not in the
+  // form) so the export enumerator can reason about the circuit without form
+  // dependencies.
+  TRoutedTrace = record
+    NetName: string;
+    Points: TArray<TPoint>;
+    Layers: TArray<string>;
+  end;
+
   // One block of the floorplanning grid (for future maze routing). The _Fill
   // kinds mark space extended out to the row extremities after the allocated
   // width (drawn lighter; the allocated/fill split is not stored beyond these
@@ -41,6 +54,18 @@ type
   TBiasGroup = record
     Ports: TArray<TBiasPort>; // the group's ports, in placement order
     TotalUa: Double;
+  end;
+
+  // One horizontal bias row the router will place: its Y, what kind of line it
+  // is, the group(s) it carries and the total current it draws. Built once and
+  // shared by the floorplan (to size the trunk) and the router (to place it).
+  TBiasRowKind = (brGroup, brMerged, brClock);
+  TBiasRow = record
+    Y: Integer;
+    Kind: TBiasRowKind;
+    GrpA, GrpB: TBiasGroup; // GrpB used only by brMerged
+    TrackX: Integer;        // clock rows only
+    CurrentUa: Double;      // total current this row draws
   end;
 
   // Immobile I/O anchor: an external input/output net pinned to a grid block
@@ -76,6 +101,19 @@ type
     Band: Integer; // -1 = in the trunk; else the overflow band index
   end;
 
+  // One cell of the block-based bias network, exactly like a PTL grid cell: the
+  // router tiles the bias lines cell by cell instead of as long single traces.
+  // Dirs stores which of the four neighbours this cell connects to on the bias
+  // layer (bit 0 = N/Y-1, 1 = E/X+1, 2 = S/Y+1, 3 = W/X-1), so the export
+  // enumerator classifies bias cells into the same straight/bend/junction kinds
+  // as PTL runs without any bias-specific geometry.
+  TBiasCell = record
+    X, Y: Integer;   // grid block
+    Layer: string;   // the bias routing layer
+    Dirs: Byte;      // neighbour direction bitset
+    TapDirs: Byte;   // subset of Dirs that are skinny taps (not full-width)
+  end;
+
   // Snapshot of a placed cell's horizontal position relative to its row, used to
   // preserve the optimized placement when the bias lines are expanded (the
   // geometry rebuild must not reshuffle the cells horizontally).
@@ -83,6 +121,13 @@ type
     Gate: TGateInstance;
     X: Integer; // X offset from the row's left edge at snapshot time
   end;
+
+const
+  // TBiasCell.Dirs bits (cell-centre neighbours, app frame Y down).
+  BiasDirN = 1;
+  BiasDirE = 2;
+  BiasDirS = 4;
+  BiasDirW = 8;
 
 implementation
 

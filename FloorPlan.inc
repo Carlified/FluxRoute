@@ -211,12 +211,14 @@ begin
     end;
     Lane0W := FBiasLaneW[0];
     Lane1W := FBiasLaneW[1];
+    if FPlanBiasTrunkW < 1 then
+      FPlanBiasTrunkW := 1;
     TrunkW := RowHBlocks; // the clock trunk is always RowHBlocks wide
-    AvailableWidth := DieWBlocks - 1 - Lane0W - TrunkW - Lane1W;
+    AvailableWidth := DieWBlocks - FPlanBiasTrunkW - Lane0W - TrunkW - Lane1W;
     if AvailableWidth < 1 then
     begin
-      AddFloorplanError(Format('Die is too narrow: at least %d blocks are needed for the bias lanes and clock trunk.',
-        [1 + Lane0W + TrunkW + Lane1W]));
+      AddFloorplanError(Format('Die is too narrow: at least %d blocks are needed for the bias trunk, lanes and clock trunk.',
+        [FPlanBiasTrunkW + Lane0W + TrunkW + Lane1W]));
       RepaintFloorplanPage;
       Exit;
     end;
@@ -231,7 +233,7 @@ begin
     if FPlanMaxRowW > 0 then
       if FPlanMaxRowW < MaxRowW then
         MaxRowW := FPlanMaxRowW;
-    BodyW := MaxRowW + 1 + Lane0W + TrunkW + Lane1W;
+    BodyW := MaxRowW + FPlanBiasTrunkW + Lane0W + TrunkW + Lane1W;
     if BodyW > DieWBlocks then
     begin
       AddFloorplanError(Format('Not enough width: floorplan needs %d blocks, die has %d.',
@@ -244,7 +246,7 @@ begin
     LeftPad := (DieWBlocks - BodyW) div 2;
     if LeftPad < 0 then
       LeftPad := 0;
-    XLeft := LeftPad + 1;                 // left edge of the rows
+    XLeft := LeftPad + FPlanBiasTrunkW;    // left edge of the rows
     XRight := XLeft + MaxRowW;            // common right edge of the rows
     TotalW := LeftPad + BodyW;            // far-right edge of the bias lane
     FPlanXLeft := XLeft;
@@ -403,7 +405,7 @@ begin
     // Bias trunk (red) on the far left, and the vertical bias lanes (red)
     // flanking the clock trunk, all spanning the stack height (the reserved
     // rows above and below stay clear for the I/O pads).
-    FillPlanRect(LeftPad, TopPad, LeftPad + 1, TopPad + TotalH, fcBias, -1);
+    FillPlanRect(LeftPad, TopPad, LeftPad + FPlanBiasTrunkW, TopPad + TotalH, fcBias, -1);
     // Left feed bias lane (width Lane0W), immediately left of the clock trunk.
     FillPlanRect(XRight, TopPad, XRight + Lane0W, TopPad + TotalH, fcBias, -1);
     // Clock trunk (green), spanning the stack height. It is enclosed by bias:

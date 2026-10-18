@@ -320,6 +320,7 @@ begin
     FBottomBiasH := 0;
     FBiasLaneW := nil;
     FPlanMaxRowW := 0;
+    FPlanBiasTrunkW := 1;
     FFlowStage := fsPlacement;
     BuildFloorplan;
   end;
@@ -368,36 +369,78 @@ var
   NumBands, Band, GLeft, GRight: Integer;
   b, Upper: Integer;
   Extra: Integer;
+  TrunkCount, i, j: Integer;
+  TrunkLimit: Double;
+  BRows: TArray<TBiasRow>;
+  BranchCur: TArray<Double>;
+  TrunkOf: TArray<Integer>;
+  TmpRow: TBiasRow;
   LogicTop, LogicBot, ClockTop, ClockBot: TArray<Integer>; // tracks per band
   LogicTopP, LogicBotP, ClockTopP, ClockBotP: TArray<TArray<TBiasPort>>;
   Above, Below, TrunkPorts: TArray<TBiasPort>;
 
-  // Collects all edge ports of a band's logic cells (placed in its logic row).
-  procedure CollectLogic(Band: Integer; AEdge: TPortEdge;
+  // Which band's row a cell's TOP row sits on; AOnClockRow says whether that is
+  // the band's clock row (False = logic row). -1 when not on a logic/clock row.
+  function RowBandOf(Y: Integer; var AOnClockRow: Boolean): Integer;
+  var
+    bb: Integer;
+  begin
+    AOnClockRow := False;
+    for bb := 0 to NumBands - 1 do
+    begin
+      if (Y >= BandLogicRowY(bb)) and (Y < BandLogicRowY(bb) + FPlanRowHBlocks) then
+      begin
+        Result := bb;
+        Exit;
+      end;
+      if (Y >= BandClockRowY(bb)) and (Y < BandClockRowY(bb) + FPlanRowHBlocks) then
+      begin
+        Result := bb;
+        AOnClockRow := True;
+        Exit;
+      end;
+    end;
+    Result := -1;
+  end;
+
+  // Collects the AEdge ports of every placed cell on Band's logic row or clock
+  // row, scanning BOTH arrays, so an inserted buffer that landed on the "other"
+  // row still connects to the bias row next to it (not a band away).
+  procedure CollectRowPorts(Band: Integer; AOnClockRow: Boolean; AEdge: TPortEdge;
     var APorts: TArray<TBiasPort>);
   var
-    k: Integer;
+    k, lv, c2, bb: Integer;
+    OnClk: Boolean;
   begin
     SetLength(APorts, 0);
     for k := 0 to High(FPlacedComponents) do
-      if BandIndexOfY(FPlacedComponents[k].Y) = Band then
+    begin
+      bb := RowBandOf(FPlacedComponents[k].Y, OnClk);
+      if (bb = Band) and (OnClk = AOnClockRow) then
         CollectCellPorts(FPlacedComponents[k].Gate, FPlacedComponents[k].X,
           FPlacedComponents[k].Y, AEdge, APorts);
-  end;
-
-  // Collects all edge ports of a band's clock-row cells (subtree interiors).
-  procedure CollectClock(Band: Integer; AEdge: TPortEdge;
-    var APorts: TArray<TBiasPort>);
-  var
-    lv, c2: Integer;
-  begin
-    SetLength(APorts, 0);
+    end;
     for lv := 0 to High(FClockSubtree) do
       for c2 := 0 to High(FClockSubtree[lv]) do
-        if (not FClockSubtree[lv][c2].IsLeaf) and
-           (BandIndexOfY(FClockSubtree[lv][c2].Y) = Band) then
-          CollectCellPorts(FClockSubtree[lv][c2].Gate, FClockSubtree[lv][c2].X,
-            FClockSubtree[lv][c2].Y, AEdge, APorts);
+        if not FClockSubtree[lv][c2].IsLeaf then
+        begin
+          bb := RowBandOf(FClockSubtree[lv][c2].Y, OnClk);
+          if (bb = Band) and (OnClk = AOnClockRow) then
+            CollectCellPorts(FClockSubtree[lv][c2].Gate, FClockSubtree[lv][c2].X,
+              FClockSubtree[lv][c2].Y, AEdge, APorts);
+        end;
+  end;
+
+  procedure CollectLogic(Band: Integer; AEdge: TPortEdge;
+    var APorts: TArray<TBiasPort>);
+  begin
+    CollectRowPorts(Band, False, AEdge, APorts);
+  end;
+
+  procedure CollectClock(Band: Integer; AEdge: TPortEdge;
+    var APorts: TArray<TBiasPort>);
+  begin
+    CollectRowPorts(Band, True, AEdge, APorts);
   end;
 
   // Number of tracks a channel needs: partition the above and below sides into
@@ -535,6 +578,37 @@ begin
     Extra := 0;
   if Extra > 0 then
     IncreaseClockTrunkColumn(1, Extra);
+
+  // --- Bias trunk (far left): pack branches onto shared trunks ---
+  // The current limit applies to every wire in the bias network, but the trunk
+  // limit lets several branches share one trunk wire, so the trunk needs one
+  // column per TRUNK (not per branch). Rows are packed top-to-bottom greedily.
+  BuildBiasRows(MaxUa, BRows);
+  for i := 1 to High(BRows) do
+  begin
+    TmpRow := BRows[i];
+    j := i - 1;
+    while (j >= 0) and (BRows[j].Y > TmpRow.Y) do
+    begin
+      BRows[j + 1] := BRows[j];
+      Dec(j);
+    end;
+    BRows[j + 1] := TmpRow;
+  end;
+  SetLength(BranchCur, Length(BRows));
+  for i := 0 to High(BRows) do
+    BranchCur[i] := BRows[i].CurrentUa;
+  TrunkLimit := FDesignConfig.MaxBiasTrunkCurrentUa;
+  if TrunkLimit < MaxUa then
+    TrunkLimit := MaxUa; // a trunk must at least carry one branch
+  TrunkOf := PackBiasTrunks(BranchCur, TrunkLimit);
+  TrunkCount := 1;
+  for i := 0 to High(TrunkOf) do
+    if TrunkOf[i] + 1 > TrunkCount then
+      TrunkCount := TrunkOf[i] + 1;
+  Extra := TrunkCount - FPlanBiasTrunkW;
+  if Extra > 0 then
+    IncreaseBiasTrunkColumn(Extra);
 
   if FFlowStage < fsBias then FFlowStage := fsBias;
   UpdateUI;

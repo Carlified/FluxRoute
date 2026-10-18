@@ -34,6 +34,7 @@ type
     FDieH: string;
     FUtilization: string;
     FBiasCurrent: string;
+  FTrunkCurrent: string;
     FPTLLength: string;
     FFreqGHz: string;
     FPTLDelay: string;
@@ -61,6 +62,7 @@ type
     property DieH: string read FDieH write FDieH;
     property Utilization: string read FUtilization write FUtilization;
     property BiasCurrent: string read FBiasCurrent write FBiasCurrent;
+  property TrunkCurrent: string read FTrunkCurrent write FTrunkCurrent;
     property PTLLength: string read FPTLLength write FPTLLength;
     property FreqGHz: string read FFreqGHz write FFreqGHz;
     property PTLDelay: string read FPTLDelay write FPTLDelay;
@@ -118,6 +120,7 @@ begin
   FDieH := '';
   FUtilization := '';
   FBiasCurrent := '';
+  FTrunkCurrent := '';
   FPTLLength := '';
   FFreqGHz := '';
   FPTLDelay := '';
@@ -158,6 +161,8 @@ begin
     FUtilization := Root.GetValue<string>('utilization');
   if Root.GetValue('biasCurrent') is TJSONValue then
     FBiasCurrent := Root.GetValue<string>('biasCurrent');
+  if Root.GetValue('trunkCurrent') is TJSONValue then
+    FTrunkCurrent := Root.GetValue<string>('trunkCurrent');
   if Root.GetValue('ptlLength') is TJSONValue then
     FPTLLength := Root.GetValue<string>('ptlLength');
   if Root.GetValue('freqGHz') is TJSONValue then
@@ -220,6 +225,7 @@ begin
     Root.AddPair('dieH', FDieH);
     Root.AddPair('utilization', FUtilization);
     Root.AddPair('biasCurrent', FBiasCurrent);
+  Root.AddPair('trunkCurrent', FTrunkCurrent);
     Root.AddPair('ptlLength', FPTLLength);
     Root.AddPair('freqGHz', FFreqGHz);
     Root.AddPair('ptlDelay', FPTLDelay);

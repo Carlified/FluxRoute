@@ -1,4 +1,4 @@
-﻿unit MainWindow;
+unit MainWindow;
 
 interface
 
@@ -10,7 +10,9 @@ uses
   System.IOUtils, System.JSON, System.Math, System.Math.Vectors,
   System.Generics.Collections, System.StrUtils,
   UGeometry, UPhysics, UColors, UNetNaming, URoutingLegend,
-  PlacementTypes, UDesignConfig, UConstants,
+  PlacementTypes, UDesignConfig, UConstants, ExportModel, ExportLibrary, ExportGDS,
+  ExportCIR,
+  UPython,
   LefLibrary,
   BlifLibrary,
   CellViewer,
@@ -34,20 +36,15 @@ const
   TabPipeline = 4;
   TabClock = 5;
   TabPlacement = 6;  // floorplanning / placement configuration
-  TabFloorplan = 7;  // floorplan visualisation
-  TabRouting = 8;    // final routing
+TabFloorplan = 7;  // floorplan visualisation
+TabRouting = 8;    // final routing
+TabExport = 9;     // export the routed circuit (final page)
 
 type
   // One routed trace: the net it belongs to and the grid blocks (cell centres)
 // it passes through, in order. Layers holds the routing-layer name for each
 // point (via crossings change the layer between consecutive points).
-  TRoutedTrace = record
-    NetName: string;
-    Points: TArray<TPoint>;
-    Layers: TArray<string>;
-  end;
-
-// One point-to-point routing job: a driver pin -> a load pin (a signal net,
+  // One point-to-point routing job: a driver pin -> a load pin (a signal net,
   // or one link of a clock net's fan-out). Kind distinguishes them for the
   // summary counts; Start/Goal are the pin grid blocks on the primary layer.
   TRouteJobKind = (rkSignal, rkClock);
@@ -120,6 +117,7 @@ type
     LabelDieAreaText: TLabel;
     EditUtilization: TEdit;
     EditBiasCurrent: TEdit;
+    EditTrunkCurrent: TEdit;
     EditPTLLength: TEdit;
     EditFreqGHz: TEdit;
     EditPTLDelay: TEdit;
@@ -153,6 +151,17 @@ type
     PaintBox4: TPaintBox;
     ButtonBack: TButton;
     ButtonNext: TButton;
+    MemoExportStatus: TMemo;
+    EditBlockLibDir: TEdit;
+    ButtonBrowseLib: TButton;
+    EditExportDir: TEdit;
+    EditExportStem: TEdit;
+    CheckExportGds: TCheckBox;
+    CheckExportDef: TCheckBox;
+    CheckExportCir: TCheckBox;
+    ButtonPreflight: TButton;
+    ButtonExport: TButton;
+    MemoExportLog: TMemo;
     OpenDialog1: TOpenDialog;
     SaveDialog1: TSaveDialog;
     procedure FormCreate(Sender: TObject);
@@ -185,6 +194,9 @@ procedure ButtonOptimizeClick(Sender: TObject);
     procedure CheckBoxToggleChange(Sender: TObject);
     procedure ButtonRunRoutingClick(Sender: TObject);
     procedure ButtonValidateRoutingClick(Sender: TObject);
+    procedure ButtonBrowseLibClick(Sender: TObject);
+    procedure ButtonPreflightClick(Sender: TObject);
+    procedure ButtonExportClick(Sender: TObject);
     procedure PaintBox1MouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Single);
     procedure PaintBox1MouseMove(Sender: TObject; Shift: TShiftState; X, Y: Single);
     procedure PaintBox1MouseUp(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Single);
@@ -278,6 +290,8 @@ procedure ButtonOptimizeClick(Sender: TObject);
     FSpine: TArray<TSpineComponent>; // placed clock trunk (splitters + buffers)
     FPlacementModel: TBlifModel; // model used for floorplan (post-DFF pipeline)
     FOwnedPlacementModel: TBlifModel; // private clone validation mutates (nil = alias)
+    FBlockLibDir: string;         // block-library root (PDK); '' = none configured
+    FExportMissingKinds: Integer;   // kinds the library did not cover (preflight)
     // Band layout snapshot for the ordering algorithm.
     FPlanCore: Double;
     FPlanLevels: TArray<Integer>;
@@ -296,7 +310,12 @@ procedure ButtonOptimizeClick(Sender: TObject);
     FBiasRowH: TArray<TArray<Integer>>; // [band][0=top,1=middle] extra rows
     FBottomBiasH: Integer;              // extra rows on the bottom-most bias line
     FBiasLaneW: TArray<Integer>;        // [0]=left feed lane, [1]=right lane width (>=1)
+    // The block-based bias network built by RouteBiasLines (one cell per grid
+    // block with its neighbour directions on the bias layer). Both the routing
+    // page paint and the export enumerator read this directly.
+    FBiasCells: TArray<TBiasCell>;
     FPlanMaxRowW: Integer;              // row-width override for the nudge (0=auto)
+    FPlanBiasTrunkW: Integer;           // far-left bias trunk width in columns (>=1)
     FPlanTrunkW: Integer;               // snapshot: clock trunk width (RowHBlocks)
     FPlanLane0W: Integer;               // snapshot: left feed bias lane width
     FPlanLane1W: Integer;               // snapshot: far-right bias lane width
@@ -396,6 +415,16 @@ procedure ButtonOptimizeClick(Sender: TObject);
     procedure DrawRoutingLegend(Canvas: TCanvas);
     procedure RunRouting;
     procedure RunRoutingValidation;
+procedure AppendScanTally(const D: TExportDesign;
+      const Cells: TArray<TExportCellCount>; const Lines: TStrings);
+    procedure ReportLibraryCoverage(const D: TExportDesign;
+      const Cells: TArray<TExportCellCount>; const Lines: TStrings);
+    procedure ReportCellFileStatus(const Cells: TArray<TExportCellCount>;
+      const Lines: TStrings; NeedGds, NeedCir: Boolean);
+    procedure RefreshExportPreflight;
+    procedure RunGdsExport(const OutDir, Stem: string);
+    procedure RunCirExport(const OutDir, Stem: string);
+    procedure RunTbConfigExport(const OutDir, Stem: string);
     function HasValidationBufferTraces: Boolean;
     function TraceLengthUm(const ATr: TRoutedTrace; Core: Double): Double;
     function IsBiasTrace(const ATr: TRoutedTrace): Boolean;
@@ -433,7 +462,11 @@ procedure ButtonOptimizeClick(Sender: TObject);
     // unchanged.
     function IncreaseBiasRowHeight(Band, Which, ByRows: Integer): Boolean;
     function IncreaseClockTrunkColumn(ColIdx, ByCols: Integer): Boolean;
+    function IncreaseBiasTrunkColumn(ByCols: Integer): Boolean;
     function IncreaseTopBottomBiasRow(IsTop: Boolean; ByRows: Integer): Boolean;
+    procedure BuildBiasRows(MaxUa: Double; out Rows: TArray<TBiasRow>);
+    function PackBiasTrunks(const Currents: TArray<Double>;
+      Limit: Double): TArray<Integer>;
     function MaxUaGreaterThanLargestPort: Boolean;
     // Bias-line routing: collects a row's edge ports, partitions them into
     // current groups, and routes each group as a horizontal track to the trunk.
@@ -1494,6 +1527,23 @@ begin
     BuildRoutingLayers;
     RepaintRoutingPage;
   end;
+  if TabControl1.TabIndex = TabExport then
+  begin
+    // Export is the final page: it needs a validated circuit. Bounce back to
+    // the Routing page otherwise.
+    if FFlowStage < fsValidated then
+    begin
+      FSwitchingTab := True;
+      try
+        TabControl1.TabIndex := TabRouting;
+      finally
+        FSwitchingTab := False;
+      end;
+      UpdateUI;
+      Exit;
+    end;
+    RefreshExportPreflight;
+  end;
   if TabControl1.TabIndex = TabPipeline then
   begin
     FPanX := 0;
@@ -1679,5 +1729,802 @@ begin
     FRoutingBusy := False;
   end;
 end;
+
+// Prints the per-kind instance tally (runs / bends / via composites / splits /
+// cells / track) into Lines.
+procedure TForm1.AppendScanTally(const D: TExportDesign;
+  const Cells: TArray<TExportCellCount>; const Lines: TStrings);
+var
+  RunKey, BendKey, ViaKey, SplitKey: TDictionary<string, Int64>;
+  Tot: Int64;
+  i: Integer;
+  s: string;
+  V: TExportViaBlock;
+begin
+  RunKey := TDictionary<string, Int64>.Create;
+  BendKey := TDictionary<string, Int64>.Create;
+  ViaKey := TDictionary<string, Int64>.Create;
+  SplitKey := TDictionary<string, Int64>.Create;
+  try
+    for i := 0 to High(D.Runs) do
+    begin
+      if D.Runs[i].Family = xfPtl then
+        s := 'PTL ' + D.Runs[i].Layer
+      else
+        s := 'BIAS ' + D.Runs[i].Layer;
+      if RunKey.ContainsKey(s) then
+        Tot := RunKey[s]
+      else
+        Tot := 0;
+      RunKey.AddOrSetValue(s, Tot + D.Runs[i].Count);
+    end;
+    for i := 0 to High(D.Bends) do
+    begin
+      if D.Bends[i].Family = xfPtl then
+        s := 'PTL ' + D.Bends[i].Layer
+      else
+        s := 'BIAS ' + D.Bends[i].Layer;
+      if BendKey.ContainsKey(s) then
+        Tot := BendKey[s]
+      else
+        Tot := 0;
+      BendKey.AddOrSetValue(s, Tot + 1);
+    end;
+    for i := 0 to High(D.ViaBlocks) do
+    begin
+      V := D.ViaBlocks[i];
+      s := V.LoLayer + '_' + V.HiLayer;
+      case V.Kind of
+        vkViaBend:
+          if V.Variant > 0 then
+            s := s + ' BENDN'
+          else
+            s := s + ' BENDS';
+        vkViaTurn: s := s + ' TURN';
+      else
+        s := s + ' STRAIGHT';
+      end;
+      if ViaKey.ContainsKey(s) then
+        Tot := ViaKey[s]
+      else
+        Tot := 0;
+      ViaKey.AddOrSetValue(s, Tot + 1);
+    end;
+    for i := 0 to High(D.Splits) do
+    begin
+      s := 'BIAS ' + D.Splits[i].Layer + ' ' + IntToStr(D.Splits[i].ConnCount) + 'conn';
+      if SplitKey.ContainsKey(s) then
+        Tot := SplitKey[s]
+      else
+        Tot := 0;
+      SplitKey.AddOrSetValue(s, Tot + 1);
+    end;
+
+    Lines.Add(Format('runs=%d bends=%d viaBlocks=%d splits=%d terminals=%d',
+      [Length(D.Runs), Length(D.Bends), Length(D.ViaBlocks), Length(D.Splits),
+       Length(D.Terminals)]));
+    for s in RunKey.Keys do
+      Lines.Add('  run     ' + s + ' = ' + IntToStr(RunKey[s]) + ' blocks');
+    for s in BendKey.Keys do
+      Lines.Add('  bend    ' + s + ' = ' + IntToStr(BendKey[s]));
+    for s in ViaKey.Keys do
+      Lines.Add('  ptl+via ' + s + ' = ' + IntToStr(ViaKey[s]));
+    for s in SplitKey.Keys do
+      Lines.Add('  split   ' + s + ' = ' + IntToStr(SplitKey[s]));
+    for i := 0 to High(Cells) do
+      Lines.Add('  cell    ' + Cells[i].Name + ' = ' + IntToStr(Cells[i].Count));
+    Lines.Add('  track   TRK (ground/track tile) = always required');
+  finally
+    RunKey.Free;
+    BendKey.Free;
+    ViaKey.Free;
+    SplitKey.Free;
+  end;
+end;
+
+// Reports which block kinds the design needs and whether a configured library
+// covers them (Phase 2 verification; the import UI arrives later).
+procedure TForm1.ReportLibraryCoverage(const D: TExportDesign;
+  const Cells: TArray<TExportCellCount>; const Lines: TStrings);
+var
+  Kinds: TList<string>;
+  Lib: TExportLibrary;
+  BlockRoot, ManifestPath, KindsText: string;
+  Pitch: Double;
+  NeedGds, NeedLef, NeedCir: Boolean;
+  i: Integer;
+  MissingTally: Integer;
+  Missing, Errors: TStringList;
+  k: string;
+begin
+  Kinds := TList<string>.Create;
+  Lib := TExportLibrary.Create;
+  Missing := TStringList.Create;
+  Errors := TStringList.Create;
+  // Per-format preflight: only the export types the user selected are required,
+  // so missing files for the other types never block the chosen export.
+  NeedGds := CheckExportGds.IsChecked;
+  NeedLef := CheckExportDef.IsChecked;
+  NeedCir := CheckExportCir.IsChecked;
+  try
+    CollectDesignKinds(D, Kinds);
+    FExportMissingKinds := Kinds.Count;
+    Lines.Add('  blocks  required kinds = ' + IntToStr(Kinds.Count));
+    KindsText := '';
+    for k in Kinds do
+      KindsText := KindsText + k + ', ';
+    Lines.Add('    ' + Copy(KindsText, 1, Length(KindsText) - 2));
+    BlockRoot := '';
+    if FBlockLibDir <> '' then
+      BlockRoot := FBlockLibDir
+    else if TDirectory.Exists(TPath.Combine(GetCurrentDir, 'blocklib')) then
+      BlockRoot := TPath.Combine(GetCurrentDir, 'blocklib');
+    if BlockRoot <> '' then
+      ManifestPath := TPath.Combine(BlockRoot, 'manifest.json');
+    Pitch := FDesignConfig.CoreUm;
+    if Pitch <= 0 then
+      Pitch := FPlanCore;
+    if (ManifestPath <> '') and TFile.Exists(ManifestPath) then
+    begin
+      Lib.LoadFile(ManifestPath);
+      MissingTally := 0;
+      for k in Kinds do
+      begin
+        if not Lib.Find(k) then
+        begin
+          Missing.Add(k);
+          Inc(MissingTally);
+        end
+        else if not CheckBlockTriple(BlockRoot, Lib.Blocks[k], Errors,
+          NeedGds, NeedLef, NeedCir and KindNeedsCir(k)) then
+          Missing.Add(k + ' (triple FAIL)');
+      end;
+      FExportMissingKinds := Missing.Count;
+      Lines.Add(Format('  library %s: %d kinds loaded; %d needed, %d missing/failed',
+        [ManifestPath, Lib.BlockCount, Kinds.Count, Missing.Count]));
+      Lines.Add(Format('  checking: GDS=%s DEF/LEF=%s CIR=%s',
+        [BoolToStr(NeedGds, True), BoolToStr(NeedLef, True), BoolToStr(NeedCir, True)]));
+      for i := 0 to Missing.Count - 1 do
+        Lines.Add('    missing ' + Missing[i]);
+      if Missing.Count > 0 then
+        Lines.Add('    -> "Import a prepared library" or fill these next.');
+      for i := 0 to Errors.Count - 1 do
+        Lines.Add('      ! ' + Errors[i]);
+      // Merge scaffolding for the kinds the manifest is missing (never touch the
+      // entries the user has already filled in).
+      if MissingTally > 0 then
+      begin
+        WriteManifestTemplate(ManifestPath, Pitch, Kinds);
+        Lines.Add('    -> added scaffolding for the missing kinds to ' + ManifestPath);
+      end;
+    end
+    else
+    begin
+      // No library yet: write a ready-to-fill manifest, so the user only supplies
+      // real sizes/pins and drops the block files.
+      if BlockRoot = '' then
+        BlockRoot := TPath.Combine(GetCurrentDir, 'blocklib');
+      TDirectory.CreateDirectory(BlockRoot);
+      ManifestPath := TPath.Combine(BlockRoot, 'manifest.json');
+      WriteManifestTemplate(ManifestPath, Pitch, Kinds);
+      Lines.Add('  no block library; wrote template manifest to ' + ManifestPath);
+      Lines.Add('    fill sizeUm/pins per block, drop the .gds/.lef/.cir files next to it, then re-validate.');
+    end;
+  finally
+    Errors.Free;
+    Missing.Free;
+    Lib.Free;
+    Kinds.Free;
+  end;
+end;
+
+// Cells resolve their layout/schematic from the already-parsed design library,
+// not from the block-library manifest: each cell's SourceFiles (filled by
+// FindCellSourceFiles) must include a .gds and a .cir; the LEF macro is derived
+// from the parsed cell (single library LEF), so only GDS/CIR are checked here.
+procedure TForm1.ReportCellFileStatus(const Cells: TArray<TExportCellCount>;
+  const Lines: TStrings; NeedGds, NeedCir: Boolean);
+var
+  Cell: TCell;
+  i, j: Integer;
+  HasGds, HasCir: Boolean;
+begin
+  if FLib = nil then
+    Exit;
+  for i := 0 to High(Cells) do
+  begin
+    Cell := FLib.FindCell(Cells[i].Name);
+    if Cell = nil then
+    begin
+      Lines.Add('  ! cell ' + Cells[i].Name + ': not found in the library.');
+      Continue;
+    end;
+    HasGds := False;
+    HasCir := False;
+    for j := 0 to Cell.SourceFiles.Count - 1 do
+    begin
+      if SameText(ExtractFileExt(Cell.SourceFiles[j]), '.gds') then
+        HasGds := True;
+      if SameText(ExtractFileExt(Cell.SourceFiles[j]), '.cir') then
+        HasCir := True;
+    end;
+    if (not HasGds) and NeedGds then
+      Lines.Add('  ! cell ' + Cells[i].Name + ': missing .gds source in the cell folder.');
+    if (not HasCir) and NeedCir then
+      Lines.Add('  ! cell ' + Cells[i].Name + ': missing .cir source in the cell folder.');
+  end;
+end;
+
+// Refreshes the Export page's readiness memo: the instance tally, block-library
+// coverage (missing kinds / triple-check failures) and the placed-cell file
+// status. Runs when entering the Export tab or on Recheck.
+procedure TForm1.RefreshExportPreflight;
+var
+  D: TExportDesign;
+  Cells: TArray<TExportCellCount>;
+  Names: TList<string>;
+  Gate: TGateInstance;
+begin
+  if FBlockLibDir <> '' then
+    EditBlockLibDir.Text := FBlockLibDir;
+  MemoExportStatus.Lines.Clear;
+  MemoExportLog.Lines.Clear;
+  if (FLib = nil) or ((Length(FRouteTraces) = 0) and (Length(FBiasCells) = 0)) then
+  begin
+    MemoExportStatus.Lines.Add('No routed circuit to export yet - run through the pipeline.');
+    ButtonExport.Enabled := False;
+    Exit;
+  end;
+  MemoExportStatus.Lines.Add('-- Export readiness --');
+  ExportScanAll(FRouteTraces, FBiasCells, FRouteLayers, D);
+  Names := TList<string>.Create;
+  try
+    if FPlacementModel <> nil then
+      for Gate in FPlacementModel.Gates do
+        if Gate <> nil then
+          Names.Add(Gate.CellName);
+    ExportScanCells(Names.ToArray, Cells);
+  finally
+    Names.Free;
+  end;
+  AppendScanTally(D, Cells, MemoExportStatus.Lines);
+  ReportLibraryCoverage(D, Cells, MemoExportStatus.Lines);
+  ReportCellFileStatus(Cells, MemoExportStatus.Lines,
+    CheckExportGds.IsChecked, CheckExportCir.IsChecked);
+  ButtonExport.Enabled := FFlowStage >= fsValidated;
+  if FFlowStage < fsValidated then
+    MemoExportStatus.Lines.Add('~ Run Validate Routing first - Export is locked until then.');
+end;
+
+procedure TForm1.ButtonBrowseLibClick(Sender: TObject);
+var
+  d: string;
+begin
+  d := FBlockLibDir;
+  if SelectDirectory('Block library (PDK) folder', '', d) then
+  begin
+    FBlockLibDir := d;
+    EditBlockLibDir.Text := d;
+    RefreshExportPreflight;
+  end;
+end;
+
+procedure TForm1.ButtonPreflightClick(Sender: TObject);
+begin
+  RefreshExportPreflight;
+end;
+
+procedure TForm1.ButtonExportClick(Sender: TObject);
+begin
+  RefreshExportPreflight;
+  if FFlowStage < fsValidated then
+  begin
+    MemoExportLog.Lines.Add('Export locked: run Validate Routing first.');
+    Exit;
+  end;
+  if FExportMissingKinds > 0 then
+  begin
+    MemoExportLog.Lines.Add(Format(
+      'Export blocked: %d block kind(s) missing or unverified (see the status memo).',
+      [FExportMissingKinds]));
+    Exit;
+  end;
+  MemoExportLog.Lines.Add('Export ready - all block kinds present and verified.');
+  if CheckExportGds.IsChecked then
+    RunGdsExport(EditExportDir.Text, EditExportStem.Text);
+  if CheckExportCir.IsChecked then
+    RunCirExport(EditExportDir.Text, EditExportStem.Text);
+  if (not CheckExportGds.IsChecked) and (not CheckExportCir.IsChecked) then
+    MemoExportLog.Lines.Add('No output format selected - tick .gds/.def/.cir first.');
+end;
+
+// Phase 4 (GDS): builds the write_die_gds.py placement recipe from the routed
+// instances + placed cells and runs the gdstk script to write <Stem>.gds into
+// OutDir. Bends are placed rot-0 for now (their rotation refinement is a later
+// slice, as is full track/ground tiling).
+procedure TForm1.RunGdsExport(const OutDir, Stem: string);
+var
+  D: TExportDesign;
+  Lib: TExportLibrary;
+  Kinds: TList<string>;
+  Sources: TArray<string>;
+  Instances: TArray<TGDSInstance>;
+  BlockRoot: string;
+  Core, DieWUm, DieHUm: Double;
+  i, j, n: Integer;
+  Ent: TExportBlockEntry;
+  Ins: TGDSInstance;
+  R: TExportRun;
+  BU: TExportBend;
+  V: TExportViaBlock;
+  Sp: TExportSplit;
+  Tm: TExportTerminal;
+  P: TPlacedComponent;
+  Node: TPlacedClockNode;
+  Spine: TSpineComponent;
+  Cell: TCell;
+  CellH: Double;
+  kk: Integer;
+  DieWb, DieHb, gx, gy, run0, fx0: Integer;
+  SrcSeen: TDictionary<string, Boolean>;
+  CellOcc: TArray<Boolean>;
+  LayerOcc: TDictionary<Int64, TDictionary<string, Boolean>>;
+  Lst: TDictionary<string, Boolean>;
+  Key: Int64;
+  Ly: string;
+  Recipe, RecipePath, ErrPath, OutPath, ErrMsg: string;
+  ExitCode: Integer;
+
+begin
+  BlockRoot := '';
+  if FBlockLibDir <> '' then
+    BlockRoot := FBlockLibDir
+  else if TDirectory.Exists(TPath.Combine(GetCurrentDir, 'blocklib')) then
+    BlockRoot := TPath.Combine(GetCurrentDir, 'blocklib');
+  Lib := TExportLibrary.Create;
+  Kinds := TList<string>.Create;
+  try
+    if (BlockRoot <> '') and
+       TFile.Exists(TPath.Combine(BlockRoot, 'manifest.json')) then
+      Lib.LoadFile(TPath.Combine(BlockRoot, 'manifest.json'));
+
+    ExportScanAll(FRouteTraces, FBiasCells, FRouteLayers, D);
+    CollectDesignKinds(D, Kinds);
+
+    Core := FDesignConfig.CoreUm;
+    if Core <= 0 then
+      Core := FPlanCore;
+    DieWUm := FDesignConfig.DieWUm;
+    DieHUm := FDesignConfig.DieHUm;
+    if (DieWUm <= 0) or (DieHUm <= 0) then
+    begin
+      DieWUm := FFloorplanW * Core;
+      DieHUm := FFloorplanH * Core;
+    end;
+
+    // Sources: the block library cells for the used kinds, then the placed
+    // cells' own GDS (resolved from the parsed library).
+    for j := 0 to Kinds.Count - 1 do
+      if Lib.GetBlock(Kinds[j], Ent) then
+      begin
+        n := Length(Sources);
+        SetLength(Sources, n + 1);
+        if Ent.GdsFile <> '' then
+          Sources[n] := TPath.Combine(BlockRoot, Ent.GdsFile)
+        else
+          Sources[n] := TPath.Combine(BlockRoot, Ent.Name + '.gds');
+      end;
+
+    // Instances: runs (unit tile arrayed along the run), bends (rot 0 for now),
+    // via composites, bias splits, and the placed cells.
+    for i := 0 to High(D.Runs) do
+    begin
+      R := D.Runs[i];
+      if R.Dir = xdH then
+        Ins := GdsArrayed(
+          KindDefaultName(KindRun(R.Family, R.Layer, R.Taps)), R.X0 * Core, R.Y0 * Core, 0,
+          R.Count, 1, Core, 0)
+      else
+        Ins := GdsArrayed(
+          KindDefaultName(KindRun(R.Family, R.Layer, R.Taps)), R.X0 * Core, R.Y0 * Core, 90,
+          1, R.Count, 0, Core);
+      n := Length(Instances);
+      SetLength(Instances, n + 1);
+      Instances[n] := Ins;
+    end;
+    for i := 0 to High(D.Bends) do
+    begin
+      BU := D.Bends[i];
+      Ins := GdsSingle(
+        KindDefaultName(KindBend(BU.Family, BU.Layer, BU.Taps)), BU.X * Core, BU.Y * Core);
+      // Rotate the authored corner (canonical W+S) onto this turn's two
+      // neighbour directions. Data direction is irrelevant - just the geometry.
+      Ins.RotDeg := 90 * NodeRotation(
+        DirBitOf(-BU.InX, -BU.InY) or DirBitOf(BU.OutX, BU.OutY));
+      n := Length(Instances);
+      SetLength(Instances, n + 1);
+      Instances[n] := Ins;
+    end;
+    for i := 0 to High(D.ViaBlocks) do
+    begin
+      V := D.ViaBlocks[i];
+      Ins := GdsSingle(
+        KindDefaultName(KindVia(V.LoLayer, V.HiLayer, V.Kind, V.Variant)),
+        V.X * Core, V.Y * Core);
+      Ins.RotDeg := V.RotDeg;
+      n := Length(Instances);
+      SetLength(Instances, n + 1);
+      Instances[n] := Ins;
+    end;
+    for i := 0 to High(D.Splits) do
+    begin
+      Sp := D.Splits[i];
+      Ins := GdsSingle(
+        KindDefaultName(KindSplit(Sp.Layer, Sp.ConnCount, Sp.Taps)), Sp.X * Core, Sp.Y * Core);
+      Ins.RotDeg := 90 * NodeRotation(Sp.Dirs);
+      n := Length(Instances);
+      SetLength(Instances, n + 1);
+      Instances[n] := Ins;
+    end;
+    // Every line endpoint (deg-1 cell) gets a cap block whose single stub points
+    // at the wire, rotated to face its neighbour.
+    for i := 0 to High(D.Terminals) do
+    begin
+      Tm := D.Terminals[i];
+      Ins := GdsSingle(
+        KindDefaultName(KindCap(Tm.Family, Tm.Layer, Tm.Taps)), Tm.X * Core, Tm.Y * Core);
+      Ins.RotDeg := 90 * NodeRotation(Tm.Dirs);
+      n := Length(Instances);
+      SetLength(Instances, n + 1);
+      Instances[n] := Ins;
+    end;
+    for i := 0 to High(FPlacedComponents) do
+    begin
+      P := FPlacedComponents[i];
+      if P.CellName = '' then
+        Continue;
+      Ins := GdsSingle(P.CellName, P.X * Core, P.Y * Core);
+      // Cells are referenced by their EXACT GDS file (their in-file name may
+      // carry a version suffix), not by an assumed cell name.
+      Cell := FLib.FindCell(P.CellName);
+      if Cell <> nil then
+        for j := 0 to Cell.SourceFiles.Count - 1 do
+          if SameText(ExtractFileExt(Cell.SourceFiles[j]), '.gds') then
+          begin
+            Ins.SrcFile := Cell.SourceFiles[j];
+            Break;
+          end;
+      n := Length(Instances);
+      SetLength(Instances, n + 1);
+      Instances[n] := Ins;
+    end;
+    // Clock-tree interior cells (splitters/buffers), placed unrotated like the
+    // logic cells; the clock leaves are real gates already in FPlacedComponents.
+    for i := 0 to High(FClockSubtree) do
+      for j := 0 to High(FClockSubtree[i]) do
+      begin
+        Node := FClockSubtree[i][j];
+        if Node.IsLeaf or (Node.Gate = nil) or (Node.Gate.CellName = '') then
+          Continue;
+        Ins := GdsSingle(Node.Gate.CellName, Node.X * Core, Node.Y * Core);
+        Cell := FLib.FindCell(Node.Gate.CellName);
+        if Cell <> nil then
+          for kk := 0 to Cell.SourceFiles.Count - 1 do
+            if SameText(ExtractFileExt(Cell.SourceFiles[kk]), '.gds') then
+            begin
+              Ins.SrcFile := Cell.SourceFiles[kk];
+              Break;
+            end;
+        n := Length(Instances);
+        SetLength(Instances, n + 1);
+        Instances[n] := Ins;
+      end;
+    // Clock trunk (spine) cells. Rotated trunk cells use the routing page's
+    // exact transform (local (x,y) -> canvas (CellH - y, x), i.e. a 90 deg
+    // rotation plus reflection about the cell origin); unrotated overflow
+    // buffers are placed like logic cells.
+    for i := 0 to High(FSpine) do
+    begin
+      Spine := FSpine[i];
+      if (Spine.Gate = nil) or (Spine.Gate.CellName = '') then
+        Continue;
+      if Spine.Rotated and (Spine.Gate.Cell <> nil) then
+      begin
+        CellH := Spine.Gate.Cell.Height;
+        Ins := GdsSingle(Spine.Gate.CellName,
+          Spine.X * Core + CellH, DieHUm - Spine.Y * Core);
+        Ins.RotDeg := -90;
+        Ins.Mirror := True;
+      end
+      else
+        Ins := GdsSingle(Spine.Gate.CellName, Spine.X * Core, Spine.Y * Core);
+      Cell := FLib.FindCell(Spine.Gate.CellName);
+      if Cell <> nil then
+        for j := 0 to Cell.SourceFiles.Count - 1 do
+          if SameText(ExtractFileExt(Cell.SourceFiles[j]), '.gds') then
+          begin
+            Ins.SrcFile := Cell.SourceFiles[j];
+            Break;
+          end;
+      n := Length(Instances);
+      SetLength(Instances, n + 1);
+      Instances[n] := Ins;
+    end;
+
+    // ---- Track / fill layer ----
+    // Every grid block without a cell gets a TRACK_TILE. Then, for each layer in
+    // the TRACK block's if_unused list, any track block that carries no geometry
+    // on that layer (no bias line, PTL or via pair) also gets the fill shape.
+    // Tiles/fills cover the whole die, no further.
+    if Lib.GetBlock(AlwaysRequiredKind, Ent) and (Core > 0) and
+       (FFloorplanW > 0) and (FFloorplanH > 0) then
+    begin
+      DieWb := FFloorplanW;
+      DieHb := FFloorplanH;
+      SetLength(CellOcc, DieWb * DieHb);
+      for i := 0 to High(FPlacedComponents) do
+        for gy := FPlacedComponents[i].Y to FPlacedComponents[i].Y + FPlacedComponents[i].H - 1 do
+          for gx := FPlacedComponents[i].X to FPlacedComponents[i].X + FPlacedComponents[i].W - 1 do
+            if (gx >= 0) and (gx < DieWb) and (gy >= 0) and (gy < DieHb) then
+              CellOcc[gy * DieWb + gx] := True;
+      for i := 0 to High(FClockSubtree) do
+        for j := 0 to High(FClockSubtree[i]) do
+          if not FClockSubtree[i][j].IsLeaf then
+            for gy := FClockSubtree[i][j].Y to FClockSubtree[i][j].Y + FClockSubtree[i][j].H - 1 do
+              for gx := FClockSubtree[i][j].X to FClockSubtree[i][j].X + FClockSubtree[i][j].W - 1 do
+                if (gx >= 0) and (gx < DieWb) and (gy >= 0) and (gy < DieHb) then
+                  CellOcc[gy * DieWb + gx] := True;
+      for i := 0 to High(FSpine) do
+        for gy := FSpine[i].Y to FSpine[i].Y + FSpine[i].H - 1 do
+          for gx := FSpine[i].X to FSpine[i].X + FSpine[i].W - 1 do
+            if (gx >= 0) and (gx < DieWb) and (gy >= 0) and (gy < DieHb) then
+              CellOcc[gy * DieWb + gx] := True;
+
+      // Per-block set of layers that already carry geometry.
+      LayerOcc := TDictionary<Int64, TDictionary<string, Boolean>>.Create;
+      try
+        for i := 0 to High(D.Runs) do
+          for kk := 0 to D.Runs[i].Count - 1 do
+          begin
+            if D.Runs[i].Dir = xdH then
+            begin
+              gx := D.Runs[i].X0 + kk;
+              gy := D.Runs[i].Y0;
+            end
+            else
+            begin
+              gx := D.Runs[i].X0;
+              gy := D.Runs[i].Y0 + kk;
+            end;
+            Key := Int64(gy) * DieWb + gx;
+            if not LayerOcc.TryGetValue(Key, Lst) then
+            begin
+              Lst := TDictionary<string, Boolean>.Create;
+              LayerOcc.Add(Key, Lst);
+            end;
+            Lst.AddOrSetValue(D.Runs[i].Layer, True);
+          end;
+        for i := 0 to High(D.Bends) do
+        begin
+          Key := Int64(D.Bends[i].Y) * DieWb + D.Bends[i].X;
+          if not LayerOcc.TryGetValue(Key, Lst) then
+          begin
+            Lst := TDictionary<string, Boolean>.Create;
+            LayerOcc.Add(Key, Lst);
+          end;
+          Lst.AddOrSetValue(D.Bends[i].Layer, True);
+        end;
+        for i := 0 to High(D.ViaBlocks) do
+        begin
+          Key := Int64(D.ViaBlocks[i].Y) * DieWb + D.ViaBlocks[i].X;
+          if not LayerOcc.TryGetValue(Key, Lst) then
+          begin
+            Lst := TDictionary<string, Boolean>.Create;
+            LayerOcc.Add(Key, Lst);
+          end;
+          Lst.AddOrSetValue(D.ViaBlocks[i].LoLayer, True);
+          Lst.AddOrSetValue(D.ViaBlocks[i].HiLayer, True);
+        end;
+        for i := 0 to High(D.Splits) do
+        begin
+          Key := Int64(D.Splits[i].Y) * DieWb + D.Splits[i].X;
+          if not LayerOcc.TryGetValue(Key, Lst) then
+          begin
+            Lst := TDictionary<string, Boolean>.Create;
+            LayerOcc.Add(Key, Lst);
+          end;
+          Lst.AddOrSetValue(D.Splits[i].Layer, True);
+        end;
+
+        // Emit track tiles (and fills) as horizontal runs, row by row.
+        for gy := 0 to DieHb - 1 do
+        begin
+          gx := 0;
+          while gx < DieWb do
+          begin
+            if CellOcc[gy * DieWb + gx] then
+            begin
+              Inc(gx);
+              Continue;
+            end;
+            run0 := gx;
+            while (gx < DieWb) and (not CellOcc[gy * DieWb + gx]) do
+              Inc(gx);
+            Ins := GdsArrayed(KindDefaultName(AlwaysRequiredKind),
+              run0 * Core, gy * Core, 0, gx - run0, 1, Core, 0);
+            n := Length(Instances);
+            SetLength(Instances, n + 1);
+            Instances[n] := Ins;
+            // Fills: the if_unused layers absent from each block of this run.
+            for kk := 0 to High(Ent.IfUnused) do
+            begin
+              if Ent.IfUnused[kk].Gds = '' then
+                Continue;
+              Ly := Ent.IfUnused[kk].Layer;
+              fx0 := run0;
+              while fx0 < gx do
+              begin
+                if LayerOcc.TryGetValue(Int64(gy) * DieWb + fx0, Lst) and
+                   Lst.ContainsKey(Ly) then
+                begin
+                  Inc(fx0);
+                  Continue;
+                end;
+                run0 := fx0;
+                while (fx0 < gx) and
+                      (not (LayerOcc.TryGetValue(Int64(gy) * DieWb + fx0, Lst) and
+                            Lst.ContainsKey(Ly))) do
+                  Inc(fx0);
+                Ins := GdsArrayed('', run0 * Core, gy * Core, 0, fx0 - run0, 1, Core, 0);
+                Ins.Cell := ChangeFileExt(ExtractFileName(Ent.IfUnused[kk].Gds), '');
+                Ins.SrcFile := TPath.Combine(BlockRoot, Ent.IfUnused[kk].Gds);
+                n := Length(Instances);
+                SetLength(Instances, n + 1);
+                Instances[n] := Ins;
+              end;
+            end;
+          end;
+        end;
+      finally
+        for Lst in LayerOcc.Values do
+          Lst.Free;
+        LayerOcc.Free;
+      end;
+    end;
+
+    // Every referenced cell GDS must be in the sources (logic, clock-tree and
+    // spine cells each carry their exact file); add them once, deduplicated.
+    SrcSeen := TDictionary<string, Boolean>.Create;
+    try
+      for i := 0 to High(Sources) do
+        SrcSeen.AddOrSetValue(LowerCase(Sources[i]), True);
+      for i := 0 to High(Instances) do
+        if (Instances[i].SrcFile <> '') and
+           (not SrcSeen.ContainsKey(LowerCase(Instances[i].SrcFile))) then
+        begin
+          SrcSeen.AddOrSetValue(LowerCase(Instances[i].SrcFile), True);
+          n := Length(Sources);
+          SetLength(Sources, n + 1);
+          Sources[n] := Instances[i].SrcFile;
+        end;
+    finally
+      SrcSeen.Free;
+    end;
+
+    TDirectory.CreateDirectory(OutDir);
+    OutPath := TPath.Combine(OutDir, Stem + '.gds');
+    RecipePath := TPath.Combine(TPath.GetTempPath,
+      'pnr_die_' + IntToStr(TThread.GetTickCount) + '.json');
+    ErrPath := ChangeFileExt(RecipePath, '.err');
+    Recipe := BuildDieRecipe(DieWUm, DieHUm, Core, Sources, Instances, OutPath, 0);
+    TFile.WriteAllText(RecipePath, Recipe);
+    // Keep the recipe next to the output for inspection/debugging.
+    TFile.WriteAllText(TPath.Combine(OutDir, Stem + '.recipe.json'), Recipe);
+    MemoExportLog.Lines.Add(Format('GDS: %d instances, %d sources -> %s',
+      [Length(Instances), Length(Sources), OutPath]));
+    MemoExportLog.Lines.Add('  recipe: ' + TPath.Combine(OutDir, Stem + '.recipe.json'));
+    ExitCode := UPython.RunPythonScript('write_die_gds.py',
+      '"' + RecipePath + '"', ErrPath, ErrMsg);
+    if ExitCode = 0 then
+      MemoExportLog.Lines.Add('GDS written OK.')
+    else
+      MemoExportLog.Lines.Add('GDS FAILED: ' + ErrMsg);
+  finally
+    Kinds.Free;
+    Lib.Free;
+  end;
+end;
+
+
+// Exports a flat SPICE netlist: .include lines for the block-library and placed
+// cell subckt files, one X-instance per placed cell with its pins bound to their
+// netlist nets, and the bias trunk as a supply source. Structural TRACK blocks
+// and the per-tile PTL/via geometry are omitted (the cells carry the function).
+// Exports a flat SPICE netlist: .include lines for the block-library and placed
+// cell subckt files, one X-instance per placed cell (pins bound to their nets)
+// and per routed PTL/VIA block, chained by shared nodes. The bias family has no
+// circuit equivalent and is omitted; caps terminate each PTL run.
+// Phase 6 (CIR): writes <Stem>.cir. The netlist construction lives in ExportCIR
+// (form-free, mirroring ExportGDS); here we only gather the design snapshot and
+// write the file.
+procedure TForm1.RunCirExport(const OutDir, Stem: string);
+var
+  Lib: TExportLibrary;
+  ClockModel: TBlifModel;
+  BlockRoot, OutPath, CirText: string;
+begin
+  BlockRoot := '';
+  if FBlockLibDir <> '' then
+    BlockRoot := FBlockLibDir
+  else if TDirectory.Exists(TPath.Combine(GetCurrentDir, 'blocklib')) then
+    BlockRoot := TPath.Combine(GetCurrentDir, 'blocklib');
+  Lib := TExportLibrary.Create;
+  try
+    if (BlockRoot <> '') and
+       TFile.Exists(TPath.Combine(BlockRoot, 'manifest.json')) then
+      Lib.LoadFile(TPath.Combine(BlockRoot, 'manifest.json'));
+    // The clock subtree/spine cells are placed from the buffered clone
+    // (FClockBufferedModel), so the clock-tree route endpoints must be bound
+    // against that model - FClockModel would not match the placed gates.
+    ClockModel := FClockBufferedModel;
+    if ClockModel = nil then
+      ClockModel := FClockModel;
+    CirText := ExportCIR.BuildCirText(FRouteTraces, FBiasCells, FRouteLayers,
+      FPlacedComponents, FClockSubtree, FSpine, FPlacementModel, ClockModel, Lib,
+      BlockRoot, Stem);
+    TDirectory.CreateDirectory(OutDir);
+    OutPath := TPath.Combine(OutDir, Stem + '.cir');
+    TFile.WriteAllText(OutPath, CirText);
+    MemoExportLog.Lines.Add(Format('CIR: %d cells + PTL/via blocks -> %s',
+      [Length(FPlacedComponents), OutPath]));
+    RunTbConfigExport(OutDir, Stem);
+  finally
+    Lib.Free;
+  end;
+end;
+
+// Writes <Stem>.tb.json next to the netlist: the clock net, the input/output
+// nets and the design numbers (clock frequency, PTL delay, pitch, die size) the
+// Python test-bench tools read.
+procedure TForm1.RunTbConfigExport(const OutDir, Stem: string);
+var
+  ClockNet: string;
+  Ins, Outs: TArray<string>;
+  i: Integer;
+begin
+  ClockNet := '';
+  if (FClockPadIdx >= 0) and (FClockPadIdx <= High(FPads)) then
+    ClockNet := FPads[FClockPadIdx].NetName
+  else if FClockNet <> nil then
+    ClockNet := FClockNet.SourceNet;
+  SetLength(Ins, 0);
+  SetLength(Outs, 0);
+  for i := 0 to High(FPads) do
+  begin
+    if (i = FClockPadIdx) or (FPads[i].NetName = '') then
+      Continue;
+    if FPads[i].IsInput then
+    begin
+      SetLength(Ins, Length(Ins) + 1);
+      Ins[High(Ins)] := FPads[i].NetName;
+    end
+    else
+    begin
+      SetLength(Outs, Length(Outs) + 1);
+      Outs[High(Outs)] := FPads[i].NetName;
+    end;
+  end;
+  TDirectory.CreateDirectory(OutDir);
+  TFile.WriteAllText(TPath.Combine(OutDir, Stem + '.tb.json'),
+    ExportCIR.BuildTbJson(Stem, ClockNet, Ins, Outs,
+      FDesignConfig.FreqGHz, FDesignConfig.PtlDelayPsPerUm,
+      FDesignConfig.CoreUm, FDesignConfig.DieWUm, FDesignConfig.DieHUm,
+      FDesignConfig.MaxPtlLengthUm));
+  MemoExportLog.Lines.Add(Format('TB config: %d in / %d out, clock "%s".',
+    [Length(Ins), Length(Outs), ClockNet]));
+end;
+
+
+
 
 end.

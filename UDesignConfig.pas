@@ -16,6 +16,7 @@ type
     DieHUm: Double;          // die height
     UtilizationPct: Double;  // target utilization, percent
     MaxBiasCurrentUa: Double;
+    MaxBiasTrunkCurrentUa: Double; // trunk wires may carry more than one branch
     MaxPtlLengthUm: Double;
     FreqGHz: Double;         // operating frequency
     PtlDelayPsPerUm: Double; // PTL propagation delay

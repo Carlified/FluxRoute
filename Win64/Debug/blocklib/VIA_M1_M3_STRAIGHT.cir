@@ -1,0 +1,4 @@
+* VIA_M1_M3_STRAIGHT - ideal (lossless) PTL segment, 10 um block.
+.subckt VIA_M1_M3_STRAIGHT P0 P1
+T0 P0 0 P1 0 LOSSLESS Z0=5.3 TD=1p
+.ends

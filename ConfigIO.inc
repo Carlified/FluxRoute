@@ -127,6 +127,7 @@ begin
   // Placement budget defaults.
   EditUtilization.Text := '60';
   EditBiasCurrent.Text := '5';
+  EditTrunkCurrent.Text := '20';
   EditPTLLength.Text := '550';
   EditFreqGHz.Text := '10';
   EditPTLDelay.Text := '10';
@@ -173,6 +174,8 @@ begin
       EditUtilization.Text := FormatDim2(Core);
     if TryDimParse(EditBiasCurrent.Text, Core) then
       EditBiasCurrent.Text := FormatDim2(Core);
+    if TryDimParse(EditTrunkCurrent.Text, Core) then
+      EditTrunkCurrent.Text := FormatDim2(Core);
     if TryDimParse(EditPTLLength.Text, Core) then
       EditPTLLength.Text := FormatDim2(Core);
     if TryDimParse(EditFreqGHz.Text, Core) then
@@ -207,6 +210,7 @@ begin
   if TryDimParse(EditDieH.Text, D) then FDesignConfig.DieHUm := D;
   if TryDimParse(EditUtilization.Text, D) then FDesignConfig.UtilizationPct := D;
   if TryDimParse(EditBiasCurrent.Text, D) then FDesignConfig.MaxBiasCurrentUa := D;
+  if TryDimParse(EditTrunkCurrent.Text, D) then FDesignConfig.MaxBiasTrunkCurrentUa := D;
   if TryDimParse(EditPTLLength.Text, D) then FDesignConfig.MaxPtlLengthUm := D;
   if TryDimParse(EditFreqGHz.Text, D) then FDesignConfig.FreqGHz := D;
   if TryDimParse(EditPTLDelay.Text, D) then FDesignConfig.PtlDelayPsPerUm := D;
@@ -289,6 +293,8 @@ begin
     AddPlacementMsg('Target utilization must be a valid number.', PalRed, True);
   if not TryDimParse(EditBiasCurrent.Text, Bias) then
     AddPlacementMsg('Max bias current must be a valid number.', PalRed, True);
+  if not TryDimParse(EditTrunkCurrent.Text, Bias) then
+    AddPlacementMsg('Max trunk current must be a valid number.', PalRed, True);
   if not TryDimParse(EditPTLLength.Text, PTL) then
     AddPlacementMsg('Max PTL length must be a valid number.', PalRed, True);
   if not TryDimParse(EditFreqGHz.Text, Bias) then
@@ -481,6 +487,7 @@ begin
   FProject.DieH := EditDieH.Text;
   FProject.Utilization := EditUtilization.Text;
   FProject.BiasCurrent := EditBiasCurrent.Text;
+  FProject.TrunkCurrent := EditTrunkCurrent.Text;
   FProject.PTLLength := EditPTLLength.Text;
   FProject.FreqGHz := EditFreqGHz.Text;
   FProject.PTLDelay := EditPTLDelay.Text;
@@ -555,6 +562,7 @@ begin
     EditDieH.Text := FProject.DieH;
     EditUtilization.Text := FProject.Utilization;
     EditBiasCurrent.Text := FProject.BiasCurrent;
+    EditTrunkCurrent.Text := FProject.TrunkCurrent;
     EditPTLLength.Text := FProject.PTLLength;
     EditFreqGHz.Text := FProject.FreqGHz;
     EditPTLDelay.Text := FProject.PTLDelay;

@@ -598,7 +598,7 @@ procedure TForm1.BuildPipelineModel;
 var
   PM: TBlifModel;
   Dummy: TStringList;
-  MaxClockedDelay, MaxUnclockedDelay, FFDelay: Double;
+  FFDelay: Double;
   Delay: Double;
   Gate: TGateInstance;
   i, k: Integer;
@@ -606,6 +606,7 @@ var
   Net: TNet;
   NC: TNetConnection;
   DelayMemo: TDictionary<TGateInstance, Double>;
+  MinMemo: TDictionary<TGateInstance, Double>;
   FFCell: TCell;
   LevelDelay, GateArea: Double;
   Cmp: TBlifModel;
@@ -650,6 +651,52 @@ var
     if Dly < 0 then Dly := 0;
     Result := MaxIn + Dly;
     DelayMemo.Add(G, Result);
+  end;
+
+  // Minimum achievable arrival at G: the best worst-case stage prefix delay
+  // that DFF insertion can arrange at G. Clocked gates reset the arrival to
+  // their own clock-to-output delay; unclocked gates add their own delay to
+  // the maximum over data drivers of min(driver arrival, FFDelay), where the
+  // FFDelay option is a DFF cut on that driver edge. The worst value over
+  // all gates is the minimum achievable worst-case stage delay (a special
+  // case of Leiserson-Saxe minimum-period retiming).
+  function MinArrival(G: TGateInstance): Double;
+  var
+    MaxIn, Dly, A: Double;
+    m: Integer;
+    C: TPinConnection;
+    N: TNet;
+    NC2: TNetConnection;
+  begin
+    if MinMemo.TryGetValue(G, Result) then
+      Exit;
+    Dly := CellDelayPs(G.Cell);
+    if Dly < 0 then Dly := 0;
+    if CellHasClock(G.Cell) then
+    begin
+      Result := Dly;
+      MinMemo.Add(G, Result);
+      Exit;
+    end;
+    MaxIn := 0;
+    for m := 0 to G.Connections.Count - 1 do
+    begin
+      C := G.Connections[m];
+      if C.Port.Direction <> pdInput then Continue;
+      if IsClockPinName(C.Port.Name) then Continue;
+      if PM.Nets.TryGetValue(C.NetName, N) then
+        for NC2 in N.Connections do
+          if NC2.IsDriver then
+          begin
+            A := MinArrival(NC2.Gate);
+            if A > FFDelay then
+              A := FFDelay;
+            if A > MaxIn then
+              MaxIn := A;
+          end;
+    end;
+    Result := Dly + MaxIn;
+    MinMemo.Add(G, Result);
   end;
 
   // Same measure the stats bar shows: worst DelayToOutput over all gates
@@ -751,24 +798,9 @@ begin
         DelayMemo.Free;
       end;
 
-      // Fastest possible circuit: the slower of the slowest clocked
-      // component (its own level) or the slowest unclocked component plus
-      // a flip-flop.
+      // Fastest possible circuit: exact minimum achievable worst-case stage
+      // delay over all DFF insertions (see MinArrival above).
       FMaxWorstPath := Max(1, FMaxWorstPath);
-      MaxClockedDelay := 0;
-      MaxUnclockedDelay := 1;
-      for Gate in PM.Gates do
-      begin
-        Delay := CellDelayPs(Gate.Cell);
-        if Delay <= 0 then Continue;
-        if CellHasClock(Gate.Cell) then
-        begin
-          if Delay > MaxClockedDelay then
-            MaxClockedDelay := Delay;
-        end
-        else if Delay > MaxUnclockedDelay then
-          MaxUnclockedDelay := Delay;
-      end;
       FFCell := FLib.FindCell(FFlipFlopNames[0]);
       FFDelay := 0;
       if FFCell <> nil then
@@ -777,18 +809,46 @@ begin
         if FFDelay < 0 then
           FFDelay := 0;
       end;
-      FMinDelay := MaxClockedDelay;
-      if MaxUnclockedDelay + FFDelay > FMinDelay then
-        FMinDelay := MaxUnclockedDelay + FFDelay;
+      MinMemo := TDictionary<TGateInstance, Double>.Create;
+      try
+        FMinDelay := 0;
+        for Gate in PM.Gates do
+        begin
+          Delay := MinArrival(Gate);
+          if Delay > FMinDelay then
+            FMinDelay := Delay;
+        end;
+      finally
+        MinMemo.Free;
+      end;
       if FMinDelay < 1 then
         FMinDelay := 1;
 
+      // The theoretical minimum can be unreachable in practice: forced
+      // balancing chains (gap-fill, output padding) and nets the levelizer
+      // cannot cut add stages that M* does not account for. Build the
+      // fastest pipeline the tool actually produces and clamp the right
+      // slider endpoint to its measured worst stage, so the predicted
+      // limit is always deliverable.
+      Cmp := PM.Clone;
+      try
+        CDummy := TStringList.Create;
+        try
+          InsertDelayLevelizedFFs(Cmp, FLib, FFlipFlopNames[0], FMinDelay);
+          PadOutputFFs(Cmp, FLib, FFlipFlopNames[0]);
+          ComputeClockLevels(Cmp, CDummy);
+        finally
+          CDummy.Free;
+        end;
+        Delay := WorstLevelDelayOf(Cmp);
+      finally
+        Cmp.Free;
+      end;
+      if Delay > FMinDelay then
+        FMinDelay := Delay;
+
       Dummy := TStringList.Create;
       try
-        // Output alignment for both modes: every gate on the highest clock
-        // level feeds its loads through a flip-flop, so all output signals
-        // are clocked out on the same clock edge.
-        InsertTopLevelFFs(PM, FLib, FFlipFlopNames[0]);
         if FSliderPos = 0 then
         begin
           // Compact mode at the far-left slider position.
@@ -821,7 +881,6 @@ begin
           try
             CDummy := TStringList.Create;
             try
-              InsertTopLevelFFs(Cmp, FLib, FFlipFlopNames[0]);
               InsertCompactFlipFlops(Cmp, FLib, FFlipFlopNames[0]);
               ComputeClockLevels(Cmp, CDummy);
               PadOutputFFs(Cmp, FLib, FFlipFlopNames[0]);

@@ -601,12 +601,12 @@
       Text = 'Placement Configuration'
       ExplicitSize.cx = 640.000000000000000000
       ExplicitSize.cy = 408.000000000000000000
-      object LayoutPlacementTop: TLayout
-        Align = Top
-        Size.Width = 640.000000000000000000
-        Size.Height = 300.000000000000000000
-        Size.PlatformDefault = False
-        TabOrder = 1
+        object LayoutPlacementTop: TLayout
+          Align = Top
+          Size.Width = 640.000000000000000000
+          Size.Height = 336.000000000000000000
+          Size.PlatformDefault = False
+          TabOrder = 1
         object LabelPlacementTitle: TLabel
           Position.X = 24.000000000000000000
           Position.Y = 12.000000000000000000
@@ -925,9 +925,38 @@
           TabOrder = 25
           OnChange = ComboBiasLayerChange
         end
-        object LabelPlacementErrors: TLabel
+        object LabelTrunkCurrent: TLabel
           Position.X = 24.000000000000000000
           Position.Y = 272.000000000000000000
+          Size.Width = 144.000000000000000000
+          Size.Height = 20.000000000000000000
+          Size.PlatformDefault = False
+          Text = 'Max trunk current:'
+          TabOrder = 32
+        end
+        object EditTrunkCurrent: TEdit
+          Touch.InteractiveGestures = [LongTap, DoubleTap]
+          TabOrder = 33
+          Position.X = 170.000000000000000000
+          Position.Y = 268.000000000000000000
+          Size.Width = 70.000000000000000000
+          Size.Height = 26.000000000000000000
+          Size.PlatformDefault = False
+          OnChange = EditPlacementChanged
+          OnKeyDown = EditPlacementKeyDown
+        end
+        object LabelTrunkCurrentSuffix: TLabel
+          Position.X = 248.000000000000000000
+          Position.Y = 272.000000000000000000
+          Size.Width = 40.000000000000000000
+          Size.Height = 20.000000000000000000
+          Size.PlatformDefault = False
+          Text = 'uA'
+          TabOrder = 34
+        end
+        object LabelPlacementErrors: TLabel
+          Position.X = 24.000000000000000000
+          Position.Y = 304.000000000000000000
           Size.Width = 592.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
@@ -1175,6 +1204,204 @@
         Size.Width = 435.000000000000000000
         Size.Height = 424.000000000000000000
         Size.PlatformDefault = False
+      end
+    end
+    object TabItem9: TTabItem
+      CustomIcon = <
+        item
+        end>
+      TextSettings.Trimming = None
+      IsSelected = False
+      Size.Width = 8.000000000000000000
+      Size.Height = 8.000000000000000000
+      Size.PlatformDefault = False
+      StyleLookup = ''
+      TabOrder = 0
+      Text = 'Export'
+      ExplicitSize.cx = 640.000000000000000000
+      ExplicitSize.cy = 408.000000000000000000
+      object MemoExportStatus: TMemo
+        Touch.InteractiveGestures = [Pan, LongTap, DoubleTap]
+        DataDetectorTypes = []
+        ReadOnly = True
+        Align = Top
+        Margins.Left = 8.000000000000000000
+        Margins.Top = 8.000000000000000000
+        Margins.Right = 8.000000000000000000
+        Position.X = 8.000000000000000000
+        Position.Y = 8.000000000000000000
+        Size.Width = 624.000000000000000000
+        Size.Height = 168.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 0
+        Viewport.Width = 624.000000000000000000
+        Viewport.Height = 168.000000000000000000
+      end
+      object LayoutExportLib: TLayout
+        Align = Top
+        Margins.Left = 8.000000000000000000
+        Margins.Top = 8.000000000000000000
+        Margins.Right = 8.000000000000000000
+        Position.X = 8.000000000000000000
+        Position.Y = 184.000000000000000000
+        Size.Width = 624.000000000000000000
+        Size.Height = 30.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 1
+        object lblExportLib: TLabel
+          Align = Left
+          Margins.Right = 8.000000000000000000
+          Position.X = 8.000000000000000000
+          Size.Width = 110.000000000000000000
+          Size.Height = 30.000000000000000000
+          Size.PlatformDefault = False
+          Text = 'Block library:'
+          TextSettings.Trimming = None
+        end
+        object EditBlockLibDir: TEdit
+          Align = Client
+          Position.X = 126.000000000000000000
+          Size.Width = 408.000000000000000000
+          Size.Height = 30.000000000000000000
+          Size.PlatformDefault = False
+          Text = '(use ./blocklib by default)'
+          TabOrder = 0
+        end
+        object ButtonBrowseLib: TButton
+          Align = Right
+          Margins.Left = 8.000000000000000000
+          Position.X = 542.000000000000000000
+          Size.Width = 82.000000000000000000
+          Size.Height = 30.000000000000000000
+          Size.PlatformDefault = False
+          Text = 'Browse...'
+          TextSettings.Trimming = None
+          TabOrder = 1
+          OnClick = ButtonBrowseLibClick
+        end
+      end
+      object LayoutExportOut: TLayout
+        Align = Top
+        Margins.Left = 8.000000000000000000
+        Margins.Right = 8.000000000000000000
+        Position.X = 8.000000000000000000
+        Position.Y = 222.000000000000000000
+        Size.Width = 624.000000000000000000
+        Size.Height = 30.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 2
+        object lblExportDir: TLabel
+          Align = Left
+          Margins.Right = 8.000000000000000000
+          Position.X = 8.000000000000000000
+          Size.Width = 90.000000000000000000
+          Size.Height = 30.000000000000000000
+          Size.PlatformDefault = False
+          Text = 'Output dir:'
+          TextSettings.Trimming = None
+        end
+        object EditExportDir: TEdit
+          Align = Client
+          Position.X = 106.000000000000000000
+          Size.Width = 358.000000000000000000
+          Size.Height = 30.000000000000000000
+          Size.PlatformDefault = False
+          Text = './output'
+          TabOrder = 0
+        end
+        object lblExportStem: TLabel
+          Align = Right
+          Margins.Right = 8.000000000000000000
+          Position.X = 472.000000000000000000
+          Size.Width = 42.000000000000000000
+          Size.Height = 30.000000000000000000
+          Size.PlatformDefault = False
+          Text = 'Stem:'
+          TextSettings.Trimming = None
+        end
+        object EditExportStem: TEdit
+          Align = Right
+          Position.X = 522.000000000000000000
+          Size.Width = 102.000000000000000000
+          Size.Height = 30.000000000000000000
+          Size.PlatformDefault = False
+          Text = 'die'
+          TabOrder = 1
+        end
+      end
+      object LayoutExportFmt: TLayout
+        Align = Top
+        Margins.Left = 8.000000000000000000
+        Margins.Right = 8.000000000000000000
+        Position.X = 8.000000000000000000
+        Position.Y = 260.000000000000000000
+        Size.Width = 624.000000000000000000
+        Size.Height = 32.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 3
+        object CheckExportGds: TCheckBox
+          Align = Left
+          Size.Width = 100.000000000000000000
+          Size.Height = 32.000000000000000000
+          Size.PlatformDefault = False
+          Text = 'Export .gds'
+          TextSettings.Trimming = None
+        end
+        object CheckExportDef: TCheckBox
+          Align = Left
+          Size.Width = 100.000000000000000000
+          Size.Height = 32.000000000000000000
+          Size.PlatformDefault = False
+          Text = 'Export .def'
+          TextSettings.Trimming = None
+        end
+        object CheckExportCir: TCheckBox
+          Align = Left
+          Size.Width = 100.000000000000000000
+          Size.Height = 32.000000000000000000
+          Size.PlatformDefault = False
+          Text = 'Export .cir'
+          TextSettings.Trimming = None
+        end
+        object ButtonPreflight: TButton
+          Align = Right
+          Margins.Right = 8.000000000000000000
+          Position.X = 372.000000000000000000
+          Size.Width = 90.000000000000000000
+          Size.Height = 32.000000000000000000
+          Size.PlatformDefault = False
+          Text = 'Recheck'
+          TextSettings.Trimming = None
+          TabOrder = 0
+          OnClick = ButtonPreflightClick
+        end
+        object ButtonExport: TButton
+          Align = Right
+          Position.X = 470.000000000000000000
+          Size.Width = 154.000000000000000000
+          Size.Height = 32.000000000000000000
+          Size.PlatformDefault = False
+          Text = 'Export'
+          TextSettings.Trimming = None
+          TabOrder = 1
+          OnClick = ButtonExportClick
+        end
+      end
+      object MemoExportLog: TMemo
+        Touch.InteractiveGestures = [Pan, LongTap, DoubleTap]
+        DataDetectorTypes = []
+        ReadOnly = True
+        Align = Client
+        Margins.Left = 8.000000000000000000
+        Margins.Top = 8.000000000000000000
+        Margins.Right = 8.000000000000000000
+        Margins.Bottom = 8.000000000000000000
+        Size.Width = 624.000000000000000000
+        Size.Height = 122.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 4
+        Viewport.Width = 624.000000000000000000
+        Viewport.Height = 122.000000000000000000
       end
     end
   end

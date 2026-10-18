@@ -1,0 +1,21 @@
+{
+  "_comment": "Helper config for the RSFQ test-bench tools. Design-derived values (clock frequency, PTL delay, core pitch, die size, I/O nets) are exported by the app to die.tb.json next to die.cir; anything set here overrides or supplements them. Run the tools from this directory (or pass --config).",
+
+  "outputDir": "../Win64/Debug/output",
+  "cir": "die.cir",
+  "designConfig": "die.tb.json",
+  "tbOut": "die_tb.cir",
+  "tbSpec": "tb_spec.json",
+
+  "josimCli": "C:/Users/27005348/Downloads/JoSIM-v2.7-windows-x64/bin/josim-cli.exe",
+  "rsfqLib": "C:/Users/27005348/Desktop/RSFQlib",
+
+  "_comment2": "Stimulus knobs. clockPeriodPs <= 0 means derive it from freqGHz in die.tb.json (period = 1000/freqGHz). launchOffsetPs is where inside each slot the data pulse starts; PTL TD is per 10um block (blocks come from the app's core pitch).",
+  "clockPeriodPs": 0.0,
+  "launchOffsetPs": 50.0,
+  "pulseWidthPs": 3.0,
+  "pulseAmplitudeUa": 600.0,
+  "riseFallPs": 2.0,
+  "ptlTdPsPerBlock": 1.0,
+  "slots": 8
+}

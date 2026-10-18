@@ -1,0 +1,50 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<BorlandProject>
+	<Transactions>
+    <Transaction>2026/05/15 17:10:52.000.497,=C:\Users\27005348\Documents\Embarcadero\Studio\Projects\Unit1.pas</Transaction>
+    <Transaction>2026/08/09 15:32:39.000.946,=C:\Users\27005348\Documents\Embarcadero\Studio\Projects\Unit1.pas</Transaction>
+    <Transaction>2026/08/09 15:38:05.000.205,C:\Users\27005348\Documents\Embarcadero\Studio\Projects\Unit1.fmx=C:\Users\27005348\Documents\Embarcadero\Studio\Projects\MainWindow.fmx</Transaction>
+    <Transaction>2026/08/09 15:38:05.000.205,C:\Users\27005348\Documents\Embarcadero\Studio\Projects\Unit1.pas=C:\Users\27005348\Documents\Embarcadero\Studio\Projects\MainWindow.pas</Transaction>
+    <Transaction>2026/08/09 15:38:24.000.796,C:\Users\27005348\Documents\Embarcadero\Studio\Projects\Project1.dproj=C:\Users\27005348\Documents\Embarcadero\Studio\Projects\PnRGUI.dproj</Transaction>
+    <Transaction>2026/08/09 15:45:09.000.783,=C:\Users\27005348\Documents\Embarcadero\Studio\Projects\BlifLibrary.pas</Transaction>
+    <Transaction>2026/08/09 15:45:09.000.847,=C:\Users\27005348\Documents\Embarcadero\Studio\Projects\LefLibrary.pas</Transaction>
+    <Transaction>2026/10/08 15:43:26.000.253,=C:\Users\27005348\Documents\Embarcadero\Studio\Projects\ConfigIO.inc</Transaction>
+    <Transaction>2026/10/08 15:43:26.000.496,=C:\Users\27005348\Documents\Embarcadero\Studio\Projects\Routing.inc</Transaction>
+    <Transaction>2026/10/08 15:43:26.000.382,=C:\Users\27005348\Documents\Embarcadero\Studio\Projects\Pipeline.inc</Transaction>
+    <Transaction>2026/10/08 15:43:26.000.153,=C:\Users\27005348\Documents\Embarcadero\Studio\Projects\ClockPage.inc</Transaction>
+    <Transaction>2026/10/08 15:43:26.000.327,=C:\Users\27005348\Documents\Embarcadero\Studio\Projects\FloorPlan.inc</Transaction>
+    <Transaction>2026/10/08 15:43:26.000.426,=C:\Users\27005348\Documents\Embarcadero\Studio\Projects\Placement.inc</Transaction>
+  </Transactions>
+	<ProjectSortOrder AutoSort="0" SortType="0">
+    <File Path="UGeometry.pas"/>
+    <File Path="UPhysics.pas"/>
+    <File Path="UColors.pas"/>
+    <File Path="UNetNaming.pas"/>
+    <File Path="URoutingLegend.pas"/>
+    <File Path="UDesignConfig.pas"/>
+    <File Path="PlacementTypes.pas"/>
+    <File Path="MainWindow.pas"/>
+    <File Path="MainWindow.fmx"/>
+    <File Path="CellViewer.pas"/>
+    <File Path="BlifLibrary.pas"/>
+    <File Path="LefLibrary.pas"/>
+    <File Path="VerilogTiming.pas"/>
+    <File Path="SplitterInsert.pas"/>
+    <File Path="PipelineConfig.pas"/>
+    <File Path="PipelineAnalysis.pas"/>
+    <File Path="FlipFlopInsert.pas"/>
+    <File Path="ClockNetwork.pas"/>
+    <File Path="ProjectData.pas"/>
+    <File Path="ClockPage.inc"/>
+    <File Path="ConfigIO.inc"/>
+    <File Path="FloorPlan.inc"/>
+    <File Path="Pipeline.inc"/>
+    <File Path="Placement.inc"/>
+    <File Path="Routing.inc"/>
+    <File Path="UConstants.pas"/>
+    <File Path="ExportLibrary.pas"/>
+    <File Path="ExportModel.pas"/>
+    <File Path="ExportGDS.pas"/>
+    <File Path="UPython.pas"/>
+  </ProjectSortOrder>
+</BorlandProject>

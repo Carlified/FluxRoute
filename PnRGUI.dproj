@@ -155,6 +155,10 @@
         <DCCReference Include="URoutingLegend.pas"/>
         <DCCReference Include="UDesignConfig.pas"/>
         <DCCReference Include="UConstants.pas"/>
+        <DCCReference Include="ExportModel.pas"/>
+        <DCCReference Include="ExportLibrary.pas"/>
+        <DCCReference Include="ExportGDS.pas"/>
+        <DCCReference Include="UPython.pas"/>
         <DCCReference Include="PlacementTypes.pas"/>
         <DCCReference Include="MainWindow.pas">
             <Form>Form1</Form>
