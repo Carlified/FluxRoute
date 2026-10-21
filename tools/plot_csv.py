@@ -67,6 +67,8 @@ def main():
     ap.add_argument("--config", help="path to config.json")
     ap.add_argument("--csv", help="CSV to read (default: <outputDir>/die_tb.csv)")
     ap.add_argument("--cols", help="comma-separated column substrings to plot")
+    ap.add_argument("--groups", help="semicolon-separated groups; each group is a comma-separated "
+                                     "list of column substrings and becomes one stacked subplot row")
     ap.add_argument("--list", action="store_true", help="list columns and exit")
     ap.add_argument("--x", default="time", help="x column (default: time)")
     ap.add_argument("--ps", action="store_true", help="plot x in picoseconds")

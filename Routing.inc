@@ -1,4 +1,4 @@
-﻿// Routing: painting, the sequential maze router, bias geometry/routing, the
+// Routing: painting, the sequential maze router, bias geometry/routing, the
 // validation (length + buffer insertion), resonance overlay and LeeRoute.
 // Included from MainWindow's implementation via {$I Routing.inc}.
 
@@ -26,6 +26,7 @@ var
   BlockPx, WorldX0, WorldX1, WorldY0, WorldY1: Single;
   I0, I1, J0, J1: Integer;
   P: TPlacedComponent;
+  MaskPt: TPoint;
   ClkL, ClkIdx: Integer;
   ClkNode: TPlacedClockNode;
   Sp: TSpineComponent;
@@ -240,7 +241,25 @@ begin
 
       // Routed traces (and the Debug resonance overlay), drawn last so they sit
       // on top of the grid and die boundary.
-      DrawRoutedTraces(Canvas);
+      // Length-fixing validation buffers (mask layer): drawn like any other placed
+  // cell (grey body + port shapes, layer toggles apply) so they read as part of
+  // the layout. Their routed halves are ordinary traces in FRouteTraces.
+  for i := 0 to High(FLengthBuffers) do
+    if (FLengthBuffers[i].Gate <> nil) and
+       (FLengthBuffers[i].Gate.Cell <> nil) and
+       FGatePlacement.TryGetValue(FLengthBuffers[i].Gate, MaskPt) then
+    begin
+      Canvas.Fill.Color := $50808080;
+      Canvas.FillRect(TRectF.Create(
+        WX(MaskPt.X * Core), WY(MaskPt.Y * Core),
+        WX((MaskPt.X + FLengthBuffers[i].W) * Core),
+        WY((MaskPt.Y + FLengthBuffers[i].H) * Core)), 0, 0, [], 1.0);
+      DrawCellPorts(FLengthBuffers[i].Gate.Cell, MaskPt.X, MaskPt.Y,
+        FLengthBuffers[i].Gate.Cell.Width, FLengthBuffers[i].Gate.Cell.Height,
+        False);
+    end;
+
+  DrawRoutedTraces(Canvas);
 
       // Fixed top-right layer legend (screen space): one row per used layer; a
       // filled box means enabled, outlined means hidden.
@@ -589,7 +608,8 @@ begin
           DriverPin := '';
           UseClkPad := False;
           for NC in Net.Connections do
-            if NC.IsDriver and ClkPos.ContainsKey(NC.Gate) then
+            if NC.IsDriver and (ClkPos.ContainsKey(NC.Gate) or
+               FGatePlacement.ContainsKey(NC.Gate)) then
             begin
               Driver := NC.Gate;
               DriverPin := NC.PinName;
@@ -604,11 +624,21 @@ begin
           end;
           if UseClkPad then
             DriverPos := TPoint.Create(FPads[FClockPadIdx].X, FPads[FClockPadIdx].Y)
-          else if not GatePinBlockAt(Driver, DriverPin, 0,
-            ClkPos[Driver].X, ClkPos[Driver].Y, ClkRot[Driver], DriverPos) then
+          else if ClkPos.ContainsKey(Driver) then
           begin
+            if not GatePinBlockAt(Driver, DriverPin, 0,
+              ClkPos[Driver].X, ClkPos[Driver].Y, ClkRot[Driver], DriverPos) then
+              Continue;
+          end
+          else if FGatePlacement.TryGetValue(Driver, GatePos) then
+          begin
+            // Mask-layer buffer: unrotated, positioned by the length placer.
+            if not GatePinBlockAt(Driver, DriverPin, 0,
+              GatePos.X, GatePos.Y, False, DriverPos) then
+              Continue;
+          end
+          else
             Continue;
-          end;
           // Each non-driver connection is a point-to-point link.
           for NC in Net.Connections do
           begin
@@ -618,15 +648,21 @@ begin
             begin
               Continue;
             end;
-            if not ClkPos.TryGetValue(NC.Gate, GatePos) then
+            if ClkPos.TryGetValue(NC.Gate, GatePos) then
             begin
-              Continue;
-            end;
-            if not GatePinBlockAt(NC.Gate, NC.PinName, 0,
-              GatePos.X, GatePos.Y, ClkRot[NC.Gate], Pt) then
+              if not GatePinBlockAt(NC.Gate, NC.PinName, 0,
+                GatePos.X, GatePos.Y, ClkRot[NC.Gate], Pt) then
+                Continue;
+            end
+            else if FGatePlacement.TryGetValue(NC.Gate, GatePos) then
             begin
+              // Mask-layer buffer: unrotated.
+              if not GatePinBlockAt(NC.Gate, NC.PinName, 0,
+                GatePos.X, GatePos.Y, False, Pt) then
+                Continue;
+            end
+            else
               Continue;
-            end;
             Job.NetName := Net.Name;
             Job.Kind := rkClock;
             Job.Driver := nil; // clock links use the pre-resolved DriverPos
@@ -768,6 +804,7 @@ var
   Swp: Integer;
   Sp: TSpineComponent;
   Node: TPlacedClockNode;
+  MaskPt: TPoint;
   L, ci: Integer;
 
   // Marks every pin shape of one gate, placed at (AX, AY) (grid cells, with
@@ -892,6 +929,14 @@ begin
       if (Node.Gate <> nil) and (Node.Gate.Cell <> nil) then
         MarkGatePins(Node.Gate, Node.X, Node.Y, False);
     end;
+  // Length-fixing validation buffers (mask layer), unrotated. This runs before
+  // RunRouting (ReapplyLengthBufferMask is called just before it), so their
+  // pins are real obstructions and wires route around them.
+  for i := 0 to High(FLengthBuffers) do
+    if (FLengthBuffers[i].Gate <> nil) and
+       (FLengthBuffers[i].Gate.Cell <> nil) and
+       FGatePlacement.TryGetValue(FLengthBuffers[i].Gate, MaskPt) then
+      MarkGatePins(FLengthBuffers[i].Gate, MaskPt.X, MaskPt.Y, False);
 end;
 
 // Grows a band's TOP (Which=0) or MIDDLE (Which=1) bias row by ByRows cells to
@@ -1463,6 +1508,7 @@ var
   var
     k, L, ci, b: Integer;
     OnClk: Boolean;
+    Pt: TPoint;
   begin
     SetLength(APorts, 0);
     for k := 0 to High(FPlacedComponents) do
@@ -1481,6 +1527,12 @@ var
             CollectCellPorts(FClockSubtree[L][ci].Gate, FClockSubtree[L][ci].X,
               FClockSubtree[L][ci].Y, AEdge, APorts);
         end;
+    // Length mask buffers on this row are wired to the same bias rail.
+    for k := 0 to High(FLengthBuffers) do
+      if (FLengthBuffers[k].Band = Band) and
+         (FLengthBuffers[k].OnClockRow = AOnClockRow) and
+         FGatePlacement.TryGetValue(FLengthBuffers[k].Gate, Pt) then
+        CollectCellPorts(FLengthBuffers[k].Gate, Pt.X, Pt.Y, AEdge, APorts);
   end;
 
   procedure CollectLogic(Band: Integer; AEdge: TPortEdge;
@@ -2119,6 +2171,40 @@ begin
   Result := Best;
 end;
 
+// The buffer type to use for clock-trunk balancing: the user's buffer list,
+// choosing the cell with the LARGEST propagation delay, matching the clock
+// network's seeded stage-buffer choice.
+function TForm1.FindMaxDelayBufferCell: TCell;
+var
+  i: Integer;
+  Cell, Best, First: TCell;
+  Delay, BestDelay: Double;
+begin
+  Result := nil;
+  Best := nil;
+  First := nil;
+  BestDelay := -1;
+  if FLib = nil then
+    Exit;
+  for i := 0 to FBufferNames.Count - 1 do
+  begin
+    Cell := FLib.FindCell(FBufferNames[i]);
+    if Cell = nil then
+      Continue;
+    if First = nil then
+      First := Cell;
+    Delay := CellDelayPs(Cell);
+    if (Delay >= 0) and (Delay > BestDelay) then
+    begin
+      BestDelay := Delay;
+      Best := Cell;
+    end;
+  end;
+  if Best = nil then
+    Best := First;
+  Result := Best;
+end;
+
 // Re-applies each validation buffer's slot after a floorplan rebuild: signal
 // buffers rejoin FPlacedComponents, clock buffers move within FClockSubtree.
 procedure TForm1.ReapplyValidationBuffers;
@@ -2182,18 +2268,21 @@ begin
 
     if VB.IsClock then
     begin
-      Found := False;
       for L := 0 to High(FClockSubtree) do
         for ci := 0 to High(FClockSubtree[L]) do
           if FClockSubtree[L][ci].Gate = VB.Gate then
           begin
-            FClockSubtree[L][ci].X := X;
-            FClockSubtree[L][ci].Y := Y;
-            Found := True;
+            // A slotless clock buffer (RowType < 0) keeps the position the
+            // clock-tree builder gave it; only slotted ones are re-applied.
+            if VB.RowType >= 0 then
+            begin
+              FClockSubtree[L][ci].X := X;
+              FClockSubtree[L][ci].Y := Y;
+            end;
+            FGatePlacement.AddOrSetValue(VB.Gate,
+              TPoint.Create(FClockSubtree[L][ci].X, FClockSubtree[L][ci].Y));
             Break;
           end;
-      if Found then
-        FGatePlacement.AddOrSetValue(VB.Gate, TPoint.Create(X, Y));
     end
     else
     begin
@@ -2226,6 +2315,231 @@ end;
 
 // Re-runs the bias expansion then routing after an insertion, re-applying the
 // buffers first and preserving the validation log across RunRouting's memo clear.
+// Sanity check after the placements are rebuilt: every validation buffer must
+// be owned by exactly one placer - FSpine (trunk), FClockSubtree (clock row
+// tree) or FPlacedComponents (logic row). Silent when all is well.
+procedure TForm1.CheckValidationBufferOwnership;
+var
+  i, k, L, ci, Owners: Integer;
+  VB: TValidationBuffer;
+  Where: string;
+begin
+  for i := 0 to High(FValidationBuffers) do
+  begin
+    VB := FValidationBuffers[i];
+    if VB.Gate = nil then
+      Continue;
+    Owners := 0;
+    Where := '';
+    for k := 0 to High(FSpine) do
+      if FSpine[k].Gate = VB.Gate then
+      begin
+        Inc(Owners);
+        Where := Where + ' spine';
+        Break;
+      end;
+    for L := 0 to High(FClockSubtree) do
+    begin
+      for ci := 0 to High(FClockSubtree[L]) do
+        if FClockSubtree[L][ci].Gate = VB.Gate then
+        begin
+          Inc(Owners);
+          Where := Where + ' tree[' + IntToStr(L) + ']';
+          Break;
+        end;
+    end;
+    for k := 0 to High(FPlacedComponents) do
+      if FPlacedComponents[k].Gate = VB.Gate then
+      begin
+        Inc(Owners);
+        Where := Where + ' row';
+        Break;
+      end;
+    if Owners <> 1 then
+      MemoRouting.Lines.Add(Format(
+        '  WARNING: validation buffer %s on %s has %d placements:%s',
+        [VB.Gate.CellName, VB.NetName, Owners, Where]));
+  end;
+end;
+
+procedure TForm1.ReapplyLengthBufferMask;
+var
+  i, X, Y: Integer;
+begin
+  if Length(FPlanBandStarts) = 0 then
+    Exit;
+  for i := 0 to High(FLengthBuffers) do
+  begin
+    if FLengthBuffers[i].Gate = nil then
+      Continue;
+    X := FPlanXLeft + FLengthBuffers[i].XOffset;
+    if X + FLengthBuffers[i].W > FPlanXRight then
+      X := FPlanXRight - FLengthBuffers[i].W;
+    if X < FPlanXLeft then
+      X := FPlanXLeft;
+    if FLengthBuffers[i].OnClockRow then
+      Y := BandClockRowY(FLengthBuffers[i].Band)
+    else
+      Y := BandLogicRowY(FLengthBuffers[i].Band);
+    Y := Y + ((FPlanRowHBlocks - FLengthBuffers[i].H) div 2);
+    FGatePlacement.AddOrSetValue(FLengthBuffers[i].Gate, TPoint.Create(X, Y));
+  end;
+end;
+
+function TForm1.IsLengthMaskGate(G: TGateInstance): Boolean;
+var
+  i: Integer;
+begin
+  Result := False;
+  if G = nil then
+    Exit;
+  for i := 0 to High(FLengthBuffers) do
+    if FLengthBuffers[i].Gate = G then
+      Exit(True);
+end;
+
+procedure TForm1.RemoveLengthBuffers;
+var
+  i, k: Integer;
+  Model: TBlifModel;
+  Gate: TGateInstance;
+  Conn: TPinConnection;
+  InNet, OutNet, OldNet, NewNet: string;
+  OldTgt, NewSrc: TNet;
+  NC: TNetConnection;
+begin
+  for i := High(FLengthBuffers) downto 0 do
+  begin
+    Gate := FLengthBuffers[i].Gate;
+    if Gate = nil then
+      Continue;
+    if FLengthBuffers[i].IsClock then
+      Model := FClockBufferedModel
+    else
+      Model := FPlacementModel;
+    if (Model = nil) or (Model.Gates.IndexOf(Gate) < 0) then
+      Continue;
+    InNet := '';
+    OutNet := '';
+    for Conn in Gate.Connections do
+      if (Conn.Port <> nil) and (Conn.Port.Direction = pdOutput) then
+        OutNet := Conn.NetName
+      else if (Conn.Port <> nil) and (Conn.Port.Direction = pdInput) then
+        InNet := Conn.NetName;
+    if SameText(InNet, FLengthBuffers[i].NetName) then
+    begin
+      OldNet := InNet;
+      NewNet := OutNet;
+    end
+    else
+    begin
+      OldNet := OutNet;
+      NewNet := InNet;
+    end;
+    OldTgt := nil;
+    NewSrc := nil;
+    Model.Nets.TryGetValue(OldNet, OldTgt);
+    Model.Nets.TryGetValue(NewNet, NewSrc);
+    if (OldTgt = nil) or (NewSrc = nil) then
+      Continue;
+    for k := NewSrc.Connections.Count - 1 downto 0 do
+    begin
+      NC := NewSrc.Connections[k];
+      NewSrc.Connections.Delete(k);
+      if NC.Gate = Gate then
+        Continue;
+      for Conn in NC.Gate.Connections do
+        if SameText(Conn.PinName, NC.PinName) and
+           SameText(Conn.NetName, NewNet) then
+        begin
+          Conn.NetName := OldNet;
+          Break;
+        end;
+      OldTgt.Connections.Add(NC);
+    end;
+    for k := OldTgt.Connections.Count - 1 downto 0 do
+      if OldTgt.Connections[k].Gate = Gate then
+        OldTgt.Connections.Delete(k);
+    Model.Nets.Remove(NewNet);
+    Model.Gates.Remove(Gate); // owns objects: frees Gate
+    FLengthBuffers[i].Gate := nil;
+  end;
+  FLengthBuffers := nil;
+end;
+
+// Removes the clock buffers that validation inserted into the persistent
+// buffered clock model, merging each split net back together. Signal buffers
+// live on the throwaway placement clone and go with it; the clock model is
+// shared with placement/export, so going back must undo them explicitly.
+procedure TForm1.RemoveClockValidationBuffers;
+var
+  i, k: Integer;
+  VB: TValidationBuffer;
+  Gate: TGateInstance;
+  Conn: TPinConnection;
+  InNet, OutNet, OldNet, NewNet: string;
+  OldTgt, NewSrc: TNet;
+  NC: TNetConnection;
+begin
+  if FClockBufferedModel = nil then
+    Exit;
+  for i := High(FValidationBuffers) downto 0 do
+  begin
+    VB := FValidationBuffers[i];
+    if (not VB.IsClock) or (VB.Gate = nil) then
+      Continue;
+    Gate := VB.Gate;
+    if FClockBufferedModel.Gates.IndexOf(Gate) < 0 then
+      Continue;
+    InNet := '';
+    OutNet := '';
+    for Conn in Gate.Connections do
+      if (Conn.Port <> nil) and (Conn.Port.Direction = pdOutput) then
+        OutNet := Conn.NetName
+      else if (Conn.Port <> nil) and (Conn.Port.Direction = pdInput) then
+        InNet := Conn.NetName;
+    // The side that is not the recorded original net is the fresh one.
+    if SameText(InNet, VB.NetName) then
+    begin
+      OldNet := InNet;
+      NewNet := OutNet;
+    end
+    else
+    begin
+      OldNet := OutNet;
+      NewNet := InNet;
+    end;
+    OldTgt := nil;
+    NewSrc := nil;
+    FClockBufferedModel.Nets.TryGetValue(OldNet, OldTgt);
+    FClockBufferedModel.Nets.TryGetValue(NewNet, NewSrc);
+    if (OldTgt = nil) or (NewSrc = nil) then
+      Continue;
+    // Move the fresh net's non-buffer connections back onto the original net.
+    for k := NewSrc.Connections.Count - 1 downto 0 do
+    begin
+      NC := NewSrc.Connections[k];
+      NewSrc.Connections.Delete(k);
+      if NC.Gate = Gate then
+        Continue;
+      for Conn in NC.Gate.Connections do
+        if SameText(Conn.PinName, NC.PinName) and
+           SameText(Conn.NetName, NewNet) then
+        begin
+          Conn.NetName := OldNet;
+          Break;
+        end;
+      OldTgt.Connections.Add(NC);
+    end;
+    // Drop the buffer's own connection from the surviving net before freeing.
+    for k := OldTgt.Connections.Count - 1 downto 0 do
+      if OldTgt.Connections[k].Gate = Gate then
+        OldTgt.Connections.Delete(k);
+    FClockBufferedModel.Nets.Remove(NewNet);
+    FClockBufferedModel.Gates.Remove(Gate); // owns objects: frees Gate
+  end;
+end;
+
 procedure TForm1.RunBiasExpansionAndRouting;
 var
   Saved, Report: TStringList;
@@ -2236,7 +2550,18 @@ begin
   // neighbouring rows), then again AFTER - the expansion's rebuild drops them.
   ReapplyValidationBuffers;
   ButtonExpandBiasClick(nil);
+  // ButtonExpandBiasClick only rebuilds the floorplan when the bias rows need
+  // to grow, so FSpine/FClockSubtree may still predate a just-inserted trunk
+  // buffer. Re-derive the clock placements unconditionally: routing only makes
+  // a clock link when both endpoints are in FSpine/FClockSubtree, so a stale
+  // spine means the buffer is silently not routed.
+  BuildClockSubtreePlacements;
+  BuildSpinePlacement;
   ReapplyValidationBuffers;
+  // Each validation buffer must be owned by exactly one placer; log any that
+  // are placed nowhere (unroutable pins) or twice (drawn in two places).
+  CheckValidationBufferOwnership;
+  ReapplyLengthBufferMask;
   Saved := TStringList.Create;
   Report := TStringList.Create;
   try
@@ -2258,7 +2583,7 @@ end;
 // the expansion + routing; reverts the netlist and returns False if it won't route.
 function TForm1.TryInsertBuffer(IsClock: Boolean; const NetName: string;
   Driver, Load: TGateInstance; const DriverPin, LoadPin: string;
-  APadLoad: Boolean;
+  APadLoad, AIsLengthFix: Boolean;
   BufCell: TCell; const InPin, OutPin: string;
   ABand, ARowType, AX, AY: Integer): Boolean;
 var
@@ -2273,6 +2598,25 @@ var
   VB: TValidationBuffer;
   InPort, OutPort: TPort;
   InNetName, OutNetName: string;
+
+  // Keep the gate-side pin connection in step with the net-side move: the
+  // split below creates new TNetConnections, but the gate's own TPinConnection
+  // still names the old net until this runs. Callers (BuildSpinePlacement,
+  // the CIR export) read the gate side.
+  procedure Repoint(AGate: TGateInstance; const APin, AFrom, ATo: string);
+  var
+    C: TPinConnection;
+  begin
+    if AGate = nil then
+      Exit;
+    for C in AGate.Connections do
+      if SameText(C.PinName, APin) and SameText(C.NetName, AFrom) then
+      begin
+        C.NetName := ATo;
+        Exit;
+      end;
+  end;
+
 begin
   Result := False;
   if IsClock then
@@ -2366,6 +2710,12 @@ begin
       NewNet.Connections.Add(NC);
     end;
 
+    // The endpoint that moved to the fresh net must be repointed on its gate.
+    if APadLoad then
+      Repoint(Driver, DriverPin, NetName, NewNetName)
+    else
+      Repoint(Load, LoadPin, NetName, NewNetName);
+
     Conn := TPinConnection.Create;
     Conn.PinName := InPin;
     Conn.NetName := InNetName;
@@ -2378,16 +2728,36 @@ begin
     BufGate.Connections.Add(Conn);
     Model.Gates.Add(BufGate);
 
-    // Record the slot so ReapplyValidationBuffers keeps it across rebuilds.
-    VB.Gate := BufGate;
-    VB.NetName := NetName;
-    VB.IsClock := IsClock;
-    VB.Band := ABand;
-    VB.RowType := ARowType;
-    VB.X := AX;
-    VB.Y := AY;
-    SetLength(FValidationBuffers, Length(FValidationBuffers) + 1);
-    FValidationBuffers[High(FValidationBuffers)] := VB;
+    if AIsLengthFix then
+    begin
+      // Mask layer: its own placement record, never in FValidationBuffers.
+      SetLength(FLengthBuffers, Length(FLengthBuffers) + 1);
+      FLengthBuffers[High(FLengthBuffers)].Gate := BufGate;
+      FLengthBuffers[High(FLengthBuffers)].NetName := NetName;
+      FLengthBuffers[High(FLengthBuffers)].IsClock := IsClock;
+      FLengthBuffers[High(FLengthBuffers)].Band := ABand;
+      FLengthBuffers[High(FLengthBuffers)].OnClockRow := ARowType = 1;
+      FLengthBuffers[High(FLengthBuffers)].XOffset := AX - FPlanXLeft;
+      FLengthBuffers[High(FLengthBuffers)].W := Round(BufCell.Width / FPlanCore);
+      if FLengthBuffers[High(FLengthBuffers)].W < 1 then
+        FLengthBuffers[High(FLengthBuffers)].W := 1;
+      FLengthBuffers[High(FLengthBuffers)].H := Round(BufCell.Height / FPlanCore);
+      if FLengthBuffers[High(FLengthBuffers)].H < 1 then
+        FLengthBuffers[High(FLengthBuffers)].H := 1;
+    end
+    else
+    begin
+      // Record the slot so ReapplyValidationBuffers keeps it across rebuilds.
+      VB.Gate := BufGate;
+      VB.NetName := NetName;
+      VB.IsClock := IsClock;
+      VB.Band := ABand;
+      VB.RowType := ARowType;
+      VB.X := AX;
+      VB.Y := AY;
+      SetLength(FValidationBuffers, Length(FValidationBuffers) + 1);
+      FValidationBuffers[High(FValidationBuffers)] := VB;
+    end;
 
     RunBiasExpansionAndRouting;
     if FFlowStage >= fsRouted then
@@ -2400,12 +2770,18 @@ begin
     end;
 
     // The circuit no longer routes with the buffer there: revert the netlist.
-    Model.Gates.Remove(BufGate);
-    BufGate.Free;
+    if APadLoad then
+      Repoint(Driver, DriverPin, NewNetName, NetName)
+    else
+      Repoint(Load, LoadPin, NewNetName, NetName);
+    Model.Gates.Remove(BufGate); // owns objects: frees BufGate
     Model.Nets.Remove(NewNetName);
     Net.Connections.Clear;
     Net.Connections.AddRange(OrigConn);
-    SetLength(FValidationBuffers, Length(FValidationBuffers) - 1);
+    if AIsLengthFix then
+      SetLength(FLengthBuffers, Length(FLengthBuffers) - 1)
+    else
+      SetLength(FValidationBuffers, Length(FValidationBuffers) - 1);
     RunBiasExpansionAndRouting; // restore the clean derived state
   finally
     OrigConn.Free;
@@ -2434,14 +2810,13 @@ var
   BufCell: TCell;
   InPort, OutPort: TPort;
   InPin, OutPin: string;
-  Src, Dst, Pt: TPoint;
+  Src, Dst, Pt, GatePos: TPoint;
   ClkPos: TDictionary<TGateInstance, TPoint>;
   ClkRot: TDictionary<TGateInstance, Boolean>;
   Sp: TSpineComponent;
   Node: TPlacedClockNode;
   L, ci, k: Integer;
-  NumBands, Band, RowType, X, Y, W, H, Bx, By: Integer;
-  TrunkX0, StackTop, StackBottom: Integer;
+  NumBands, Band, RowType, X, W, H, Bx, By: Integer;
   Cands: TArray<TCand>;
   C, TmpC: TCand;
   a, b: Integer;
@@ -2453,6 +2828,7 @@ var
   procedure Consider(X, Y: Integer);
   var
     i2, L, ci, k: Integer;
+    MPt: TPoint;
   begin
     Bx := X + W div 2;
     By := Y + H div 2;
@@ -2503,6 +2879,17 @@ var
       for k := 0 to High(FSpine) do
         if UGeometry.RectOverlap(X, Y, W, H, FSpine[k].X, FSpine[k].Y,
           FSpine[k].W, FSpine[k].H) then
+        begin
+          Overlap := True;
+          Break;
+        end;
+    // Also avoid slots already taken by another length mask buffer.
+    if not Overlap then
+      for k := 0 to High(FLengthBuffers) do
+        if (FLengthBuffers[k].Gate <> nil) and
+           FGatePlacement.TryGetValue(FLengthBuffers[k].Gate, MPt) and
+           UGeometry.RectOverlap(X, Y, W, H, MPt.X, MPt.Y,
+             FLengthBuffers[k].W, FLengthBuffers[k].H) then
         begin
           Overlap := True;
           Break;
@@ -2603,11 +2990,22 @@ begin
       begin
         if NC.IsDriver then
           Continue;
-        if not ClkPos.ContainsKey(NC.Gate) then
+        // Length mask buffers are placed by their own layer, not ClkPos.
+        if ClkPos.ContainsKey(NC.Gate) then
+        begin
+          if not GatePinBlockAt(NC.Gate, NC.PinName, 0,
+            ClkPos[NC.Gate].X, ClkPos[NC.Gate].Y, ClkRot[NC.Gate], Pt) then
+            Continue;
+        end
+        else if FGatePlacement.TryGetValue(NC.Gate, GatePos) then
+        begin
+          if not GatePinBlockAt(NC.Gate, NC.PinName, 0,
+            GatePos.X, GatePos.Y, False, Pt) then
+            Continue;
+        end
+        else
           Continue;
-        if GatePinBlockAt(NC.Gate, NC.PinName, 0,
-          ClkPos[NC.Gate].X, ClkPos[NC.Gate].Y, ClkRot[NC.Gate], Pt) and
-           (Pt.X = Dst.X) and (Pt.Y = Dst.Y) then
+        if (Pt.X = Dst.X) and (Pt.Y = Dst.Y) then
         begin
           Load := NC.Gate;
           LoadPin := NC.PinName;
@@ -2667,18 +3065,11 @@ begin
   if H < 1 then
     H := 1;
 
-  // Enumerate every free slot and score by residual reach: logic rows, clock rows
-  // and the trunk column (the last space when rows are packed). Wires are ignored.
+  // Enumerate every free slot and score by residual reach: logic and clock rows
+  // only. Buffers are never placed in the clock-trunk column: a validation
+  // buffer there is not rotated and its bias ports are not collected, so the
+  // trunk is left to the spine placer. Wires are ignored.
   NumBands := Length(FPlanBandStarts);
-  TrunkX0 := FPlanXRight + FPlanLane0W;
-  StackTop := 0;
-  StackBottom := 0;
-  if NumBands > 0 then
-  begin
-    StackTop := FPlanBandStarts[0];
-    StackBottom := FPlanBandStarts[NumBands - 1] +
-      FPlanBandHeight[NumBands - 1] + FBottomBiasH;
-  end;
   SetLength(Cands, 0);
   for Band := 0 to NumBands - 1 do
   begin
@@ -2696,17 +3087,6 @@ begin
       for X := FPlanXLeft to FPlanXRight - W do
         Consider(X, BandClockRowY(Band) + ((FPlanRowHBlocks - H) div 2));
     end;
-  end;
-  // Clock trunk column: the trunk cells are rotated and centred in a column of
-  // width FPlanRowHBlocks, so free space remains beside them; the buffer's
-  // width (unrotated) must fit the column and its height the stack.
-  if (W <= FPlanRowHBlocks) and (H <= StackBottom - StackTop) then
-  begin
-    Band := -1;
-    RowType := 2;
-    for X := TrunkX0 to TrunkX0 + FPlanRowHBlocks - W do
-      for Y := StackTop to StackBottom - H do
-        Consider(X, Y);
   end;
 
   if Length(Cands) = 0 then
@@ -2734,7 +3114,8 @@ begin
   begin
     C := Cands[a];
     if TryInsertBuffer(IsClock, NetName, Driver, Load, DriverPin, LoadPin,
-      IsPadLoad, BufCell, InPin, OutPin, C.Band, C.RowType, C.X, C.Y) then
+      IsPadLoad, True, BufCell, InPin, OutPin, C.Band, C.RowType,
+      C.X, C.Y) then
     begin
       Result := True;
       Exit;
@@ -2752,6 +3133,7 @@ var
   Core, Limit, Len, Man, BestLen: Double;
   i, BestIdx: Integer;
   Pt0, Pt1: TPoint;
+  ClockInserted, LengthInserted: Boolean;
 begin
   RefreshDesignConfig;
   if Length(FRouteTraces) = 0 then
@@ -2804,57 +3186,73 @@ begin
   MemoRouting.Lines.Add(Format('PTL length limit: %s um', [EditPTLLength.Text]));
 
   repeat
-    // The longest over-limit PTL is fixed first (most impactful).
-    BestIdx := -1;
-    BestLen := 0;
-    for i := 0 to High(FRouteTraces) do
-    begin
-      if IsBiasTrace(FRouteTraces[i]) then
-        Continue;
-      Len := TraceLengthUm(FRouteTraces[i], Core);
-      if (Len > Limit) and (Len > BestLen) then
-      begin
-        BestLen := Len;
-        BestIdx := i;
-      end;
-    end;
-    if BestIdx < 0 then
-      Break; // every PTL is within the limit
+    // Clock first: insert trunk buffers until every clocked cell's clock has
+    // arrived by the time its data can. The length check then moves wires
+    // again, so alternate until both hold in the same pass.
+    ClockInserted := False;
+    LengthInserted := False;
 
-    Pt0 := FRouteTraces[BestIdx].Points[0];
-    Pt1 := FRouteTraces[BestIdx].Points[High(FRouteTraces[BestIdx].Points)];
-    Man := (Abs(Pt1.X - Pt0.X) + Abs(Pt1.Y - Pt0.Y)) * Core;
-    MemoRouting.Lines.Add(Format('  %s: %.2f um (Manhattan span %.2f um)',
-      [FRouteTraces[BestIdx].NetName, BestLen, Man]));
-
-    // The routed length exceeding the Manhattan span means the wire took a
-    // detour; rip it up and re-route through the usual passes (a straight line
-    // is always at least worth attempting - the router may find a shorter one).
-    if (Man > 0) and (BestLen > Man) then
+    if not RunClockValidation(ClockInserted) then
     begin
-      MemoRouting.Lines.Add('    detour: ripping up and re-routing...');
-      if RerouteTrace(BestIdx) then
-      begin
-        MemoRouting.Lines.Add('    re-routed under the limit.');
-        RepaintRoutingPage;
-        Continue; // re-scan; other over-limit wires are fixed next
-      end
-      else
-        MemoRouting.Lines.Add('    re-route did not reach the limit; inserting a buffer.');
-    end;
-
-    if not InsertBufferForTrace(BestIdx) then
-    begin
-      MemoRouting.Lines.Add(Format(
-        'VALIDATION FAILED: no usable buffer location on %s.',
-        [FRouteTraces[BestIdx].NetName]));
-      if FFlowStage < fsValidated then FFlowStage := fsValidated;
       RepaintRoutingPage;
       Exit;
     end;
-    // InsertBufferForTrace re-ran the bias expansion + routing; re-scan.
-    RepaintRoutingPage;
-  until False;
+
+    repeat
+      // The longest over-limit PTL is fixed first (most impactful).
+      BestIdx := -1;
+      BestLen := 0;
+      for i := 0 to High(FRouteTraces) do
+      begin
+        if IsBiasTrace(FRouteTraces[i]) then
+          Continue;
+        Len := TraceLengthUm(FRouteTraces[i], Core);
+        if (Len > Limit) and (Len > BestLen) then
+        begin
+          BestLen := Len;
+          BestIdx := i;
+        end;
+      end;
+      if BestIdx < 0 then
+        Break; // every PTL is within the limit
+
+      Pt0 := FRouteTraces[BestIdx].Points[0];
+      Pt1 := FRouteTraces[BestIdx].Points[High(FRouteTraces[BestIdx].Points)];
+      Man := (Abs(Pt1.X - Pt0.X) + Abs(Pt1.Y - Pt0.Y)) * Core;
+      MemoRouting.Lines.Add(Format('  %s: %.2f um (Manhattan span %.2f um)',
+        [FRouteTraces[BestIdx].NetName, BestLen, Man]));
+
+      // The routed length exceeding the Manhattan span means the wire took a
+      // detour; rip it up and re-route through the usual passes (a straight line
+      // is always at least worth attempting - the router may find a shorter one).
+      if (Man > 0) and (BestLen > Man) then
+      begin
+        MemoRouting.Lines.Add('    detour: ripping up and re-routing...');
+        if RerouteTrace(BestIdx) then
+        begin
+          MemoRouting.Lines.Add('    re-routed under the limit.');
+          LengthInserted := True;
+          RepaintRoutingPage;
+          Continue; // re-scan; other over-limit wires are fixed next
+        end
+        else
+          MemoRouting.Lines.Add('    re-route did not reach the limit; inserting a buffer.');
+      end;
+
+      if not InsertBufferForTrace(BestIdx) then
+      begin
+        MemoRouting.Lines.Add(Format(
+          'VALIDATION FAILED: no usable buffer location on %s.',
+          [FRouteTraces[BestIdx].NetName]));
+        if FFlowStage < fsValidated then FFlowStage := fsValidated;
+        RepaintRoutingPage;
+        Exit;
+      end;
+      LengthInserted := True;
+      // InsertBufferForTrace re-ran the bias expansion + routing; re-scan.
+      RepaintRoutingPage;
+    until False;
+  until (not ClockInserted) and (not LengthInserted);
 
   MemoRouting.Lines.Add('All PTL lengths are within the limit.');
   if FFlowStage < fsValidated then FFlowStage := fsValidated;

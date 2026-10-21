@@ -1,4 +1,4 @@
-﻿unit LefLibrary;
+unit LefLibrary;
 
 interface
 
@@ -76,6 +76,8 @@ type
     // only when the power grid is routed.
     PowerPorts: TObjectList<TPort>;
     SourceFiles: TStringList; // linked source files matching this cell (see FindCellSourceFiles)
+    // Worst-case setup and hold constraints in ps, read from the cell's TimEx
+    // .v ($hold: clock first = hold, pin first = setup). 0 = none found/unset.
     constructor Create;
     destructor Destroy; override;
     // Returns nil if the pin doesn't exist on this cell.

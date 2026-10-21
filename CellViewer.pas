@@ -1,4 +1,4 @@
-﻿unit CellViewer;
+unit CellViewer;
 
 interface
 
@@ -533,6 +533,7 @@ var
   VFile: string;
   Timing: TCellTiming;
   Arc: TArcDelay;
+
 begin
   Inv := TFormatSettings.Invariant;
   Lines.Add('Cell: ' + Cell.Name);
@@ -613,10 +614,10 @@ begin
     if SameText(ExtractFileExt(Cell.SourceFiles[i]), '.v') then
     begin
       VFile := Cell.SourceFiles[i];
-      Timing := ParseVerilogTiming(VFile);
-      if Timing <> nil then
-        Break;
+      Break;
     end;
+  if VFile <> '' then
+    Timing := ParseVerilogTiming(VFile);
 
   if Timing = nil then
   begin
@@ -633,6 +634,9 @@ begin
     for Arc in Timing.Arcs do
       Lines.Add(Format('  %s -> %s: %.1f ps',
         [Arc.FromPin, Arc.ToPin, Arc.DelayPs], Inv));
+    Lines.Add(Format('Setup: %.1f ps', [Timing.SetupPs], Inv));
+    Lines.Add(Format('Hold: %.1f ps', [Timing.HoldPs], Inv));
+    Lines.Add(Format('Input spacing: %.1f ps', [Timing.InputSpacingPs], Inv));
     Timing.Free;
   end;
 end;

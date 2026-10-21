@@ -1,0 +1,53 @@
+# Timing test circuit
+# Inputs: in, bypass
+# Outputs: out, bypass_out
+#
+# Part 1: fanout/fanin tree
+#   in -> DFFT (single clocked driver)
+#      -> split to 16 branches, feeding 8 AND2T gates (both AND inputs
+#         come from the driver, so each AND takes two of the 16 branches)
+#      -> OR reduction 8 -> 4 -> 2 -> 1 -> out
+#
+# Part 2: independent timing path
+#   bypass -> DFFT -> bypass_out
+#
+# Clock pins are omitted here and added in postprocessing.
+# Fanout of the first DFFT output (16 branches) is left for splitter
+# insertion in postprocessing.
+
+.model timing_test
+.inputs in bypass
+.outputs out bypass_out
+
+# ========== Part 1: fanout/fanin tree ==========
+
+# Single clocked driver
+.gate THmitll_DFFT a=in q=drv
+
+# AND step: 8 cells, each powered by the driver on both inputs (16 branches)
+.gate THmitll_AND2T a=drv b=drv q=g0
+.gate THmitll_AND2T a=drv b=drv q=g1
+.gate THmitll_AND2T a=drv b=drv q=g2
+.gate THmitll_AND2T a=drv b=drv q=g3
+.gate THmitll_AND2T a=drv b=drv q=g4
+.gate THmitll_AND2T a=drv b=drv q=g5
+.gate THmitll_AND2T a=drv b=drv q=g6
+.gate THmitll_AND2T a=drv b=drv q=g7
+
+# Fan-in: 8 -> 4
+.gate THmitll_OR2T a=g0 b=g1 q=r4_0
+.gate THmitll_OR2T a=g2 b=g3 q=r4_1
+.gate THmitll_OR2T a=g4 b=g5 q=r4_2
+.gate THmitll_OR2T a=g6 b=g7 q=r4_3
+
+# Fan-in: 4 -> 2
+.gate THmitll_OR2T a=r4_0 b=r4_1 q=r2_0
+.gate THmitll_OR2T a=r4_2 b=r4_3 q=r2_1
+
+# Fan-in: 2 -> 1
+.gate THmitll_OR2T a=r2_0 b=r2_1 q=out
+
+# ========== Part 2: single DFFT from bypass to bypass_out ==========
+.gate THmitll_DFFT a=bypass q=bypass_out
+
+.end

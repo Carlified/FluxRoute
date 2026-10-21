@@ -1,0 +1,38 @@
+# Timing test end
+# Inputs: in, bypass
+# Outputs: out0-out7, bypass_out
+#
+# Part 1: DFF -> DFF -> fanout to 8 DFFs -> 8 outputs
+#   in -> DFFT -> DFFT (drv) -> 8 DFFT gates (each takes drv) -> out0-out7
+#   The main fanout happens right before the final stage.
+#
+# Part 2: independent timing path
+#   bypass -> DFFT -> bypass_out
+#
+# Clock pins are omitted here and added in postprocessing.
+# Fanout of drv (8 branches) is left for splitter insertion in postprocessing.
+
+.model timing_test_end
+.inputs in bypass
+.outputs out0 out1 out2 out3 out4 out5 out6 out7 bypass_out
+
+# ========== Part 1: DFF -> DFF -> fanout to 8 DFFs ==========
+
+# Two register stages before the fanout
+.gate THmitll_DFFT a=in q=stage1
+.gate THmitll_DFFT a=stage1 q=drv
+
+# Fanout: drv feeds 8 DFFs, one per output
+.gate THmitll_DFFT a=drv q=out0
+.gate THmitll_DFFT a=drv q=out1
+.gate THmitll_DFFT a=drv q=out2
+.gate THmitll_DFFT a=drv q=out3
+.gate THmitll_DFFT a=drv q=out4
+.gate THmitll_DFFT a=drv q=out5
+.gate THmitll_DFFT a=drv q=out6
+.gate THmitll_DFFT a=drv q=out7
+
+# ========== Part 2: single DFFT from bypass to bypass_out ==========
+.gate THmitll_DFFT a=bypass q=bypass_out
+
+.end

@@ -1,4 +1,4 @@
-﻿object Form1: TForm1
+object Form1: TForm1
   Left = 0
   Top = 0
   Caption = 'FluxRoute'
@@ -40,6 +40,8 @@
       640s
       424s
       640s
+      424s
+      640s
       424s)
     object TabItemStart: TTabItem
       CustomIcon = <
@@ -55,28 +57,16 @@
       Text = 'Start'
       ExplicitSize.cx = 640.000000000000000000
       ExplicitSize.cy = 408.000000000000000000
-      object LabelStartTitle: TLabel
+      object LabelStartHint: TLabel
         Align = Top
         Margins.Left = 16.000000000000000000
         Margins.Top = 16.000000000000000000
         Position.X = 16.000000000000000000
         Position.Y = 16.000000000000000000
         Size.Width = 624.000000000000000000
-        Size.Height = 28.000000000000000000
-        Size.PlatformDefault = False
-        Text = 'FluxRoute'
-        TabOrder = 1
-      end
-      object LabelStartHint: TLabel
-        Align = Top
-        Margins.Left = 16.000000000000000000
-        Margins.Top = 8.000000000000000000
-        Position.X = 16.000000000000000000
-        Position.Y = 52.000000000000000000
-        Size.Width = 624.000000000000000000
         Size.Height = 20.000000000000000000
         Size.PlatformDefault = False
-        Text =
+        Text = 
           'Open a previous project to pick up where you left off, or start ' +
           'a new one.'
         TabOrder = 2
@@ -90,7 +80,7 @@
         Margins.Top = 16.000000000000000000
         Margins.Right = 16.000000000000000000
         Position.X = 16.000000000000000000
-        Position.Y = 88.000000000000000000
+        Position.Y = 52.000000000000000000
         Size.Width = 608.000000000000000000
         Size.Height = 32.000000000000000000
         Size.PlatformDefault = False
@@ -122,7 +112,7 @@
         Margins.Left = 16.000000000000000000
         Margins.Top = 24.000000000000000000
         Position.X = 16.000000000000000000
-        Position.Y = 144.000000000000000000
+        Position.Y = 108.000000000000000000
         Size.Width = 624.000000000000000000
         Size.Height = 20.000000000000000000
         Size.PlatformDefault = False
@@ -136,7 +126,7 @@
         Margins.Right = 16.000000000000000000
         Margins.Bottom = 16.000000000000000000
         Size.Width = 608.000000000000000000
-        Size.Height = 236.000000000000000000
+        Size.Height = 272.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 6
         DisableFocusEffect = True
@@ -144,7 +134,7 @@
         DefaultItemStyles.GroupHeaderStyle = ''
         DefaultItemStyles.GroupFooterStyle = ''
         Viewport.Width = 604.000000000000000000
-        Viewport.Height = 232.000000000000000000
+        Viewport.Height = 268.000000000000000000
       end
     end
     object TabItem1: TTabItem
@@ -170,7 +160,7 @@
         Size.Width = 624.000000000000000000
         Size.Height = 28.000000000000000000
         Size.PlatformDefault = False
-        Text =
+        Text = 
           'Load a LEF file, then a library folder. Double-click a cell to v' +
           'iew it.'
         TabOrder = 1
@@ -272,7 +262,7 @@
         Size.Width = 624.000000000000000000
         Size.Height = 20.000000000000000000
         Size.PlatformDefault = False
-        Text =
+        Text = 
           'Double-click a cell on the left to add it, or double-click it in' +
           ' the list on the right to remove it.'
         TabOrder = 1
@@ -571,19 +561,25 @@
       Text = 'Clock network'
       ExplicitSize.cx = 640.000000000000000000
       ExplicitSize.cy = 408.000000000000000000
-      object Label8: TLabel
+      object CheckBoxSeedBuffers: TCheckBox
+        Align = Top
+        IsChecked = True
+        Margins.Left = 24.000000000000000000
+        Margins.Top = 12.000000000000000000
+        Margins.Right = 24.000000000000000000
         Position.X = 24.000000000000000000
         Position.Y = 12.000000000000000000
         Size.Width = 592.000000000000000000
-        Size.Height = 20.000000000000000000
+        Size.Height = 28.000000000000000000
         Size.PlatformDefault = False
-        Text = 'Clock network'
         TabOrder = 1
+        Text = 'Seed stage buffers'
+        OnChange = CheckBoxSeedBuffersChange
       end
       object PaintBox2: TPaintBox
         Align = Client
         Size.Width = 640.000000000000000000
-        Size.Height = 424.000000000000000000
+        Size.Height = 384.000000000000000000
         Size.PlatformDefault = False
       end
     end
@@ -601,24 +597,15 @@
       Text = 'Placement Configuration'
       ExplicitSize.cx = 640.000000000000000000
       ExplicitSize.cy = 408.000000000000000000
-        object LayoutPlacementTop: TLayout
-          Align = Top
-          Size.Width = 640.000000000000000000
-          Size.Height = 336.000000000000000000
-          Size.PlatformDefault = False
-          TabOrder = 1
-        object LabelPlacementTitle: TLabel
-          Position.X = 24.000000000000000000
-          Position.Y = 12.000000000000000000
-          Size.Width = 592.000000000000000000
-          Size.Height = 22.000000000000000000
-          Size.PlatformDefault = False
-          Text = 'Placement Configuration'
-          TabOrder = 1
-        end
+      object LayoutPlacementTop: TLayout
+        Align = Top
+        Size.Width = 640.000000000000000000
+        Size.Height = 304.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 1
         object LabelCoreSize: TLabel
           Position.X = 24.000000000000000000
-          Position.Y = 44.000000000000000000
+          Position.Y = 12.000000000000000000
           Size.Width = 170.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
@@ -629,7 +616,7 @@
           Touch.InteractiveGestures = [LongTap, DoubleTap]
           TabOrder = 3
           Position.X = 200.000000000000000000
-          Position.Y = 40.000000000000000000
+          Position.Y = 8.000000000000000000
           Size.Width = 70.000000000000000000
           Size.Height = 26.000000000000000000
           Size.PlatformDefault = False
@@ -638,7 +625,7 @@
         end
         object LabelCoreDim: TLabel
           Position.X = 278.000000000000000000
-          Position.Y = 44.000000000000000000
+          Position.Y = 12.000000000000000000
           Size.Width = 160.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
@@ -647,7 +634,7 @@
         end
         object LabelRowHeight: TLabel
           Position.X = 24.000000000000000000
-          Position.Y = 76.000000000000000000
+          Position.Y = 44.000000000000000000
           Size.Width = 170.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
@@ -658,7 +645,7 @@
           Touch.InteractiveGestures = [LongTap, DoubleTap]
           TabOrder = 5
           Position.X = 200.000000000000000000
-          Position.Y = 72.000000000000000000
+          Position.Y = 40.000000000000000000
           Size.Width = 70.000000000000000000
           Size.Height = 26.000000000000000000
           Size.PlatformDefault = False
@@ -667,7 +654,7 @@
         end
         object LabelRowCells: TLabel
           Position.X = 278.000000000000000000
-          Position.Y = 76.000000000000000000
+          Position.Y = 44.000000000000000000
           Size.Width = 160.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
@@ -676,7 +663,7 @@
         end
         object LabelDieArea: TLabel
           Position.X = 24.000000000000000000
-          Position.Y = 108.000000000000000000
+          Position.Y = 76.000000000000000000
           Size.Width = 170.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
@@ -687,7 +674,7 @@
           Touch.InteractiveGestures = [LongTap, DoubleTap]
           TabOrder = 12
           Position.X = 200.000000000000000000
-          Position.Y = 104.000000000000000000
+          Position.Y = 72.000000000000000000
           Size.Width = 70.000000000000000000
           Size.Height = 26.000000000000000000
           Size.PlatformDefault = False
@@ -696,7 +683,7 @@
         end
         object LabelDieX: TLabel
           Position.X = 276.000000000000000000
-          Position.Y = 108.000000000000000000
+          Position.Y = 76.000000000000000000
           Size.Width = 12.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
@@ -707,7 +694,7 @@
           Touch.InteractiveGestures = [LongTap, DoubleTap]
           TabOrder = 14
           Position.X = 286.000000000000000000
-          Position.Y = 104.000000000000000000
+          Position.Y = 72.000000000000000000
           Size.Width = 70.000000000000000000
           Size.Height = 26.000000000000000000
           Size.PlatformDefault = False
@@ -716,7 +703,7 @@
         end
         object LabelDieUm: TLabel
           Position.X = 362.000000000000000000
-          Position.Y = 108.000000000000000000
+          Position.Y = 76.000000000000000000
           Size.Width = 30.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
@@ -725,7 +712,7 @@
         end
         object LabelDieAreaText: TLabel
           Position.X = 396.000000000000000000
-          Position.Y = 108.000000000000000000
+          Position.Y = 76.000000000000000000
           Size.Width = 180.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
@@ -734,7 +721,7 @@
         end
         object LabelUtilization: TLabel
           Position.X = 24.000000000000000000
-          Position.Y = 140.000000000000000000
+          Position.Y = 108.000000000000000000
           Size.Width = 170.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
@@ -745,7 +732,7 @@
           Touch.InteractiveGestures = [LongTap, DoubleTap]
           TabOrder = 18
           Position.X = 200.000000000000000000
-          Position.Y = 136.000000000000000000
+          Position.Y = 104.000000000000000000
           Size.Width = 70.000000000000000000
           Size.Height = 26.000000000000000000
           Size.PlatformDefault = False
@@ -754,7 +741,7 @@
         end
         object LabelUtilSuffix: TLabel
           Position.X = 278.000000000000000000
-          Position.Y = 140.000000000000000000
+          Position.Y = 108.000000000000000000
           Size.Width = 20.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
@@ -763,7 +750,7 @@
         end
         object LabelBiasCurrent: TLabel
           Position.X = 24.000000000000000000
-          Position.Y = 176.000000000000000000
+          Position.Y = 144.000000000000000000
           Size.Width = 144.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
@@ -772,9 +759,9 @@
         end
         object EditBiasCurrent: TEdit
           Touch.InteractiveGestures = [LongTap, DoubleTap]
-          TabOrder = 21
+          TabOrder = 27
           Position.X = 170.000000000000000000
-          Position.Y = 172.000000000000000000
+          Position.Y = 140.000000000000000000
           Size.Width = 70.000000000000000000
           Size.Height = 26.000000000000000000
           Size.PlatformDefault = False
@@ -783,7 +770,7 @@
         end
         object LabelBiasCurrentSuffix: TLabel
           Position.X = 248.000000000000000000
-          Position.Y = 176.000000000000000000
+          Position.Y = 144.000000000000000000
           Size.Width = 40.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
@@ -792,18 +779,18 @@
         end
         object LabelFreq: TLabel
           Position.X = 304.000000000000000000
-          Position.Y = 176.000000000000000000
+          Position.Y = 144.000000000000000000
           Size.Width = 144.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
           Text = 'Operating frequency:'
-          TabOrder = 26
+          TabOrder = 39
         end
         object EditFreqGHz: TEdit
           Touch.InteractiveGestures = [LongTap, DoubleTap]
-          TabOrder = 27
+          TabOrder = 41
           Position.X = 450.000000000000000000
-          Position.Y = 172.000000000000000000
+          Position.Y = 140.000000000000000000
           Size.Width = 70.000000000000000000
           Size.Height = 26.000000000000000000
           Size.PlatformDefault = False
@@ -812,16 +799,16 @@
         end
         object LabelFreqSuffix: TLabel
           Position.X = 528.000000000000000000
-          Position.Y = 176.000000000000000000
+          Position.Y = 144.000000000000000000
           Size.Width = 40.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
           Text = 'GHz'
-          TabOrder = 27
+          TabOrder = 40
         end
         object LabelPTLLength: TLabel
           Position.X = 24.000000000000000000
-          Position.Y = 208.000000000000000000
+          Position.Y = 176.000000000000000000
           Size.Width = 144.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
@@ -830,9 +817,9 @@
         end
         object EditPTLLength: TEdit
           Touch.InteractiveGestures = [LongTap, DoubleTap]
-          TabOrder = 23
+          TabOrder = 26
           Position.X = 170.000000000000000000
-          Position.Y = 204.000000000000000000
+          Position.Y = 172.000000000000000000
           Size.Width = 70.000000000000000000
           Size.Height = 26.000000000000000000
           Size.PlatformDefault = False
@@ -841,7 +828,7 @@
         end
         object LabelPTLSuffix: TLabel
           Position.X = 248.000000000000000000
-          Position.Y = 208.000000000000000000
+          Position.Y = 176.000000000000000000
           Size.Width = 40.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
@@ -850,18 +837,18 @@
         end
         object LabelPTLDelay: TLabel
           Position.X = 304.000000000000000000
-          Position.Y = 208.000000000000000000
+          Position.Y = 176.000000000000000000
           Size.Width = 144.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
           Text = 'PTL propagation delay:'
-          TabOrder = 28
+          TabOrder = 30
         end
         object EditPTLDelay: TEdit
           Touch.InteractiveGestures = [LongTap, DoubleTap]
-          TabOrder = 29
+          TabOrder = 38
           Position.X = 450.000000000000000000
-          Position.Y = 204.000000000000000000
+          Position.Y = 172.000000000000000000
           Size.Width = 70.000000000000000000
           Size.Height = 26.000000000000000000
           Size.PlatformDefault = False
@@ -870,27 +857,27 @@
         end
         object LabelPTLDelaySuffix: TLabel
           Position.X = 528.000000000000000000
-          Position.Y = 208.000000000000000000
+          Position.Y = 176.000000000000000000
           Size.Width = 56.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
-          Text = 'ps/um'
-          TabOrder = 29
+          Text = 'fs/um'
+          TabOrder = 31
         end
         object LabelPulseWidth: TLabel
           Position.X = 24.000000000000000000
-          Position.Y = 240.000000000000000000
+          Position.Y = 208.000000000000000000
           Size.Width = 144.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
           Text = 'Pulse width:'
-          TabOrder = 30
+          TabOrder = 35
         end
         object EditPulseWidth: TEdit
           Touch.InteractiveGestures = [LongTap, DoubleTap]
-          TabOrder = 31
+          TabOrder = 37
           Position.X = 170.000000000000000000
-          Position.Y = 236.000000000000000000
+          Position.Y = 204.000000000000000000
           Size.Width = 70.000000000000000000
           Size.Height = 26.000000000000000000
           Size.PlatformDefault = False
@@ -899,16 +886,16 @@
         end
         object LabelPulseWidthSuffix: TLabel
           Position.X = 248.000000000000000000
-          Position.Y = 240.000000000000000000
+          Position.Y = 208.000000000000000000
           Size.Width = 40.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
           Text = 'um'
-          TabOrder = 31
+          TabOrder = 36
         end
         object LabelBiasLayer: TLabel
           Position.X = 304.000000000000000000
-          Position.Y = 240.000000000000000000
+          Position.Y = 208.000000000000000000
           Size.Width = 144.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
@@ -918,7 +905,7 @@
         object ComboBiasLayer: TComboBox
           Touch.InteractiveGestures = [LongTap, DoubleTap]
           Position.X = 450.000000000000000000
-          Position.Y = 236.000000000000000000
+          Position.Y = 204.000000000000000000
           Size.Width = 70.000000000000000000
           Size.Height = 26.000000000000000000
           Size.PlatformDefault = False
@@ -927,7 +914,7 @@
         end
         object LabelTrunkCurrent: TLabel
           Position.X = 24.000000000000000000
-          Position.Y = 272.000000000000000000
+          Position.Y = 240.000000000000000000
           Size.Width = 144.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
@@ -938,7 +925,7 @@
           Touch.InteractiveGestures = [LongTap, DoubleTap]
           TabOrder = 33
           Position.X = 170.000000000000000000
-          Position.Y = 268.000000000000000000
+          Position.Y = 236.000000000000000000
           Size.Width = 70.000000000000000000
           Size.Height = 26.000000000000000000
           Size.PlatformDefault = False
@@ -947,7 +934,7 @@
         end
         object LabelTrunkCurrentSuffix: TLabel
           Position.X = 248.000000000000000000
-          Position.Y = 272.000000000000000000
+          Position.Y = 240.000000000000000000
           Size.Width = 40.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
@@ -956,7 +943,7 @@
         end
         object LabelPlacementErrors: TLabel
           Position.X = 24.000000000000000000
-          Position.Y = 304.000000000000000000
+          Position.Y = 272.000000000000000000
           Size.Width = 592.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
@@ -1181,12 +1168,13 @@
         end
         object ButtonValidateRouting: TButton
           Align = Bottom
+          Position.Y = 376.000000000000000000
           Size.Width = 192.000000000000000000
           Size.Height = 32.000000000000000000
           Size.PlatformDefault = False
+          TabOrder = 2
           Text = 'Validate Routing'
           TextSettings.Trimming = None
-          TabOrder = 2
           OnClick = ButtonValidateRoutingClick
         end
       end
@@ -1251,21 +1239,20 @@
         object lblExportLib: TLabel
           Align = Left
           Margins.Right = 8.000000000000000000
-          Position.X = 8.000000000000000000
           Size.Width = 110.000000000000000000
           Size.Height = 30.000000000000000000
           Size.PlatformDefault = False
-          Text = 'Block library:'
           TextSettings.Trimming = None
+          Text = 'Block library:'
         end
         object EditBlockLibDir: TEdit
+          Touch.InteractiveGestures = [LongTap, DoubleTap]
           Align = Client
-          Position.X = 126.000000000000000000
-          Size.Width = 408.000000000000000000
+          TabOrder = 0
+          Text = '(use ./blocklib by default)'
+          Size.Width = 416.000000000000000000
           Size.Height = 30.000000000000000000
           Size.PlatformDefault = False
-          Text = '(use ./blocklib by default)'
-          TabOrder = 0
         end
         object ButtonBrowseLib: TButton
           Align = Right
@@ -1274,9 +1261,9 @@
           Size.Width = 82.000000000000000000
           Size.Height = 30.000000000000000000
           Size.PlatformDefault = False
+          TabOrder = 1
           Text = 'Browse...'
           TextSettings.Trimming = None
-          TabOrder = 1
           OnClick = ButtonBrowseLibClick
         end
       end
@@ -1285,7 +1272,7 @@
         Margins.Left = 8.000000000000000000
         Margins.Right = 8.000000000000000000
         Position.X = 8.000000000000000000
-        Position.Y = 222.000000000000000000
+        Position.Y = 214.000000000000000000
         Size.Width = 624.000000000000000000
         Size.Height = 30.000000000000000000
         Size.PlatformDefault = False
@@ -1293,21 +1280,20 @@
         object lblExportDir: TLabel
           Align = Left
           Margins.Right = 8.000000000000000000
-          Position.X = 8.000000000000000000
           Size.Width = 90.000000000000000000
           Size.Height = 30.000000000000000000
           Size.PlatformDefault = False
-          Text = 'Output dir:'
           TextSettings.Trimming = None
+          Text = 'Output dir:'
         end
         object EditExportDir: TEdit
+          Touch.InteractiveGestures = [LongTap, DoubleTap]
           Align = Client
-          Position.X = 106.000000000000000000
-          Size.Width = 358.000000000000000000
+          TabOrder = 0
+          Text = './output'
+          Size.Width = 374.000000000000000000
           Size.Height = 30.000000000000000000
           Size.PlatformDefault = False
-          Text = './output'
-          TabOrder = 0
         end
         object lblExportStem: TLabel
           Align = Right
@@ -1316,17 +1302,18 @@
           Size.Width = 42.000000000000000000
           Size.Height = 30.000000000000000000
           Size.PlatformDefault = False
-          Text = 'Stem:'
           TextSettings.Trimming = None
+          Text = 'Stem:'
         end
         object EditExportStem: TEdit
+          Touch.InteractiveGestures = [LongTap, DoubleTap]
           Align = Right
+          TabOrder = 1
+          Text = 'die'
           Position.X = 522.000000000000000000
           Size.Width = 102.000000000000000000
           Size.Height = 30.000000000000000000
           Size.PlatformDefault = False
-          Text = 'die'
-          TabOrder = 1
         end
       end
       object LayoutExportFmt: TLayout
@@ -1334,7 +1321,7 @@
         Margins.Left = 8.000000000000000000
         Margins.Right = 8.000000000000000000
         Position.X = 8.000000000000000000
-        Position.Y = 260.000000000000000000
+        Position.Y = 244.000000000000000000
         Size.Width = 624.000000000000000000
         Size.Height = 32.000000000000000000
         Size.PlatformDefault = False
@@ -1345,23 +1332,22 @@
           Size.Height = 32.000000000000000000
           Size.PlatformDefault = False
           Text = 'Export .gds'
-          TextSettings.Trimming = None
         end
         object CheckExportDef: TCheckBox
           Align = Left
+          Position.X = 100.000000000000000000
           Size.Width = 100.000000000000000000
           Size.Height = 32.000000000000000000
           Size.PlatformDefault = False
           Text = 'Export .def'
-          TextSettings.Trimming = None
         end
         object CheckExportCir: TCheckBox
           Align = Left
+          Position.X = 200.000000000000000000
           Size.Width = 100.000000000000000000
           Size.Height = 32.000000000000000000
           Size.PlatformDefault = False
           Text = 'Export .cir'
-          TextSettings.Trimming = None
         end
         object ButtonPreflight: TButton
           Align = Right
@@ -1370,9 +1356,9 @@
           Size.Width = 90.000000000000000000
           Size.Height = 32.000000000000000000
           Size.PlatformDefault = False
+          TabOrder = 0
           Text = 'Recheck'
           TextSettings.Trimming = None
-          TabOrder = 0
           OnClick = ButtonPreflightClick
         end
         object ButtonExport: TButton
@@ -1381,9 +1367,9 @@
           Size.Width = 154.000000000000000000
           Size.Height = 32.000000000000000000
           Size.PlatformDefault = False
+          TabOrder = 1
           Text = 'Export'
           TextSettings.Trimming = None
-          TabOrder = 1
           OnClick = ButtonExportClick
         end
       end
@@ -1397,11 +1383,11 @@
         Margins.Right = 8.000000000000000000
         Margins.Bottom = 8.000000000000000000
         Size.Width = 624.000000000000000000
-        Size.Height = 122.000000000000000000
+        Size.Height = 132.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 4
         Viewport.Width = 624.000000000000000000
-        Viewport.Height = 122.000000000000000000
+        Viewport.Height = 132.000000000000000000
       end
     end
   end
@@ -1412,25 +1398,29 @@
     Size.Height = 56.000000000000000000
     Size.PlatformDefault = False
     TabOrder = 10
-    object lblStatus: TLabel
-      Align = Client
+    object ButtonHelp: TButton
+      Align = Left
       Margins.Left = 12.000000000000000000
       Margins.Top = 12.000000000000000000
       Margins.Bottom = 12.000000000000000000
-      Size.Width = 468.000000000000000000
+      Position.X = 12.000000000000000000
+      Position.Y = 12.000000000000000000
+      Size.Width = 40.000000000000000000
       Size.Height = 32.000000000000000000
       Size.PlatformDefault = False
-      Text = 'Load a LEF file to begin.'
-      TabOrder = 1
+      TabOrder = 7
+      Text = '?'
+      TextSettings.Trimming = None
+      OnClick = ButtonHelpClick
     end
     object ButtonBack: TButton
       Align = Right
       Margins.Top = 12.000000000000000000
       Margins.Right = 8.000000000000000000
       Margins.Bottom = 12.000000000000000000
-      Position.X = 480.000000000000000000
+      Position.X = 400.000000000000000000
       Position.Y = 12.000000000000000000
-      Size.Width = 70.000000000000000000
+      Size.Width = 110.000000000000000000
       Size.Height = 32.000000000000000000
       Size.PlatformDefault = False
       TabOrder = 8
@@ -1443,9 +1433,9 @@
       Margins.Top = 12.000000000000000000
       Margins.Right = 12.000000000000000000
       Margins.Bottom = 12.000000000000000000
-      Position.X = 558.000000000000000000
+      Position.X = 518.000000000000000000
       Position.Y = 12.000000000000000000
-      Size.Width = 70.000000000000000000
+      Size.Width = 110.000000000000000000
       Size.Height = 32.000000000000000000
       Size.PlatformDefault = False
       TabOrder = 9

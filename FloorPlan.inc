@@ -1,4 +1,4 @@
-﻿// Floorplan build / clock placement / validation / paint. Included from
+// Floorplan build / clock placement / validation / paint. Included from
 // MainWindow's implementation via {\$I FloorPlan.inc} so these TForm1 methods
 // keep full access to the form state without growing the god file.
 
@@ -669,6 +669,15 @@ var
       if Visited.ContainsKey(NC.Gate) then
         Continue;
       Visited.Add(NC.Gate, True);
+      // Length mask buffers are placed by their own layer, so no node is made
+      // for them - but the tree continues through them, so walk their outputs.
+      if IsLengthMaskGate(NC.Gate) then
+      begin
+        for OutConn in NC.Gate.Connections do
+          if (OutConn.Port <> nil) and (OutConn.Port.Direction = pdOutput) then
+            WalkNet(OutConn.NetName, ClkY);
+        Continue;
+      end;
 
       SetLength(FClockSubtree[L], Length(FClockSubtree[L]) + 1);
       Node := High(FClockSubtree[L]);
@@ -932,13 +941,27 @@ const
 var
   TreeModel: TBlifModel;
   CurNet: string;
-  i, j, k, L, Lv, NextJ, Cursor, BufY, BestB, TrunkX, LastB: Integer;
+  i, j, L, Lv, NextJ, Cursor, BufY, TrunkX, LastB: Integer;
+  StepGate: TGateInstance;
   Net: TNet;
   NC: TNetConnection;
   Conn: TPinConnection;
   Gate: TGateInstance;
   Comp: TSpineComponent;
-  SegBottom, ClkY, BestD, D: Double;
+  SegBottom: Double;
+
+  function OutCount(G: TGateInstance): Integer;
+  var
+    C: TPinConnection;
+  begin
+    Result := 0;
+    if G = nil then
+      Exit;
+    for C in G.Connections do
+      if (C.Port <> nil) and (C.Port.Direction = pdOutput) then
+        Inc(Result);
+  end;
+
 begin
   SetLength(FSpine, 0);
   TreeModel := FClockBufferedModel;
@@ -960,7 +983,32 @@ begin
           Break;
         end;
     if Gate = nil then
-      Break; // end of the spine (a row tree net, no junction)
+    begin
+      // No junction on this net: step over a 1-in/1-out buffer (a length buffer
+      // can sit on the root net) and look again on its output. The buffer is
+      // owned by the length mask, not the spine, so it is not collected.
+      StepGate := nil;
+      if TreeModel.Nets.TryGetValue(CurNet, Net) then
+        for NC in Net.Connections do
+          if (not NC.IsDriver) and (not CellHasClock(NC.Gate.Cell)) and
+             (OutCount(NC.Gate) = 1) then
+          begin
+            StepGate := NC.Gate;
+            Break;
+          end;
+      if StepGate = nil then
+        Break;
+      CurNet := '';
+      for Conn in StepGate.Connections do
+        if (Conn.Port <> nil) and (Conn.Port.Direction = pdOutput) then
+        begin
+          CurNet := Conn.NetName;
+          Break;
+        end;
+      if CurNet = '' then
+        Break;
+      Continue;
+    end;
 
     Comp.Gate := Gate;
     Comp.IsJunction := True;
@@ -978,28 +1026,36 @@ begin
     SetLength(FSpine, Length(FSpine) + 1);
     FSpine[High(FSpine)] := Comp;
 
-    // The delay output net (the junction's output that is not a row tree).
+    // The delay output net: the junction's SECOND output (the first is its row
+    // tree). Keyed on port order so a trunk net reusing a row-net name is still
+    // recognised as the trunk.
     CurNet := '';
+    Lv := 0;
     for Conn in Gate.Connections do
-      if (Conn.Port <> nil) and (Conn.Port.Direction = pdOutput) and
-         (not SameText(Copy(Conn.NetName, 1, Length(UNetNaming.ClockRowPrefix)), UNetNaming.ClockRowPrefix)) then
+      if (Conn.Port <> nil) and (Conn.Port.Direction = pdOutput) then
       begin
-        CurNet := Conn.NetName;
-        Break;
+        Inc(Lv);
+        if Lv = 2 then
+        begin
+          CurNet := Conn.NetName;
+          Break;
+        end;
       end;
     if CurNet = '' then
       Break;
 
-    // Walk the stage buffer chain.
+    // Walk the trunk buffer chain. A trunk buffer is a 1-in/1-out gate; the
+    // walk stops at the next junction, at the row-tree root (several outputs),
+    // or at a clocked leaf. This lets a buffer sit after the final junction,
+    // where there is no following junction.
     while True do
     begin
-      if SameText(Copy(CurNet, 1, Length(UNetNaming.ClockRowPrefix)), UNetNaming.ClockRowPrefix) then
-        Break; // reached the final row's tree
       Gate := nil;
       if TreeModel.Nets.TryGetValue(CurNet, Net) then
         for NC in Net.Connections do
           if (not NC.IsDriver) and (not NC.Gate.ClockTrunk) and
-             (not CellHasClock(NC.Gate.Cell)) then
+             (not CellHasClock(NC.Gate.Cell)) and (OutCount(NC.Gate) = 1) and
+             (not IsLengthMaskGate(NC.Gate)) then
           begin
             Gate := NC.Gate;
             Break;
@@ -1079,45 +1135,24 @@ begin
       if FSpine[j].IsJunction then
         Break;
       BufY := Cursor - FSpine[j].H - Gap;
-      if (NextJ >= 0) and
-         (BufY < FSpine[NextJ].Y + FSpine[NextJ].H) then
+      // Trunk components always stay in the clock column and stack upward; they
+      // never spill onto a band's clock row. Rows are the length-validation
+      // buffers' domain (temporarily), so mixing the two placement spaces there
+      // would risk overlaps. If a stage is short the buffer simply sits higher
+      // in the column.
+      if BufY < 0 then
       begin
-        // Overflow to the closest band's clock row (unrotated).
-        BestB := 0;
-        BestD := MaxSingle;
-        for k := 0 to High(FPlanBandStarts) do
-        begin
-          ClkY := BandClockRowY(k) + FPlanRowHBlocks / 2;
-          D := Abs(ClkY - BufY);
-          if D < BestD then
-          begin
-            BestD := D;
-            BestB := k;
-          end;
-        end;
-        FSpine[j].Rotated := False;
-        FSpine[j].Band := BestB;
-        FSpine[j].W := 1;
-        FSpine[j].H := 1;
-        if (FSpine[j].Gate <> nil) and (FSpine[j].Gate.Cell <> nil) then
-        begin
-          FSpine[j].W := Round(FSpine[j].Gate.Cell.Width / FPlanCore);
-          FSpine[j].H := Round(FSpine[j].Gate.Cell.Height / FPlanCore);
-          if FSpine[j].W < 1 then FSpine[j].W := 1;
-          if FSpine[j].H < 1 then FSpine[j].H := 1;
-        end;
-        FSpine[j].X := FPlanXRight - FSpine[j].W;
-        FSpine[j].Y := BandClockRowY(BestB) +
-          (FPlanRowHBlocks - FSpine[j].H) div 2;
-      end
-      else
-      begin
-        FSpine[j].Y := BufY;
-        FSpine[j].X := TrunkX + (FPlanRowHBlocks - FSpine[j].W) div 2;
-        if FSpine[j].X < TrunkX then
-          FSpine[j].X := TrunkX;
-        Cursor := BufY;
+        BufY := 0;
+        if FSpine[j].Gate <> nil then
+          MemoRouting.Lines.Add(Format(
+            '  clock trunk full: %s clamped to the top edge.',
+            [FSpine[j].Gate.CellName]));
       end;
+      FSpine[j].Y := BufY;
+      FSpine[j].X := TrunkX + (FPlanRowHBlocks - FSpine[j].W) div 2;
+      if FSpine[j].X < TrunkX then
+        FSpine[j].X := TrunkX;
+      Cursor := BufY;
     end;
     if NextJ < 0 then
       Break;
@@ -1131,7 +1166,7 @@ end;
 procedure TForm1.ValidateFloorplanLayout;
 var
   Occ: TDictionary<Int64, string>;
-  i, ClkL, ClkIdx, OverlapCount: Integer;
+  i, ClkL, ClkIdx, OverlapCount, MaskX, MaskY: Integer;
   Expected, Actual: Integer;
   Label_: string;
 
@@ -1184,6 +1219,25 @@ begin
         Label_ := 'buffer';
       MarkRect(FSpine[i].X, FSpine[i].Y, FSpine[i].W, FSpine[i].H, Label_);
     end;
+    // Length mask buffers (validation overlay). Positioned from their stored
+    // row offsets so this also covers the rebuild that runs before the mask is
+    // re-applied.
+    for i := 0 to High(FLengthBuffers) do
+      if FLengthBuffers[i].Gate <> nil then
+      begin
+        MaskX := FPlanXLeft + FLengthBuffers[i].XOffset;
+        if MaskX + FLengthBuffers[i].W > FPlanXRight then
+          MaskX := FPlanXRight - FLengthBuffers[i].W;
+        if MaskX < FPlanXLeft then
+          MaskX := FPlanXLeft;
+        if FLengthBuffers[i].OnClockRow then
+          MaskY := BandClockRowY(FLengthBuffers[i].Band)
+        else
+          MaskY := BandLogicRowY(FLengthBuffers[i].Band);
+        MaskY := MaskY + ((FPlanRowHBlocks - FLengthBuffers[i].H) div 2);
+        MarkRect(MaskX, MaskY, FLengthBuffers[i].W, FLengthBuffers[i].H,
+          'length buffer');
+      end;
     // Pads.
     for i := 0 to High(FPads) do
       MarkRect(FPads[i].X, FPads[i].Y, 1, 1, 'pad ' + FPads[i].NetName);
@@ -1245,7 +1299,6 @@ var
   BlockPx, WorldX0, WorldX1, WorldY0, WorldY1: Single;
   I0, I1, J0, J1: Integer;
   BX0, BX1, BY0, BY1, RunStart, RowIdx: Integer;
-  PadPx, PadPy: Integer;
   ClkL, ClkIdx, ClkChild, Ci: Integer;
   ClkNode: TPlacedClockNode;
   SpineComp: TSpineComponent;
@@ -1469,31 +1522,6 @@ begin
               TTextAlign.Center, TTextAlign.Center);
       end;
 
-      // Immobile I/O anchor pads (dark) with their port names. During a drag the
-      // dragged pad follows the mouse and its set shifts to the preview slots.
-      for i := 0 to High(FPads) do
-      begin
-        PadPx := PadDisplayX(i);
-        PadPy := FPads[i].Y;
-        if (PadPx + 1 <= BX0) or (PadPx >= BX1) or
-           (PadPy + 1 <= BY0) or (PadPy >= BY1) then
-          Continue;
-        Canvas.Fill.Color := PalPads;
-        Canvas.FillRect(TRectF.Create(WX(PadPx * Core), WY(PadPy * Core),
-          WX((PadPx + 1) * Core), WY((PadPy + 1) * Core)), 0, 0, [], 1.0);
-        Canvas.Fill.Color := TAlphaColorRec.Black;
-        // Input labels sit above the block, output labels below it.
-        if FPads[i].IsInput then
-          Canvas.FillText(TRectF.Create(
-            WX(PadPx * Core) + 2, WY(PadPy * Core) - 16,
-            WX(PadPx * Core) + 130, WY(PadPy * Core) - 2),
-            FPads[i].NetName, False, 1.0, [], TTextAlign.Leading, TTextAlign.Center)
-        else
-          Canvas.FillText(TRectF.Create(
-            WX(PadPx * Core) + 2, WY((PadPy + 1) * Core) + 2,
-            WX(PadPx * Core) + 130, WY((PadPy + 1) * Core) + 16),
-            FPads[i].NetName, False, 1.0, [], TTextAlign.Leading, TTextAlign.Center);
-      end;
     end;
 
     // Grid of core-block squares as thin filled rectangles (stroke is unreliable

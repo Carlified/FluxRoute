@@ -1,4 +1,4 @@
-﻿// Placement geometry, ordering, bias expansion and pad handling. Included
+// Placement geometry, ordering, bias expansion and pad handling. Included
 // from MainWindow's implementation via {\$I Placement.inc} (see FloorPlan.inc).
 
 function TForm1.BandIndexOfY(Y: Integer): Integer;
@@ -411,6 +411,7 @@ var
   var
     k, lv, c2, bb: Integer;
     OnClk: Boolean;
+    Pt: TPoint;
   begin
     SetLength(APorts, 0);
     for k := 0 to High(FPlacedComponents) do
@@ -429,6 +430,12 @@ var
             CollectCellPorts(FClockSubtree[lv][c2].Gate, FClockSubtree[lv][c2].X,
               FClockSubtree[lv][c2].Y, AEdge, APorts);
         end;
+    // Length mask buffers on this row also consume bias tracks.
+    for k := 0 to High(FLengthBuffers) do
+      if (FLengthBuffers[k].Band = Band) and
+         (FLengthBuffers[k].OnClockRow = AOnClockRow) and
+         FGatePlacement.TryGetValue(FLengthBuffers[k].Gate, Pt) then
+        CollectCellPorts(FLengthBuffers[k].Gate, Pt.X, Pt.Y, AEdge, APorts);
   end;
 
   procedure CollectLogic(Band: Integer; AEdge: TPortEdge;
@@ -526,6 +533,13 @@ begin
     ClockBot[b] := Length(PartitionBiasPorts(ClockBotP[b], MaxUa));
   end;
 
+  // KNOWN QUIRK: bias rows/columns grown below persist. BuildFloorplan remaps
+  // and keeps FBiasRowH / FBiasLaneW / FBottomBiasH / FPlanBiasTrunkW across
+  // rebuilds and there is no teardown, so a validation pass can leave the
+  // floorplan wider than strictly needed. That is harmless (every geometry
+  // accessor reads the current heights, so wider rows are just unused area),
+  // and the sizing checks below compare against the current allocation so
+  // nothing grows unboundedly.
   // --- Horizontal channels (bias rows) ---
   // Topmost full-width row must hold both the top logic tracks and the trunk's left turn rows.
   Extra := (LogicTop[0] + GLeft) - BandTopBiasH(0);
@@ -547,7 +561,8 @@ begin
     // Middle bias row: logic (above) + clock (below).
     Above := LogicBotP[Band];
     Below := ClockTopP[Band];
-    Extra := SharedTracks(Above, Below) - 1; // base-1 floor
+    // Only add what the current row cannot already hold.
+    Extra := SharedTracks(Above, Below) - BandMidBiasH(Band);
     if Extra < 0 then
       Extra := 0;
     if Extra > 0 then
@@ -558,7 +573,7 @@ begin
       Upper := Band - 1;
       Above := ClockBotP[Upper];
       Below := LogicTopP[Band];
-      Extra := SharedTracks(Above, Below) - 1; // base-1 floor
+      Extra := SharedTracks(Above, Below) - BandTopBiasH(Band);
       if Extra < 0 then
         Extra := 0;
       if Extra > 0 then
@@ -568,12 +583,12 @@ begin
 
   // --- Clock bias lanes (flanking the clock trunk) ---
   // Lane width = the number of clock groups, not ceil(total/max).
-  Extra := GLeft - 1;
+  Extra := GLeft - FPlanLane0W;
   if Extra < 0 then
     Extra := 0;
   if Extra > 0 then
     IncreaseClockTrunkColumn(0, Extra);
-  Extra := GRight - 1;
+  Extra := GRight - FPlanLane1W;
   if Extra < 0 then
     Extra := 0;
   if Extra > 0 then
@@ -756,26 +771,28 @@ begin
       if MaxRight > FPlanXRight then
       begin
         Shift := MaxRight - FPlanXRight;
-        for j := 0 to High(RowCells) do
+        // Whole-row shift only. If the row is physically wider than the die,
+        // do not squash it - report and leave the layout alone.
+        if Shift > FPlanXRight - FPlanXLeft then
+          AddFloorplanError(Format(
+            'Placement: band %d is wider than the die; not shifting.', [band]))
+        else
         begin
-          FPlacedComponents[RowCells[j]].X :=
-            FPlacedComponents[RowCells[j]].X - Shift;
-          if FPlacedComponents[RowCells[j]].X < FPlanXLeft then
-            FPlacedComponents[RowCells[j]].X := FPlanXLeft;
-          FGatePlacement.AddOrSetValue(FPlacedComponents[RowCells[j]].Gate,
-            TPoint.Create(FPlacedComponents[RowCells[j]].X,
-              FPlacedComponents[RowCells[j]].Y));
+          for j := 0 to High(RowCells) do
+          begin
+            FPlacedComponents[RowCells[j]].X :=
+              FPlacedComponents[RowCells[j]].X - Shift;
+            FGatePlacement.AddOrSetValue(FPlacedComponents[RowCells[j]].Gate,
+              TPoint.Create(FPlacedComponents[RowCells[j]].X,
+                FPlacedComponents[RowCells[j]].Y));
+          end;
+          // Shift the clock-row interior nodes by the same amount.
+          for L := 0 to High(FClockSubtree) do
+            for ci := 0 to High(FClockSubtree[L]) do
+              if (not FClockSubtree[L][ci].IsLeaf) and
+                 (BandIndexOfY(FClockSubtree[L][ci].Y) = band) then
+                FClockSubtree[L][ci].X := FClockSubtree[L][ci].X - Shift;
         end;
-        // Shift the clock-row interior nodes by the same amount.
-        for L := 0 to High(FClockSubtree) do
-          for ci := 0 to High(FClockSubtree[L]) do
-            if (not FClockSubtree[L][ci].IsLeaf) and
-               (BandIndexOfY(FClockSubtree[L][ci].Y) = band) then
-            begin
-              FClockSubtree[L][ci].X := FClockSubtree[L][ci].X - Shift;
-              if FClockSubtree[L][ci].X < FPlanXLeft then
-                FClockSubtree[L][ci].X := FPlanXLeft;
-            end;
       end;
     end;
 
@@ -857,7 +874,9 @@ begin
       Items[j + 1] := Tmp;
     end;
     // Enforce the 1-cell gap so cells can never overlap, and clamp within the
-    // row so nothing runs off the die.
+    // row so nothing runs off the die. Safe for the length mask: this runs in
+    // OptimizePlacement, before the mask is built; during validation rows only
+    // move as units (RebuildFloorplanPreserve).
     for i := 1 to High(Items) do
     begin
       MinX := FPlacedComponents[Items[i - 1]].X +
@@ -1065,40 +1084,6 @@ begin
       FPadMap.AddOrSetValue(FPads[Idx].NetName, TPoint.Create(X, FPads[Idx].Y));
     end;
   end;
-end;
-
-// The X (grid blocks) at which a pad should be drawn. During a drag the dragged
-// pad follows the mouse and the rest of its set shift to the preview slots.
-function TForm1.PadDisplayX(Idx: Integer): Integer;
-var
-  N, k, Slot, Right: Integer;
-  Order: TArray<Integer>;
-begin
-  if not FPadDragging then
-    Exit(FPads[Idx].X);
-  if Idx = FPadDragIdx then
-    Exit(Round(FPadDragX));
-  if FPads[Idx].IsInput then
-  begin
-    N := Length(FPadOrderInput);
-    Right := FPlanXRight;
-    Slot := NearestPadSlot(FPadDragX, N, Right);
-    Order := PreviewPadOrder(FPadOrderInput, FPadDragIdx, Slot);
-    for k := 0 to High(Order) do
-      if Order[k] = Idx then
-        Exit(Round(PadSlotX(k, N, Right)));
-  end
-  else
-  begin
-    N := Length(FPadOrderOutput);
-    Right := FPlanXRight + FPlanLane0W + FPlanTrunkW;
-    Slot := NearestPadSlot(FPadDragX, N, Right);
-    Order := PreviewPadOrder(FPadOrderOutput, FPadDragIdx, Slot);
-    for k := 0 to High(Order) do
-      if Order[k] = Idx then
-        Exit(Round(PadSlotX(k, N, Right)));
-  end;
-  Result := FPads[Idx].X;
 end;
 
 procedure TForm1.SetPlanCell(X, Y: Integer; Kind: TFloorplanCell; ALayer: Integer);

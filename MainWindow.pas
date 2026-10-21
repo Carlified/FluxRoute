@@ -11,7 +11,7 @@ uses
   System.Generics.Collections, System.StrUtils,
   UGeometry, UPhysics, UColors, UNetNaming, URoutingLegend,
   PlacementTypes, UDesignConfig, UConstants, ExportModel, ExportLibrary, ExportGDS,
-  ExportCIR,
+  ExportCIR, ClockValidate,
   UPython,
   LefLibrary,
   BlifLibrary,
@@ -82,7 +82,6 @@ type
 
   TForm1 = class(TForm)
     TabControl1: TTabControl;
-    LabelStartTitle: TLabel;
     LabelStartHint: TLabel;
     ButtonNewProject: TButton;
     ButtonOpenProject: TButton;
@@ -95,7 +94,6 @@ type
     btnLoadLibrary: TButton;
     lstCells: TListBox;
     MemoLayers: TMemo;
-    lblStatus: TLabel;
     btnLoadBlif: TButton;
     memoNetlist: TMemo;
     TabItem3: TTabItem;
@@ -132,7 +130,6 @@ type
     LabelFreqLeft: TLabel;
     LabelFreqRight: TLabel;
     TabItem6: TTabItem;
-    Label8: TLabel;
     PaintBox2: TPaintBox;
     PaintBox3: TPaintBox;
     ButtonOptimize: TButton;
@@ -140,6 +137,7 @@ type
     CheckBoxShowNames: TCheckBox;
     CheckBoxShowLogicWires: TCheckBox;
     CheckBoxShowClockWires: TCheckBox;
+  CheckBoxSeedBuffers: TCheckBox;
     CheckBoxShowFloorplan: TCheckBox;
     CheckBoxShowCells: TCheckBox;
     ListBoxFloorplanErrors: TListBox;
@@ -161,6 +159,7 @@ type
     CheckExportCir: TCheckBox;
     ButtonPreflight: TButton;
     ButtonExport: TButton;
+    ButtonHelp: TButton;
     MemoExportLog: TMemo;
     OpenDialog1: TOpenDialog;
     SaveDialog1: TSaveDialog;
@@ -181,6 +180,8 @@ type
     procedure TrackBar1Change(Sender: TObject);
     procedure ButtonBackClick(Sender: TObject);
     procedure ButtonNextClick(Sender: TObject);
+    procedure ButtonHelpClick(Sender: TObject);
+    procedure UpdateNavButtons;
     procedure ButtonNewProjectClick(Sender: TObject);
     procedure ButtonOpenProjectClick(Sender: TObject);
     procedure ListBoxRecentDblClick(Sender: TObject);
@@ -192,6 +193,7 @@ type
 procedure ButtonOptimizeClick(Sender: TObject);
     procedure ButtonExpandBiasClick(Sender: TObject);
     procedure CheckBoxToggleChange(Sender: TObject);
+  procedure CheckBoxSeedBuffersChange(Sender: TObject);
     procedure ButtonRunRoutingClick(Sender: TObject);
     procedure ButtonValidateRoutingClick(Sender: TObject);
     procedure ButtonBrowseLibClick(Sender: TObject);
@@ -265,7 +267,9 @@ procedure ButtonOptimizeClick(Sender: TObject);
     FPublishSinceRepaint: Integer;  // PublishTrace live-repaint throttle counter
     FRoutingBusy: Boolean;          // blocks re-entrant routing via the message pump
     FRouteLengthColor: Boolean;  // trace colouring: length scale vs layer colour
-    FValidationBuffers: TArray<TValidationBuffer>; // buffers validation inserted
+    FValidationBuffers: TArray<TValidationBuffer>; // clock trunk buffers (validation)
+    FLengthBuffers: TArray<TLengthBufferPlacement>; // length mask (validation)
+    FMinClockPeriodPs: Double;                      // timing-derived min clock period
     FValidationBlocked: TStringList;               // failed buffer slots 'band:row:x'
     FValidationBufIdx: Integer;                    // unique suffix for split net names
     FPlacementErrorCount: Integer;
@@ -307,7 +311,10 @@ procedure ButtonOptimizeClick(Sender: TObject);
     FClockRowExtra: TArray<Integer>; // extra rows added to a band's CLOCK row
     // Bias-line current-capacity geometry computed by the bias helpers and applied
     // in BuildFloorplan (extra row heights and the two flanking lane widths).
-    FBiasRowH: TArray<TArray<Integer>>; // [band][0=top,1=middle] extra rows
+    // [band][0=top, 1=middle] extra bias rows. Persists across floorplan
+    // rebuilds (BuildFloorplan remaps it by layer/chunk); there is no teardown,
+    // so expansion leaves permanent headroom - a known quirk, not unbounded.
+    FBiasRowH: TArray<TArray<Integer>>;
     FBottomBiasH: Integer;              // extra rows on the bottom-most bias line
     FBiasLaneW: TArray<Integer>;        // [0]=left feed lane, [1]=right lane width (>=1)
     // The block-based bias network built by RouteBiasLines (one cell per grid
@@ -332,6 +339,14 @@ procedure ButtonOptimizeClick(Sender: TObject);
     procedure InitWorkspaceContainers;
     procedure FreeWorkspaceContainers;
     procedure ScrapValidationModel;
+    procedure RemoveClockValidationBuffers;
+    // Length-fixing validation buffers live in their own mask layer: positioned
+    // over the logic/clock rows, visible to routing/bias but never merged into
+    // FPlacedComponents/FSpine/the clock subtree.
+    procedure ReapplyLengthBufferMask;
+    procedure RemoveLengthBuffers;
+    function IsLengthMaskGate(G: TGateInstance): Boolean;
+    procedure CheckValidationBufferOwnership;
     procedure FreeLib;
     procedure ResetWorkspace;
     procedure LoadLibraryFromFile(const Path: string; AShowErrors: Boolean = True);
@@ -385,7 +400,6 @@ procedure ButtonOptimizeClick(Sender: TObject);
     function PreviewPadOrder(const Ord: TArray<Integer>;
       DragIdx, Slot: Integer): TArray<Integer>;
     procedure ReapplyPadOrder;
-    function PadDisplayX(Idx: Integer): Integer;
     procedure BuildClockSubtreePlacements;
     procedure BuildSpinePlacement;
     procedure ValidatePlacement;
@@ -415,6 +429,10 @@ procedure ButtonOptimizeClick(Sender: TObject);
     procedure DrawRoutingLegend(Canvas: TCanvas);
     procedure RunRouting;
     procedure RunRoutingValidation;
+    // Clock-arrival validation. Returns False when no buffer slot could be
+    // found (validation failed); AInserted is True when a trunk buffer was
+    // added (the caller then re-runs the length check).
+    function RunClockValidation(out AInserted: Boolean): Boolean;
 procedure AppendScanTally(const D: TExportDesign;
       const Cells: TArray<TExportCellCount>; const Lines: TStrings);
     procedure ReportLibraryCoverage(const D: TExportDesign;
@@ -433,11 +451,12 @@ procedure AppendScanTally(const D: TExportDesign;
     procedure UnblockTrace(ATraceIdx: Integer);
     function RerouteTrace(ATraceIdx: Integer): Boolean;
     function FindMinDelayBufferCell: TCell;
+    function FindMaxDelayBufferCell: TCell;
     procedure ReapplyValidationBuffers;
     procedure RunBiasExpansionAndRouting;
     function TryInsertBuffer(IsClock: Boolean; const NetName: string;
       Driver, Load: TGateInstance; const DriverPin, LoadPin: string;
-      APadLoad: Boolean;
+      APadLoad, AIsLengthFix: Boolean;
       BufCell: TCell; const InPin, OutPin: string;
       ABand, ARowType, AX, AY: Integer): Boolean;
     function InsertBufferForTrace(ATraceIdx: Integer): Boolean;
@@ -553,22 +572,19 @@ var
 begin
   if not TFile.Exists(Path) then
   begin
-    lblStatus.Text := 'LEF file not found: ' + Path;
     if AShowErrors then
-      ShowMessage(lblStatus.Text);
+      ShowMessage('LEF file not found: ' + Path);
     Exit;
   end;
 
   ResetWorkspace;
   FLefFile := Path;
-  lblStatus.Text := 'Parsing: ' + ExtractFileName(FLefFile);
 
   try
     Lib := LoadLefLibrary(FLefFile);
   except
     on E: Exception do
     begin
-      lblStatus.Text := 'Failed to parse LEF file.';
       if AShowErrors then
         ShowMessage('Failed to parse LEF file:' + sLineBreak + sLineBreak + E.Message);
       UpdateUI;
@@ -604,15 +620,10 @@ begin
   for i := 0 to FLib.Cells.Count - 1 do
     lstCells.Items.Add(FLib.Cells[i].Name);
   PopulateBiasLayerCombo;
-  lblStatus.Text := Format('Loaded %d cell(s) from %s',
-    [FLib.Cells.Count, ExtractFileName(FLefFile)]);
   UpdateUI;
 end;
 
 procedure TForm1.SetCellFolderPath(const Path: string; AShowErrors: Boolean);
-var
-  Cell: TCell;
-  CellsWithMatches, TotalFiles: Integer;
 begin
   FCellFolder := Path;
   if FLib = nil then
@@ -620,25 +631,12 @@ begin
 
   if not TDirectory.Exists(FCellFolder) then
   begin
-    lblStatus.Text := 'Cell folder no longer exists.';
     if AShowErrors then
-      ShowMessage(lblStatus.Text);
+      ShowMessage('Cell folder no longer exists.');
     Exit;
   end;
 
   FLib.FindCellSourceFiles(FCellFolder);
-
-  CellsWithMatches := 0;
-  TotalFiles := 0;
-  for Cell in FLib.Cells do
-    if Cell.SourceFiles.Count > 0 then
-    begin
-      Inc(CellsWithMatches);
-      Inc(TotalFiles, Cell.SourceFiles.Count);
-    end;
-
-  lblStatus.Text := Format('Found %d linked file(s) for %d of %d cells. Double-click a cell to view it.',
-    [TotalFiles, CellsWithMatches, FLib.Cells.Count]);
   UpdateUI;
 end;
 
@@ -651,9 +649,8 @@ begin
 
   if not TFile.Exists(Path) then
   begin
-    lblStatus.Text := 'BLIF file not found: ' + Path;
     if AShowErrors then
-      ShowMessage(lblStatus.Text);
+      ShowMessage('BLIF file not found: ' + Path);
     Exit;
   end;
 
@@ -667,7 +664,6 @@ begin
   UpdateLimitLabels;
   FCellDelays.Clear;
   memoNetlist.Lines.Clear;
-  lblStatus.Text := 'Parsing: ' + ExtractFileName(FBlifFile);
 
   Errors := TStringList.Create;
   try
@@ -676,7 +672,6 @@ begin
     except
       on E: Exception do
       begin
-        lblStatus.Text := 'Failed to parse BLIF file.';
         if AShowErrors then
           ShowMessage('Failed to parse BLIF file:' + sLineBreak + sLineBreak + E.Message);
         UpdateUI;
@@ -688,8 +683,6 @@ begin
 
     ComputeClockLevels(FModel, Errors);
 
-    lblStatus.Text := Format('Loaded netlist "%s": %d gate(s), %d net(s), %d error(s)',
-      [FModel.Name, FModel.Gates.Count, FModel.Nets.Count, Errors.Count]);
   finally
     Errors.Free;
   end;
@@ -699,6 +692,10 @@ end;
 procedure TForm1.UpdateUI;
 var
   LibReady: Boolean;
+  HasTwoWay: Boolean;
+  i: Integer;
+  Cell: TCell;
+  NumOutputs: Integer;
 begin
   LibReady := (FLib <> nil) and (FCellFolder <> '');
   btnLoadLibrary.Enabled := (FLib <> nil);
@@ -721,11 +718,27 @@ begin
   if TabControl1.TabIndex = TabLibrary then
     ButtonNext.Enabled := ButtonNext.Enabled and LibReady; // LEF + library folder
   if TabControl1.TabIndex = TabComponents then
+  begin
+    HasTwoWay := False;
+    if FLib <> nil then
+      for i := 0 to FSplitterNames.Count - 1 do
+      begin
+        Cell := FLib.FindCell(FSplitterNames[i]);
+        if (Cell <> nil) and IsSplitterCandidate(Cell, NumOutputs) and
+           (NumOutputs = 2) then
+        begin
+          HasTwoWay := True;
+          Break;
+        end;
+      end;
     ButtonNext.Enabled := ButtonNext.Enabled and
-      (FSplitterNames.Count > 0) and (FFlipFlopNames.Count > 0) and
-      (FBufferNames.Count > 0);
+      (FSplitterNames.Count > 0) and HasTwoWay and
+      (FFlipFlopNames.Count > 0) and (FBufferNames.Count > 0);
+  end;
   if TabControl1.TabIndex = TabNetlist then
     ButtonNext.Enabled := ButtonNext.Enabled and (FModel <> nil);
+  if TabControl1.TabIndex = TabClock then
+    ButtonNext.Enabled := ButtonNext.Enabled and (FClockNet <> nil);
   if TabControl1.TabIndex = TabPlacement then
     ButtonNext.Enabled := ButtonNext.Enabled and FPlacementInitialized and
       (FPlacementErrorCount = 0);
@@ -746,6 +759,7 @@ begin
   // validation loop completes, so a new state is never routed over an unverified one.
   ButtonRunRouting.Enabled := (FFlowStage < fsRouted) or (FFlowStage >= fsValidated);
   ButtonValidateRouting.Enabled := (FFlowStage >= fsRouted) and (FFlowStage < fsValidated);
+  UpdateNavButtons;
 end;
 
 {$I ConfigIO.inc}
@@ -753,6 +767,11 @@ end;
 
 procedure TForm1.ScrapValidationModel;
 begin
+  // Clock validation buffers live in the persistent buffered clock model (the
+  // signal ones live on the throwaway placement clone), so take them out
+  // explicitly: going back must start from the pristine clock tree.
+  RemoveLengthBuffers;
+  RemoveClockValidationBuffers;
   if FOwnedPlacementModel = nil then
     Exit;
   // The clone's gates are referenced by FValidationBuffers, so those records go
@@ -865,13 +884,12 @@ begin
   if (Key = Ord('S')) and ((ssCtrl in Shift) or (ssCommand in Shift)) then
   begin
     Key := 0;
-    if FProjectPath = '' then
+    // Ctrl/Cmd+Shift+S always writes to a new name; Ctrl/Cmd+S saves in place
+    // and only asks for a name when the project has never been saved.
+    if (ssShift in Shift) or (FProjectPath = '') then
       SaveProjectFileAs
     else
-    begin
       SaveProjectState;
-      lblStatus.Text := 'Project saved: ' + ExtractFileName(FProjectPath);
-    end;
   end;
 end;
 
@@ -1369,6 +1387,7 @@ end;
 
 
 {$I Routing.inc}
+{$I ClockValidate.inc}
 
 
 procedure TForm1.FormMouseWheel(Sender: TObject; Shift: TShiftState;
@@ -1470,10 +1489,12 @@ end;
 
 
 {$I ClockPage.inc}
+{$I PageHelp.inc}
 
 
 procedure TForm1.TabControl1Change(Sender: TObject);
 begin
+  UpdateNavButtons;
   // The Routing page state belongs to the circuit routed there; navigating back
   // discards it so a re-placed circuit never shows or validates against stale traces.
   if TabControl1.TabIndex < TabRouting then
@@ -1594,7 +1615,6 @@ var
   Cell: TCell;
   NumOutputs: Integer;
   Delay: Double;
-  Inserted: Integer;
   Errors: TStringList;
 begin
   if FModel = nil then
@@ -1636,11 +1656,7 @@ begin
     SplitterTypes[i].DelayPs := Delay;
   end;
 
-  Inserted := InsertSplitters(FModel, FLib, SplitterTypes);
-  if Inserted > 0 then
-    lblStatus.Text := Format('Inserted %d splitter(s) into the netlist.', [Inserted])
-  else
-    lblStatus.Text := 'No splitters needed (no net has fanout > 1).';
+  InsertSplitters(FModel, FLib, SplitterTypes);
   // Zero inserted is still a valid outcome - nothing required splitting -
   // so allow moving on just as if splitters had been added.
   if FFlowStage < fsSplitters then FFlowStage := fsSplitters;
@@ -2519,7 +2535,7 @@ begin
     ExportCIR.BuildTbJson(Stem, ClockNet, Ins, Outs,
       FDesignConfig.FreqGHz, FDesignConfig.PtlDelayPsPerUm,
       FDesignConfig.CoreUm, FDesignConfig.DieWUm, FDesignConfig.DieHUm,
-      FDesignConfig.MaxPtlLengthUm));
+      FDesignConfig.MaxPtlLengthUm, FMinClockPeriodPs));
   MemoExportLog.Lines.Add(Format('TB config: %d in / %d out, clock "%s".',
     [Length(Ins), Length(Outs), ClockNet]));
 end;

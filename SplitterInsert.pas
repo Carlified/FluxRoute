@@ -94,6 +94,10 @@ begin
       K := SplitterTypes[t].OutputCount;
       if K < 2 then
         Continue;
+      // A splitter must not have more outputs than remaining loads, or some
+      // of its outputs would be left floating.
+      if K > s then
+        Continue;
       Cost := SplitterTypes[t].DelayPs + DP[(s + K - 1) div K].Cost;
       if (DP[s].Choice < 0) or (Cost < DP[s].Cost) then
       begin
@@ -242,6 +246,7 @@ var
   NC: TNetConnection;
   Loads: TList<TNetLoad>;
   Load: TNetLoad;
+  HasTwoWay: Boolean;
   i, j, t: Integer;
 begin
   Result := 0;
@@ -251,6 +256,18 @@ begin
   for t := 0 to Length(SplitterTypes) - 1 do
     if Lib.FindCell(SplitterTypes[t].CellName) = nil then
       Exit;
+
+  // No floating pins allowed: a 2-way splitter must be present so every
+  // subtree can split down to single loads.
+  HasTwoWay := False;
+  for t := 0 to Length(SplitterTypes) - 1 do
+    if SplitterTypes[t].OutputCount = 2 then
+    begin
+      HasTwoWay := True;
+      Break;
+    end;
+  if not HasTwoWay then
+    Exit;
 
   MaxS := 0;
   for Net in Model.Nets.Values do
@@ -314,6 +331,7 @@ var
   NC: TNetConnection;
   Loads: TList<TNetLoad>;
   Load: TNetLoad;
+  HasTwoWay: Boolean;
 begin
   Result := 0;
   if (Model = nil) or (Length(SplitterTypes) = 0) then
@@ -324,6 +342,18 @@ begin
   for t := 0 to Length(SplitterTypes) - 1 do
     if Lib.FindCell(SplitterTypes[t].CellName) = nil then
       Exit;
+
+  // No floating pins allowed: a 2-way splitter must be present so every
+  // subtree can split down to single loads.
+  HasTwoWay := False;
+  for t := 0 to Length(SplitterTypes) - 1 do
+    if SplitterTypes[t].OutputCount = 2 then
+    begin
+      HasTwoWay := True;
+      Break;
+    end;
+  if not HasTwoWay then
+    Exit;
 
   MaxS := CountLoads(Net);
   if MaxS < 2 then

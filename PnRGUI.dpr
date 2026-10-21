@@ -1,4 +1,4 @@
-﻿program PnRGUI;
+program PnRGUI;
 
 uses
   System.StartUpCopy,
@@ -26,6 +26,7 @@ uses
   PipelineAnalysis in 'PipelineAnalysis.pas',
   FlipFlopInsert in 'FlipFlopInsert.pas',
   ClockNetwork in 'ClockNetwork.pas',
+  ClockValidate in 'ClockValidate.pas',
   ProjectData in 'ProjectData.pas';
 
 {$R *.res}

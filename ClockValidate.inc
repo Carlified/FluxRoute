@@ -1,0 +1,307 @@
+// Clock-arrival validation: checks that no clocked cell's clock arrives later
+// than the worst-case data launched by a preceding clocked cell, and inserts
+// trunk buffers (the next-lower clock level is delayed) until it holds. The
+// netlist walks live in ClockValidate.pas; this file supplies the routed PTL
+// delays and performs the insertion. Included by MainWindow.pas.
+
+function TForm1.RunClockValidation(out AInserted: Boolean): Boolean;
+const
+  MaxBuffersPerRun = 64;
+var
+  Model: TBlifModel;
+  IndexMap: TDictionary<TGateInstance, Integer>;
+  ClkPos: TDictionary<TGateInstance, TPoint>;
+  ClkRot: TDictionary<TGateInstance, Boolean>;
+  WireDelays: TDictionary<string, Double>;
+  ClockArr, DataArr: TDictionary<TGateInstance, Double>;
+  Rows: TArray<Integer>;
+  Violations: TClockViolations;
+  Core, PerBlock, DataPer, SpacingPer: Double;
+  i, Worst, Guard, Idx: Integer;
+  Net: TNet;
+  Tr: TRoutedTrace;
+  V: TClockViolation;
+
+  // Pin block of a clock-tree (or, as a fallback, logic) gate.
+  function PinBlock(G: TGateInstance; const PinName: string;
+    out P: TPoint): Boolean;
+  var
+    P0: TPoint;
+    Rot: Boolean;
+  begin
+    Result := False;
+    if G = nil then
+      Exit;
+    if ClkPos.TryGetValue(G, P0) then
+    begin
+      Rot := False;
+      ClkRot.TryGetValue(G, Rot);
+      Result := GatePinBlockAt(G, PinName, 0, P0.X, P0.Y, Rot, P);
+      Exit;
+    end;
+    if FGatePlacement.TryGetValue(G, P0) then
+      Result := GatePinBlock(G, PinName, 0, P);
+  end;
+
+  // PTL blocks in the routed trace, excluding the two endpoint pin blocks.
+  function LineBlocks(const ATr: TRoutedTrace): Integer;
+  var
+    k, N: Integer;
+  begin
+    N := 0;
+    for k := 0 to High(ATr.Points) do
+      if (k = 0) or (ATr.Points[k].X <> ATr.Points[k - 1].X) or
+         (ATr.Points[k].Y <> ATr.Points[k - 1].Y) then
+        Inc(N);
+    Result := N - 2;
+    if Result < 0 then
+      Result := 0;
+  end;
+
+  // The routed trace of ANetName that terminates at Load's pin block.
+  function TraceForLoad(const NetName: string; Load: TGateInstance;
+    const LoadPin: string; out ATr: TRoutedTrace): Boolean;
+  var
+    k: Integer;
+    P, EndPt: TPoint;
+  begin
+    Result := False;
+    if not PinBlock(Load, LoadPin, P) then
+      Exit;
+    for k := 0 to High(FRouteTraces) do
+    begin
+      if not SameText(FRouteTraces[k].NetName, NetName) then
+        Continue;
+      if Length(FRouteTraces[k].Points) = 0 then
+        Continue;
+      EndPt := FRouteTraces[k].Points[High(FRouteTraces[k].Points)];
+      if (EndPt.X = P.X) and (EndPt.Y = P.Y) then
+      begin
+        ATr := FRouteTraces[k];
+        Exit(True);
+      end;
+    end;
+  end;
+
+  procedure BuildMaps;
+  var
+    Sp: TSpineComponent;
+    Node: TPlacedClockNode;
+    si, sl, sk: Integer;
+  begin
+    ClkPos.Clear;
+    ClkRot.Clear;
+    for si := 0 to High(FSpine) do
+    begin
+      Sp := FSpine[si];
+      if Sp.Gate <> nil then
+      begin
+        ClkPos.AddOrSetValue(Sp.Gate, TPoint.Create(Sp.X, Sp.Y));
+        ClkRot.AddOrSetValue(Sp.Gate, Sp.Rotated);
+      end;
+    end;
+    for sl := 0 to High(FClockSubtree) do
+      for sk := 0 to High(FClockSubtree[sl]) do
+      begin
+        Node := FClockSubtree[sl][sk];
+        if Node.Gate <> nil then
+        begin
+          ClkPos.AddOrSetValue(Node.Gate, TPoint.Create(Node.X, Node.Y));
+          ClkRot.AddOrSetValue(Node.Gate, False);
+        end;
+      end;
+  end;
+
+  procedure BuildWireDelays;
+  var
+    WNet: TNet;
+    WNC: TNetConnection;
+  begin
+    WireDelays.Clear;
+    for WNet in Model.Nets.Values do
+      for WNC in WNet.Connections do
+      begin
+        if WNC.IsDriver then
+          Continue;
+        if not IndexMap.TryGetValue(WNC.Gate, Idx) then
+          Continue;
+        if TraceForLoad(WNet.Name, WNC.Gate, WNC.PinName, Tr) then
+          WireDelays.AddOrSetValue(WireKey(Idx, WNC.PinName),
+            LineBlocks(Tr) * PerBlock)
+        else
+          WireDelays.AddOrSetValue(WireKey(Idx, WNC.PinName), 0);
+      end;
+  end;
+
+  // True for an exact per-row tap net (clk_row_<n>), false for a net merely
+  // derived from one (clk_row_1__vbuf_3).
+  function IsRowNet(const S: string): Boolean;
+  var
+    LV: Integer;
+  begin
+    Result := SameText(Copy(S, 1, Length(UNetNaming.ClockRowPrefix)),
+      UNetNaming.ClockRowPrefix) and
+      TryStrToInt(Copy(S, Length(UNetNaming.ClockRowPrefix) + 1, MaxInt), LV);
+  end;
+
+  // Splits the trunk segment net with one buffer. Only the netlist changes: the
+  // next floorplan rebuild places the buffer as a spine component (rotated,
+  // stacked, overflow-aware, with its bias ports collected) via
+  // BuildSpinePlacement, and routing re-runs. No placement slot is chosen here.
+  function InsertTrunkBuffer(const NetName: string): Boolean;
+  var
+    Driver, Load: TGateInstance;
+    DriverPin, LoadPin: string;
+    BufCell: TCell;
+    InPort, OutPort: TPort;
+    InPin, OutPin: string;
+    NC: TNetConnection;
+    k: Integer;
+  begin
+    Result := False;
+    if (NetName = '') or (not Model.Nets.TryGetValue(NetName, Net)) then
+      Exit;
+    Driver := nil;
+    DriverPin := '';
+    for NC in Net.Connections do
+      if NC.IsDriver then
+      begin
+        Driver := NC.Gate;
+        DriverPin := NC.PinName;
+        Break;
+      end;
+    Load := nil;
+    LoadPin := '';
+    for NC in Net.Connections do
+      if not NC.IsDriver then
+      begin
+        Load := NC.Gate;
+        LoadPin := NC.PinName;
+        Break;
+      end;
+    if Load = nil then
+      Exit;
+    BufCell := FindMaxDelayBufferCell;
+    if BufCell = nil then
+      Exit;
+    InPort := nil;
+    OutPort := nil;
+    for k := 0 to BufCell.Ports.Count - 1 do
+      if BufCell.Ports[k].Direction = pdOutput then
+        OutPort := BufCell.Ports[k]
+      else if BufCell.Ports[k].Direction = pdInput then
+        InPort := BufCell.Ports[k];
+    if (InPort = nil) or (OutPort = nil) then
+      Exit;
+    InPin := InPort.Name;
+    OutPin := OutPort.Name;
+    // When the target is a row tap net (the merged final junction output),
+    // keep that name on the load side so the row tree stays rooted there; the
+    // junction moves to a fresh net and the buffer becomes a spine component
+    // placed by BuildSpinePlacement, not a row-tree node.
+    Result := TryInsertBuffer(True, NetName, Driver, Load, DriverPin, LoadPin,
+      IsRowNet(NetName), False, BufCell, InPin, OutPin, -1, -1, 0, 0);
+  end;
+
+begin
+  AInserted := False;
+  Result := True;
+  Model := FClockBufferedModel;
+  if Model = nil then
+    Model := FClockModel;
+  if (Model = nil) or (FClockNet = nil) then
+    Exit;
+  SetLength(Rows, FClockNet.Rows.Count);
+  for i := 0 to FClockNet.Rows.Count - 1 do
+    Rows[i] := FClockNet.Rows[i];
+  if Length(Rows) < 2 then
+    Exit;
+
+  Core := FDesignConfig.CoreUm;
+  if Core <= 0 then
+    Core := FPlanCore;
+  if Core <= 0 then
+    Core := 1;
+  PerBlock := Core * FDesignConfig.PtlDelayPsPerUm;
+  if PerBlock < 0 then
+    PerBlock := 0;
+
+  IndexMap := TDictionary<TGateInstance, Integer>.Create;
+  ClkPos := TDictionary<TGateInstance, TPoint>.Create;
+  ClkRot := TDictionary<TGateInstance, Boolean>.Create;
+  WireDelays := TDictionary<string, Double>.Create;
+  ClockArr := TDictionary<TGateInstance, Double>.Create;
+  DataArr := TDictionary<TGateInstance, Double>.Create;
+  try
+    for i := 0 to Model.Gates.Count - 1 do
+      IndexMap.AddOrSetValue(Model.Gates[i], i);
+
+    Guard := 0;
+    repeat
+      BuildMaps;
+      BuildWireDelays;
+      ComputeClockArrivals(Model, FClockNet.SourceNet, WireDelays, ClockArr);
+      ComputeDataArrivals(Model, WireDelays, ClockArr, DataArr);
+      Violations := FindClockViolations(Model, Rows, ClockArr, DataArr);
+      if Length(Violations) = 0 then
+      begin
+        DataPer := MinPeriodFromTiming(Model, ClockArr, DataArr);
+        SpacingPer := MaxInputSpacingPs(Model);
+        FMinClockPeriodPs := DataPer;
+        if SpacingPer > FMinClockPeriodPs then
+          FMinClockPeriodPs := SpacingPer;
+        MemoRouting.Lines.Add(Format(
+          'Clock arrivals are within the data-arrival limit (%d cell(s) timed).',
+          [ClockArr.Count]));
+        MemoRouting.Lines.Add(Format(
+          'Min clock period: %.1f ps (data+setup %.1f, input spacing %.1f).',
+          [FMinClockPeriodPs, DataPer, SpacingPer]));
+        Exit;
+      end;
+
+      Worst := 0;
+      for i := 1 to High(Violations) do
+        if (Violations[i].ClkArrPs - Violations[i].DataArrPs) >
+           (Violations[Worst].ClkArrPs - Violations[Worst].DataArrPs) then
+          Worst := i;
+      V := Violations[Worst];
+      MemoRouting.Lines.Add(Format(
+        '  clock %s (level %d): clock %.1f ps > data %.1f ps; buffering %s.',
+        [V.CellName, V.Level, V.ClkArrPs, V.DataArrPs, V.TrunkNet]));
+
+      if V.TrunkNet = '' then
+      begin
+        MemoRouting.Lines.Add(Format(
+          'CLOCK VALIDATION FAILED: no trunk segment to buffer for cell %s ' +
+          '(level %d, clock %.1f ps, data %.1f ps).',
+          [V.CellName, V.Level, V.ClkArrPs, V.DataArrPs]));
+        Result := False;
+        Exit;
+      end;
+      if not InsertTrunkBuffer(V.TrunkNet) then
+      begin
+        MemoRouting.Lines.Add(Format(
+          'CLOCK VALIDATION FAILED: could not insert a buffer on %s (cell %s, ' +
+          'level %d, clock %.1f ps, data %.1f ps).',
+          [V.TrunkNet, V.CellName, V.Level, V.ClkArrPs, V.DataArrPs]));
+        Result := False;
+        Exit;
+      end;
+      AInserted := True;
+      Inc(Guard);
+      RepaintRoutingPage;
+    until Guard >= MaxBuffersPerRun;
+
+    MemoRouting.Lines.Add(Format(
+      'CLOCK VALIDATION FAILED: still unbalanced after %d buffers.',
+      [MaxBuffersPerRun]));
+    Result := False;
+  finally
+    DataArr.Free;
+    ClockArr.Free;
+    WireDelays.Free;
+    ClkRot.Free;
+    ClkPos.Free;
+    IndexMap.Free;
+  end;
+end;

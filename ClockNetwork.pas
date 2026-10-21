@@ -1,4 +1,4 @@
-﻿unit ClockNetwork;
+unit ClockNetwork;
 
 // Counter-flow clock network built after DFF insertion: each row's real-splitter
 // tree taps clk through tunable synthetic CLOCK_DELAY stages (TClockNetworkInfo.Stages).
@@ -210,6 +210,34 @@ procedure BuildTreeDistances(AModel: TBlifModel; const ARowNet: string;
 
 begin
   Walk(ARowNet, 0);
+end;
+
+var
+  GHoldCache: TDictionary<string, Double> = nil;
+
+// Hold time (ps) of a cell from its TimEx .v $hold set; 0 when unavailable.
+// Memoised per seed run (the cache lives for the unit's lifetime).
+function CellHoldOfLocal(ACell: TCell): Double;
+var
+  i: Integer;
+  S, H, Sp: Double;
+begin
+  Result := 0;
+  if ACell = nil then
+    Exit;
+  if GHoldCache = nil then
+    GHoldCache := TDictionary<string, Double>.Create;
+  if GHoldCache.TryGetValue(ACell.Name, Result) then
+    Exit;
+  Result := 0;
+  for i := 0 to ACell.SourceFiles.Count - 1 do
+    if SameText(ExtractFileExt(ACell.SourceFiles[i]), '.v') then
+    begin
+      ParseTimingConstraints(ACell.SourceFiles[i], S, H, Sp);
+      Result := H;
+      Break;
+    end;
+  GHoldCache.AddOrSetValue(ACell.Name, Result);
 end;
 
 // Walks G's data inputs back to the nearest clocked driver P, returning the path
@@ -551,6 +579,7 @@ var
   TreeDly: TDictionary<string, Double>;
   BufCounter: Integer;
   BufferT: Integer;
+  TwoWayIdx: Integer;
 begin
   Result := nil;
   if (AModel = nil) or (Lib = nil) or (Length(SplitterTypes) = 0) then
@@ -559,6 +588,20 @@ begin
   for i := 0 to Length(SplitterTypes) - 1 do
     if Lib.FindCell(SplitterTypes[i].CellName) = nil then
       Exit;
+
+  // Junction splitters must be 2-way so both outputs are used (no dangling pin).
+  TwoWayIdx := -1;
+  for i := 0 to Length(SplitterTypes) - 1 do
+    if SplitterTypes[i].OutputCount = 2 then
+    begin
+      TwoWayIdx := i;
+      Break;
+    end;
+  if TwoWayIdx < 0 then
+  begin
+    Errors.Add('Clock network: no 2-way splitter available for the spine junctions.');
+    Exit;
+  end;
 
   ClockNetName := ClockNetFor(AModel);
   if ClockNetName = '' then
@@ -622,6 +665,15 @@ begin
     if Info.Rows.Count = 0 then
     begin
       Errors.Add('Clock network: every row was below level 1.');
+      Exit;
+    end;
+
+    // A spine needs at least two clock rows (a junction plus the delay to the
+    // row below it). A single clock row cannot be wired without leaving a
+    // dangling junction output, so it is treated as unbuildable.
+    if Info.Rows.Count < 2 then
+    begin
+      Errors.Add('Clock network: a clock spine needs at least two clock rows.');
       Exit;
     end;
 
@@ -748,7 +800,7 @@ begin
       // this row's distribution tree and the delay leading down.
       if RowIdx < Info.Rows.Count - 1 then
       begin
-      JunctionCell := Lib.FindCell(SplitterTypes[0].CellName);
+      JunctionCell := Lib.FindCell(SplitterTypes[TwoWayIdx].CellName);
       InPort := nil;
       OutA := nil;
       OutB := nil;
@@ -916,7 +968,7 @@ begin
             Continue;
           TreeP := 0;
           TreeDistL.TryGetValue(P, TreeP);
-          Val := TreeC - TreeP - DataDly;
+          Val := TreeC + CellHoldOfLocal(Gate.Cell) - TreeP - DataDly;
           if Val > BestSeed then
             BestSeed := Val;
         end;

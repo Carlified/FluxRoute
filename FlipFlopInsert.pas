@@ -156,6 +156,55 @@ begin
   Result := Gate;
 end;
 
+// Connects any clocked gate whose clock pin is missing from the netlist (BLIF
+// omits clk= assignments) to the resolved clock net. Without this the model is
+// inconsistent before level computation / DFF insertion: ClockNetFor sees no
+// clock pins, the clock net is synthesised, and the existing clocked cells stay
+// dangling until the clock network runs.
+procedure EnsureClockPinsConnected(Model: TBlifModel; const ClockNetName: string);
+var
+  Gate: TGateInstance;
+  Port: TPort;
+  Conn: TPinConnection;
+  NC: TNetConnection;
+  Net: TNet;
+  j, k: Integer;
+  HasConn: Boolean;
+begin
+  if (Model = nil) or (ClockNetName = '') then
+    Exit;
+  Net := Model.FindOrCreateNet(ClockNetName);
+  for Gate in Model.Gates do
+  begin
+    if not CellHasClock(Gate.Cell) then
+      Continue;
+    for j := 0 to Gate.Cell.Ports.Count - 1 do
+    begin
+      Port := Gate.Cell.Ports[j];
+      if (Port.Direction <> pdInput) or not IsClockPinName(Port.Name) then
+        Continue;
+      HasConn := False;
+      for k := 0 to Gate.Connections.Count - 1 do
+        if SameText(Gate.Connections[k].PinName, Port.Name) then
+        begin
+          HasConn := True;
+          Break;
+        end;
+      if HasConn then
+        Continue;
+      Conn := TPinConnection.Create;
+      Conn.PinName := Port.Name;
+      Conn.NetName := ClockNetName;
+      Conn.Port := Port;
+      Gate.Connections.Add(Conn);
+      NC.Gate := Gate;
+      NC.PinName := Port.Name;
+      NC.IsDriver := False;
+      Net.Connections.Add(NC);
+    end;
+  end;
+end;
+
 function InsertCompactFlipFlops(Model: TBlifModel; Lib: TLibrary;
   const FFCellName: string; ADoMerge: Boolean = True): Integer;
 var
@@ -337,6 +386,7 @@ begin
       Model.Inputs.Add(ClockNetName);
     end;
   end;
+  EnsureClockPinsConnected(Model, ClockNetName);
 
   InsertedFFs := TDictionary<TGateInstance, Boolean>.Create;
   try
@@ -505,6 +555,7 @@ begin
       Model.Inputs.Add(ClockNetName);
     end;
   end;
+  EnsureClockPinsConnected(Model, ClockNetName);
 
   // Find the maximum clock level among all primary output drivers.
   MaxLevel := 0;
@@ -663,6 +714,7 @@ begin
       Model.Inputs.Add(ClockNetName);
     end;
   end;
+  EnsureClockPinsConnected(Model, ClockNetName);
 
   // Highest clock level in the circuit.
   MaxTopLevel := 0;
@@ -1050,6 +1102,7 @@ begin
       Model.Inputs.Add(ClockNetName);
     end;
   end;
+  EnsureClockPinsConnected(Model, ClockNetName);
 
   CellDelays := TDictionary<string, Double>.Create;
   Arrival := TDictionary<TGateInstance, Double>.Create;

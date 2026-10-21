@@ -1,0 +1,65 @@
+# Delphi / RAD Studio build output (per-platform, regenerated on build)
+Win32/
+Win64/
+OSXARM64/
+OSX64/
+Android/
+Android64/
+iOSDevice64/
+iOSSimARM64/
+Linux64/
+
+# Compiled artefacts
+*.dcu
+*.dcp
+*.dpl
+*.bpl
+*.bpi
+*.lib
+*.obj
+*.o
+*.a
+*.map
+*.rsm
+*.drc
+*.exe
+*.dll
+*.so
+*.dylib
+*.apk
+*.ipa
+
+# Generated export and simulation files
+Win64/Debug/output/
+Win64/Debug/blocklib/
+die.gds
+die.def
+die.cir
+die.tb.json
+die.recipe.json
+die_tb.*
+*.csv
+
+# IDE state: per-machine settings, layout, caches
+*.local
+*.identcache
+*.tvsconfig
+*.dsk
+*.stat
+*.tmp
+*.skincfg
+
+# Delphi history and recovery
+__history/
+__recovery/
+*.~*
+*.bak
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# OS noise
+Thumbs.db
+desktop.ini
+.DS_Store

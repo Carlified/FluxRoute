@@ -1,4 +1,4 @@
-﻿// Clock page: the clock model build, the network painter and page repaint.
+// Clock page: the clock model build, the network painter and page repaint.
 // Included from MainWindow's implementation via {$I ClockPage.inc}.
 
 procedure TForm1.RepaintClockPage;
@@ -85,12 +85,28 @@ begin
     if FClockNet <> nil then
     begin
       FClockBufferedModel := FClockModel.Clone;
-      ReplaceClockDelaysWithBuffers(FClockBufferedModel, FLib, BufTypes, Errors);
+      // Seeded stage-buffer chains are optional: with the clock-page toggle off
+      // the buffered model keeps no stage buffers (their zero delay merges the
+      // nets away) and the clock validation pass inserts only what it needs.
+      if CheckBoxSeedBuffers.IsChecked then
+        ReplaceClockDelaysWithBuffers(FClockBufferedModel, FLib, BufTypes, Errors)
+      else
+        ReplaceClockDelaysWithBuffers(FClockBufferedModel, FLib, nil, Errors);
     end;
     memoNetlist.Lines.AddStrings(Errors); // diagnostics incl. per-stage seeds
   finally
     Errors.Free;
   end;
+end;
+
+// Rebuilds the clock model when the seed-stage buffer toggle changes, so the
+// buffered model reflects the choice immediately.
+procedure TForm1.CheckBoxSeedBuffersChange(Sender: TObject);
+begin
+  if (FPipelineModel = nil) or (FFlipFlopNames.Count = 0) then
+    Exit;
+  BuildClockModel;
+  RepaintClockPage;
 end;
 
 // One node of a row's clock distribution tree: either a splitter (interior)

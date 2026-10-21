@@ -10,12 +10,16 @@
   "josimCli": "C:/Users/27005348/Downloads/JoSIM-v2.7-windows-x64/bin/josim-cli.exe",
   "rsfqLib": "C:/Users/27005348/Desktop/RSFQlib",
 
-  "_comment2": "Stimulus knobs. clockPeriodPs <= 0 means derive it from freqGHz in die.tb.json (period = 1000/freqGHz). launchOffsetPs is where inside each slot the data pulse starts; PTL TD is per 10um block (blocks come from the app's core pitch).",
+  "_comment2": "Stimulus knobs. clockPeriodPs <= 0 means derive it from freqGHz in die.tb.json (period = 1000/freqGHz). launchOffsetPs is the clock pulse start; dataPhasePs is how much later each data pulse starts (the routed data paths are shorter than the clock tree, so data must lag the clock). PTL TD is per 10um block (blocks come from the app's core pitch). pipelineLatencySlots is the counterflow latency added to the run length; timeStepPs/josimMaxRows keep JoSIM's time-point memory in check (measured: 80k points OK, 100k crashed on an 8 GB box).",
   "clockPeriodPs": 0.0,
   "launchOffsetPs": 50.0,
+  "dataPhasePs": 58.0,
   "pulseWidthPs": 3.0,
   "pulseAmplitudeUa": 600.0,
   "riseFallPs": 2.0,
   "ptlTdPsPerBlock": 1.0,
+  "pipelineLatencySlots": 4,
+  "timeStepPs": 0.05,
+  "josimMaxRows": 80000,
   "slots": 8
 }

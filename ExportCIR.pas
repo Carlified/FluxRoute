@@ -43,7 +43,7 @@ function BuildCirText(const Traces: TArray<TRoutedTrace>;
 function BuildTbJson(const Stem, ClockNet: string;
   const Inputs, Outputs: TArray<string>;
   const FreqGHz, PtlDelayPsPerUm, CoreUm, DieWUm, DieHUm,
-  MaxPtlLengthUm: Double): string;
+  MaxPtlLengthUm, MinClockPeriodPs: Double): string;
 
 implementation
 
@@ -417,7 +417,7 @@ end;
 function BuildTbJson(const Stem, ClockNet: string;
   const Inputs, Outputs: TArray<string>;
   const FreqGHz, PtlDelayPsPerUm, CoreUm, DieWUm, DieHUm,
-  MaxPtlLengthUm: Double): string;
+  MaxPtlLengthUm, MinClockPeriodPs: Double): string;
 var
   S: TStringList;
   FS: TFormatSettings;
@@ -470,7 +470,8 @@ begin
     S.Add(Format('  "coreUm": %s,', [Num(CoreUm)]));
     S.Add(Format('  "dieWUm": %s,', [Num(DieWUm)]));
     S.Add(Format('  "dieHUm": %s,', [Num(DieHUm)]));
-    S.Add(Format('  "maxPtlLengthUm": %s', [Num(MaxPtlLengthUm)]));
+    S.Add(Format('  "maxPtlLengthUm": %s,', [Num(MaxPtlLengthUm)]));
+    S.Add(Format('  "minClockPeriodPs": %s', [Num(MinClockPeriodPs)]));
     S.Add('}');
     Result := S.Text;
   finally

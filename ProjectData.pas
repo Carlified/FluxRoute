@@ -1,4 +1,4 @@
-﻿unit ProjectData;
+unit ProjectData;
 
 interface
 
@@ -26,6 +26,7 @@ type
     FBuffers: TStringList;
     FFlipFlop: string;
     FSplittersInserted: Boolean;
+    FClockSeedBuffers: Boolean;
     FLastTab: Integer;
     FSliderPos: Integer;
     FCoreSize: string;
@@ -54,6 +55,7 @@ type
     property Buffers: TStringList read FBuffers;
     property FlipFlop: string read FFlipFlop write FFlipFlop;
     property SplittersInserted: Boolean read FSplittersInserted write FSplittersInserted;
+    property ClockSeedBuffers: Boolean read FClockSeedBuffers write FClockSeedBuffers;
     property LastTab: Integer read FLastTab write FLastTab;
     property SliderPos: Integer read FSliderPos write FSliderPos;
     property CoreSize: string read FCoreSize write FCoreSize;
@@ -112,6 +114,7 @@ begin
   FBuffers.Clear;
   FFlipFlop := '';
   FSplittersInserted := False;
+  FClockSeedBuffers := True;
   FLastTab := 0;
   FSliderPos := 0;
   FCoreSize := '';
@@ -145,6 +148,8 @@ begin
     FFlipFlop := Root.GetValue<string>('flipFlop');
   if Root.GetValue('splittersInserted') is TJSONValue then
     FSplittersInserted := Root.GetValue<Boolean>('splittersInserted');
+  if Root.GetValue('clockSeedBuffers') is TJSONValue then
+    FClockSeedBuffers := Root.GetValue<Boolean>('clockSeedBuffers');
   if Root.GetValue('lastTab') is TJSONValue then
     FLastTab := Root.GetValue<Integer>('lastTab');
   if Root.GetValue('sliderPos') is TJSONValue then
@@ -217,6 +222,7 @@ begin
     Root.AddPair('blif', FBlifFile);
     Root.AddPair('flipFlop', FFlipFlop);
     Root.AddPair('splittersInserted', FSplittersInserted);
+    Root.AddPair('clockSeedBuffers', FClockSeedBuffers);
     Root.AddPair('lastTab', FLastTab);
     Root.AddPair('sliderPos', FSliderPos);
     Root.AddPair('coreSize', FCoreSize);

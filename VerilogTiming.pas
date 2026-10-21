@@ -23,6 +23,10 @@ type
     CellName: string;
     FileName: string;
     Arcs: TList<TArcDelay>; // one entry per distinct (from,to); delay is the max over states
+    // Setup, hold and minimum input-to-input spacing (ps) from the $hold set.
+    SetupPs: Double;
+    HoldPs: Double;
+    InputSpacingPs: Double;
     constructor Create;
     destructor Destroy; override;
     // Worst-case input -> output propagation delay in ps (0 if no arcs).
@@ -34,7 +38,20 @@ type
   // has no specify block / no arcs (e.g. the ALWAYS0 cells) or can't be read.
   function ParseVerilogTiming(const FileName: string): TCellTiming;
 
+  // Greatest SETUP, greatest HOLD and minimum data-to-data input spacing (ps)
+  // across the cell's specparam-backed $hold lines. TimEx emits $hold for both
+  // cases: with the clock as the reference edge (clock first) it is a hold, with
+  // the clock as the data pin (pin first) it is a setup. A $hold with no clock
+  // (a JTL's "a, a", or an NDROT's "a, b") is input-to-input spacing; we keep
+  // the largest. Conditional (&&&) qualifiers are ignored, exactly as the arc
+  // parser ignores if(...) conditional delays. Each defaults to 0.
+  procedure ParseTimingConstraints(const FileName: string;
+    out SetupPs, HoldPs, InputSpacingPs: Double);
+
 implementation
+
+uses
+  PipelineConfig;
 
 function StripLineComment(const Line: string): string;
 var
@@ -99,7 +116,7 @@ var
   i: Integer;
   Clean: string;
   Name, ValueStr, RHS: string;
-  Value: Double;
+  Value, SetupTmp, HoldTmp, SpacingTmp: Double;
   P, Q: Integer;
   InSpecify: Boolean;
   FromPin, ToPin: string;
@@ -235,6 +252,143 @@ begin
 
   Arcs.Free;
   SpecParams.Free;
+  if Result <> nil then
+  begin
+    SetupTmp := 0;
+    HoldTmp := 0;
+    SpacingTmp := 0;
+    ParseTimingConstraints(FileName, SetupTmp, HoldTmp, SpacingTmp);
+    Result.SetupPs := SetupTmp;
+    Result.HoldPs := HoldTmp;
+    Result.InputSpacingPs := SpacingTmp;
+  end;
+end;
+
+procedure ParseTimingConstraints(const FileName: string;
+  out SetupPs, HoldPs, InputSpacingPs: Double);
+var
+  Lines: TStringList;
+  SpecParams: TDictionary<string, Double>;
+  Inv: TFormatSettings;
+  i, P, Q, R: Integer;
+  Clean, Body, Tok, ValStr: string;
+  Args: TArray<string>;
+  V: Double;
+  InSpecify: Boolean;
+
+  // The pin label of an argument: drop any "&&& condition" and the
+  // posedge/negedge keyword, keep the trailing identifier.
+  function LabelOf(const AArg: string): string;
+  var
+    A: string;
+    Toks: TArray<string>;
+    K: Integer;
+  begin
+    Result := '';
+    A := AArg;
+    K := Pos('&&&', A);
+    if K > 0 then
+      A := Copy(A, 1, K - 1);
+    Toks := Trim(A).Split([' ', #9], TStringSplitOptions.ExcludeEmpty);
+    if Length(Toks) > 0 then
+      Result := Toks[High(Toks)];
+  end;
+
+  // Clock pin per the pipeline config, with a plain "clk" fallback for when the
+  // config has not been loaded yet.
+  function IsClockLabel(const S: string): Boolean;
+  begin
+    Result := (S <> '') and (IsClockPinName(S) or StartsText('clk', S));
+  end;
+
+begin
+  SetupPs := 0;
+  HoldPs := 0;
+  InputSpacingPs := 0;
+  if not TFile.Exists(FileName) then
+    Exit;
+
+  Inv := TFormatSettings.Invariant;
+  SpecParams := TDictionary<string, Double>.Create;
+  Lines := TStringList.Create;
+  try
+    Lines.LoadFromFile(FileName);
+    InSpecify := False;
+    for i := 0 to Lines.Count - 1 do
+    begin
+      Clean := Trim(StripLineComment(Lines[i]));
+      if Clean = '' then
+        Continue;
+      if StartsText('specify', Clean) then
+      begin
+        InSpecify := True;
+        Continue;
+      end;
+      if InSpecify and StartsText('endspecify', Clean) then
+        Break;
+      if not InSpecify then
+        Continue;
+
+      if StartsText('specparam', Clean) then
+      begin
+        Body := Trim(Copy(Clean, Length('specparam') + 1, MaxInt));
+        P := Pos('=', Body);
+        if P > 0 then
+        begin
+          ValStr := Trim(Copy(Body, P + 1, MaxInt));
+          Tok := Trim(Copy(Body, 1, P - 1));
+          Q := Pos(';', ValStr);
+          if Q > 0 then
+            ValStr := Trim(Copy(ValStr, 1, Q - 1));
+          if TryStrToFloat(ValStr, V, Inv) then
+            SpecParams.AddOrSetValue(Tok, V);
+        end;
+        Continue;
+      end;
+
+      P := Pos('$hold', LowerCase(Clean));
+      if P = 0 then
+        Continue;
+      Q := PosEx('(', Clean, P);
+      if Q = 0 then
+        Continue;
+      R := PosEx(')', Clean, Q + 1);
+      if R = 0 then
+        Continue;
+      Body := Copy(Clean, Q + 1, R - Q - 1);
+      Args := Body.Split([','], TStringSplitOptions.ExcludeEmpty);
+      if Length(Args) < 3 then
+        Continue;
+      ValStr := Trim(Args[2]);
+      if not SpecParams.TryGetValue(ValStr, V) then
+        if not TryStrToFloat(ValStr, V, Inv) then
+          Continue;
+      Tok := LabelOf(Args[0]);
+      ValStr := LabelOf(Args[1]);
+      if IsClockLabel(Tok) and (not IsClockLabel(ValStr)) then
+      begin
+        // Clock is the reference edge: clk -> a is a hold.
+        if V > HoldPs then
+          HoldPs := V;
+      end
+      else if IsClockLabel(ValStr) and (not IsClockLabel(Tok)) then
+      begin
+        // Clock is the data pin: a -> clk is a setup.
+        if V > SetupPs then
+          SetupPs := V;
+      end
+      else
+      begin
+        // No clock edge involved: data-to-data (a, a / a, b) and clock-on-itself
+        // (clk, clk = minimum period) are both input spacing. Keep the largest.
+        if V > InputSpacingPs then
+          InputSpacingPs := V;
+      end;
+    end;
+  finally
+    Lines.Free;
+    SpecParams.Free;
+  end;
 end;
 
 end.

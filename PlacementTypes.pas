@@ -1,4 +1,4 @@
-﻿unit PlacementTypes;
+unit PlacementTypes;
 
 // Domain types for the floorplan / placement stage. Extracted from MainWindow's
 // type block so other units can reason about placement without pulling in the
@@ -38,6 +38,21 @@ type
     ClockLevel: Integer;
     X, Y: Integer; // top-left grid cell of the component
     W, H: Integer; // component size in grid cells (cell width/height / core)
+  end;
+
+  // A length-fixing validation buffer: an overlay ("mask layer") placement that
+  // sits over the normal layout but is owned by its own placer. It lives in the
+  // netlist (so routing and the clock walk see it) but never in FPlacedComponents,
+  // FSpine or the clock subtree. XOffset is relative to the band row's left edge,
+  // so shifting a whole row keeps it valid.
+  TLengthBufferPlacement = record
+    Gate: TGateInstance;
+    NetName: string;
+    IsClock: Boolean;
+    Band: Integer;
+    OnClockRow: Boolean;
+    XOffset: Integer;
+    W, H: Integer;
   end;
 
   // One power port of a placed cell on a given edge, in grid coordinates. Used

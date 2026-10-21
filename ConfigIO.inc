@@ -1,4 +1,4 @@
-﻿// Placement config editing, validation and project persistence (save/open,
+// Placement config editing, validation and project persistence (save/open,
 // recent projects) UI. Included from MainWindow's implementation via
 // {$I ConfigIO.inc}.
 
@@ -213,7 +213,9 @@ begin
   if TryDimParse(EditTrunkCurrent.Text, D) then FDesignConfig.MaxBiasTrunkCurrentUa := D;
   if TryDimParse(EditPTLLength.Text, D) then FDesignConfig.MaxPtlLengthUm := D;
   if TryDimParse(EditFreqGHz.Text, D) then FDesignConfig.FreqGHz := D;
-  if TryDimParse(EditPTLDelay.Text, D) then FDesignConfig.PtlDelayPsPerUm := D;
+  // The field is entered in fs/um; the config and the exported tools use ps/um.
+  if TryDimParse(EditPTLDelay.Text, D) then
+    FDesignConfig.PtlDelayPsPerUm := D / 1000;
   if TryDimParse(EditPulseWidth.Text, D) then FDesignConfig.PulseWidthUm := D;
   FDesignConfig.BiasLayer := FBiasLayer;
 end;
@@ -477,6 +479,7 @@ begin
   else
     FProject.FlipFlop := '';
   FProject.SplittersInserted := (FFlowStage >= fsSplitters);
+  FProject.ClockSeedBuffers := CheckBoxSeedBuffers.IsChecked;
   FProject.LastTab := TabControl1.TabIndex;
   FProject.SliderPos := FSliderPos;
   // Placement configuration: store the raw text so even invalid entries
@@ -516,14 +519,23 @@ end;
 
 procedure TForm1.SaveProjectFileAs;
 begin
-  if FBlifFile <> '' then
-    SaveDialog1.InitialDir := ExtractFilePath(FBlifFile);
-  SaveDialog1.FileName := 'Project';
+  // Start at the current project when there is one, so Save As defaults to a
+  // neighbouring name; otherwise fall back to the BLIF folder.
+  if FProjectPath <> '' then
+  begin
+    SaveDialog1.InitialDir := ExtractFilePath(FProjectPath);
+    SaveDialog1.FileName := ExtractFileName(FProjectPath);
+  end
+  else
+  begin
+    if FBlifFile <> '' then
+      SaveDialog1.InitialDir := ExtractFilePath(FBlifFile);
+    SaveDialog1.FileName := 'Project';
+  end;
   if not SaveDialog1.Execute then
     Exit;
   FProjectPath := SaveDialog1.FileName;
   SaveProjectState;
-  lblStatus.Text := 'Project saved: ' + ExtractFileName(FProjectPath);
 end;
 
 procedure TForm1.ApplyProjectSettings;
@@ -551,6 +563,7 @@ begin
     FSliderPos := 0;
   if FSliderPos > 100 then
     FSliderPos := 100;
+  CheckBoxSeedBuffers.IsChecked := FProject.ClockSeedBuffers;
 
   // Restore the placement config verbatim (raw text, so invalid entries and their
   // errors return too); marking it initialized stops the derivation from overwriting.
@@ -643,7 +656,6 @@ begin
   FProject.Clear;
   UpdateUI;
   TabControl1.TabIndex := TabLibrary;
-  lblStatus.Text := 'New project. Load a LEF file to begin.';
 end;
 
 procedure TForm1.ButtonOpenProjectClick(Sender: TObject);
