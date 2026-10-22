@@ -597,8 +597,10 @@ begin
       else
         ComboBiasLayer.ItemIndex := 0;
     end;
+    // Keep the flag so entering the page validates the restored values instead
+    // of deriving defaults over them. Nothing else is done here: formatting and
+    // validation belong to the placement page, not to loading.
     FPlacementInitialized := True;
-    FormatPlacementFields; // refresh the derived labels from saved values
   end;
 
   // Reproduce the splitter-inserted netlist if the project had reached it.
@@ -639,6 +641,13 @@ begin
     FProject.LastTab := 0;
   if FProject.LastTab > TabControl1.TabCount - 1 then
     FProject.LastTab := TabControl1.TabCount - 1;
+  // Everything from the floorplan onwards is derived, and it is not
+  // deterministic: the user may have placed/optimised several times since the
+  // save, and we only store the config. Restoring past it would rebuild a
+  // different layout (and blank the page while it does), so cap the restore at
+  // the configuration page and let the user re-run from there.
+  if FProject.LastTab > TabPlacement then
+    FProject.LastTab := TabPlacement;
   if FModel <> nil then
     TabControl1.TabIndex := FProject.LastTab
   else if FLib <> nil then

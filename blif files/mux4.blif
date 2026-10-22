@@ -1,0 +1,28 @@
+# Combinational test: 4:1 multiplexer (11 gates)
+# Inputs: d0-d3, sel0, sel1
+# Output: out = d[{sel1,sel0}]
+# mux2(s,x,y) = (s AND y) OR (NOT s AND x), built from 2 AND + 1 OR
+
+.model comb_mux4
+.inputs d0 d1 d2 d3 sel0 sel1
+.outputs out
+
+.gate THmitll_NOTT a=sel0 q=nsel0
+.gate THmitll_NOTT a=sel1 q=nsel1
+
+# m0 = sel0 ? d1 : d0
+.gate THmitll_AND2T a=sel0 b=d1 q=m0a
+.gate THmitll_AND2T a=nsel0 b=d0 q=m0b
+.gate THmitll_OR2T a=m0a b=m0b q=m0
+
+# m1 = sel0 ? d3 : d2
+.gate THmitll_AND2T a=sel0 b=d3 q=m1a
+.gate THmitll_AND2T a=nsel0 b=d2 q=m1b
+.gate THmitll_OR2T a=m1a b=m1b q=m1
+
+# out = sel1 ? m1 : m0
+.gate THmitll_AND2T a=sel1 b=m1 q=oa
+.gate THmitll_AND2T a=nsel1 b=m0 q=ob
+.gate THmitll_OR2T a=oa b=ob q=out
+
+.end

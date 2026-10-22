@@ -467,19 +467,20 @@ var
 
 begin
   RefreshDesignConfig;
+  FBiasExpansionFailed := False;
   if not FFloorplanValid then
     Exit;
   MaxUa := FDesignConfig.MaxBiasCurrentUa;
   if MaxUa <= 0 then
   begin
-    AddFloorplanError('Max bias current must be positive before expanding bias lines.');
+    ReportBiasError('Bias expansion: the max bias current must be positive.');
     Exit;
   end;
   // Guard: the per-line limit must be able to carry the largest single port
   // current in the netlist, otherwise even one channel is under-sized.
   if not MaxUaGreaterThanLargestPort then
   begin
-    AddFloorplanError('Max bias current is smaller than a cell''s largest port current; increase it.');
+    ReportBiasError('Bias expansion: the max bias current is below the largest cell port current.');
     Exit;
   end;
   NumBands := Length(FPlanBandStarts);
@@ -625,6 +626,16 @@ begin
   if Extra > 0 then
     IncreaseBiasTrunkColumn(Extra);
 
+  if FBiasExpansionFailed then
+  begin
+    // Some rows grew and the floorplan is still valid, but the bias network
+    // cannot be completed. Stop before routing overlaps the neighbouring rows.
+    ReportBiasError('Bias expansion stopped: the die cannot hold the bias lines. ' +
+      'Increase the die height/width (or reduce the bias current) and rebuild.');
+    UpdateUI;
+    RepaintFloorplanPage;
+    Exit;
+  end;
   if FFlowStage < fsBias then FFlowStage := fsBias;
   UpdateUI;
   RepaintFloorplanPage;
@@ -904,6 +915,17 @@ begin
   Item.StyledSettings := Item.StyledSettings - [TStyledSetting.FontColor];
   Item.TextSettings.FontColor := PalRed;
   Inc(FFloorplanErrorCount);
+end;
+
+// Bias expansion can be triggered from the placement page (Expand Bias Lines)
+// and from validation. Both surfaces need the message, so report to the
+// floorplan error list and to the routing log, and latch the failure so the
+// caller does not route a layout whose bias rows are under-sized.
+procedure TForm1.ReportBiasError(const Text: string);
+begin
+  FBiasExpansionFailed := True;
+  AddFloorplanError(Text);
+  MemoRouting.Lines.Add('[bias] ' + Text);
 end;
 
 // World-space (um) centre of a placed gate. Mirrors PlacedCenter but in the

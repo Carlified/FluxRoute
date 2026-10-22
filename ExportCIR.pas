@@ -34,7 +34,9 @@ function BuildCirText(const Traces: TArray<TRoutedTrace>;
   const BiasCells: TArray<TBiasCell>; const Layers: TArray<string>;
   const Cells: TArray<TPlacedComponent>;
   const ClockNodes: TArray<TArray<TPlacedClockNode>>;
-  const Spine: TArray<TSpineComponent>; const Model, ClockModel: TBlifModel;
+  const Spine: TArray<TSpineComponent>;
+  const MaskBuffers: TArray<TLengthBufferPlacement>;
+  const Model, ClockModel: TBlifModel;
   const Lib: TExportLibrary; const BlockRoot, Stem: string): string;
 
 // Builds the test-bench helper config written next to die.cir (die.tb.json): the
@@ -42,8 +44,12 @@ function BuildCirText(const Traces: TArray<TRoutedTrace>;
 // (clock frequency, PTL delay, core pitch, die size). Form-free.
 function BuildTbJson(const Stem, ClockNet: string;
   const Inputs, Outputs: TArray<string>;
-  const FreqGHz, PtlDelayPsPerUm, CoreUm, DieWUm, DieHUm,
-  MaxPtlLengthUm, MinClockPeriodPs: Double): string;
+  const FreqGHz, PtlDelayFsPerUm, CoreUm, DieWUm, DieHUm,
+  MaxPtlLengthUm, MinClockPeriodPs: Double;
+  InputWindowFound: Boolean; InputWindowStartPs, InputWindowEndPs,
+  InputWindowTargetStartPs, InputWindowTargetEndPs: Double;
+  OutputTravelFound: Boolean; OutputTravelPs: Double;
+  PipelineLevels: Integer): string;
 
 implementation
 
@@ -54,7 +60,9 @@ function BuildCirText(const Traces: TArray<TRoutedTrace>;
   const BiasCells: TArray<TBiasCell>; const Layers: TArray<string>;
   const Cells: TArray<TPlacedComponent>;
   const ClockNodes: TArray<TArray<TPlacedClockNode>>;
-  const Spine: TArray<TSpineComponent>; const Model, ClockModel: TBlifModel;
+  const Spine: TArray<TSpineComponent>;
+  const MaskBuffers: TArray<TLengthBufferPlacement>;
+  const Model, ClockModel: TBlifModel;
   const Lib: TExportLibrary; const BlockRoot, Stem: string): string;
 var
   Body, Incs: TStringList;
@@ -393,6 +401,12 @@ begin
     for i := 0 to High(Spine) do
       if Spine[i].Gate <> nil then
         EmitCell(Spine[i].Gate, Format('%s_sp%d', [Spine[i].Gate.CellName, i]));
+    // Length-fixing buffers sit on logic/clock rows behind the placement mask,
+    // not in FPlacedComponents, so they need their own pass.
+    for i := 0 to High(MaskBuffers) do
+      if MaskBuffers[i].Gate <> nil then
+        EmitCell(MaskBuffers[i].Gate, Format('%s_lm%d',
+          [MaskBuffers[i].Gate.CellName, i]));
 
     // Prepend the includes (block subckts + cell subckts).
     Body.Insert(0, '');
@@ -416,8 +430,12 @@ end;
 
 function BuildTbJson(const Stem, ClockNet: string;
   const Inputs, Outputs: TArray<string>;
-  const FreqGHz, PtlDelayPsPerUm, CoreUm, DieWUm, DieHUm,
-  MaxPtlLengthUm, MinClockPeriodPs: Double): string;
+  const FreqGHz, PtlDelayFsPerUm, CoreUm, DieWUm, DieHUm,
+  MaxPtlLengthUm, MinClockPeriodPs: Double;
+  InputWindowFound: Boolean; InputWindowStartPs, InputWindowEndPs,
+  InputWindowTargetStartPs, InputWindowTargetEndPs: Double;
+  OutputTravelFound: Boolean; OutputTravelPs: Double;
+  PipelineLevels: Integer): string;
 var
   S: TStringList;
   FS: TFormatSettings;
@@ -466,12 +484,30 @@ begin
     S.Add(Format('  "inputs": %s,', [Arr(Inputs)]));
     S.Add(Format('  "outputs": %s,', [Arr(Outputs)]));
     S.Add(Format('  "freqGHz": %s,', [Num(FreqGHz)]));
-    S.Add(Format('  "ptlDelayPsPerUm": %s,', [Num(PtlDelayPsPerUm)]));
+    S.Add(Format('  "pipelineLevels": %d,', [PipelineLevels]));
+    S.Add(Format('  "ptlDelayFsPerUm": %s,', [Num(PtlDelayFsPerUm)]));
     S.Add(Format('  "coreUm": %s,', [Num(CoreUm)]));
     S.Add(Format('  "dieWUm": %s,', [Num(DieWUm)]));
     S.Add(Format('  "dieHUm": %s,', [Num(DieHUm)]));
     S.Add(Format('  "maxPtlLengthUm": %s,', [Num(MaxPtlLengthUm)]));
-    S.Add(Format('  "minClockPeriodPs": %s', [Num(MinClockPeriodPs)]));
+    S.Add(Format('  "minClockPeriodPs": %s,', [Num(MinClockPeriodPs)]));
+    if InputWindowFound then
+      S.Add('  "inputWindowFound": true,')
+    else
+      S.Add('  "inputWindowFound": false,');
+    // These values already include the one initial clock period added in
+    // ClockValidate (cell reset edge). Both bounds of each pair are shifted
+    // together, so the launch-window width is unchanged and the values can be
+    // used directly by a hand-written testbench.
+    S.Add(Format('  "inputWindowStartPs": %s,', [Num(InputWindowStartPs)]));
+    S.Add(Format('  "inputWindowEndPs": %s,', [Num(InputWindowEndPs)]));
+    S.Add(Format('  "inputWindowTargetStartPs": %s,', [Num(InputWindowTargetStartPs)]));
+    S.Add(Format('  "inputWindowTargetEndPs": %s,', [Num(InputWindowTargetEndPs)]));
+    if OutputTravelFound then
+      S.Add('  "outputTravelFound": true,')
+    else
+      S.Add('  "outputTravelFound": false,');
+    S.Add(Format('  "minOutputTravelPs": %s', [Num(OutputTravelPs)]));
     S.Add('}');
     Result := S.Text;
   finally

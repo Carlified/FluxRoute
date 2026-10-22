@@ -67,6 +67,7 @@ var
   P: TPlacedComponent;
   RowY, BandIndex: Integer;
   RowY0, RowY1: Integer;
+  NeedsBuild: Boolean;
 begin
   RefreshDesignConfig;
   // Reset the view; the die is fitted to the canvas on the next paint.
@@ -168,6 +169,19 @@ begin
       if RowWidths[L] < 1 then
         RowWidths[L] := 1;
     end;
+
+    // calc2 needs a usable clock network (model *and* a row per level). It can be
+    // left half-built by an earlier BuildClockModel - FClockModel set but
+    // FClockNet nil - and then every level silently loses its subtree width and
+    // the rows come out too narrow on the first build. Rebuild it here, where the
+    // levels to check are known.
+    NeedsBuild := (FClockModel = nil) or (FClockNet = nil);
+    if not NeedsBuild then
+      for L := 0 to NumLayers - 1 do
+        if FClockNet.Rows.IndexOf(Levels[L]) < 0 then
+          NeedsBuild := True;
+    if NeedsBuild then
+      BuildClockModel;
 
     // Per-layer row width, calc2: the clock subtree at that level (trunk
     // components excluded), buffered the same way. The allocated width is

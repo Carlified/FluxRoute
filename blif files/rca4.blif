@@ -1,0 +1,38 @@
+# Combinational test: 4-bit ripple-carry adder (20 gates)
+# Inputs: a0-a3, b0-b3, cin
+# Outputs: s0-s3, cout
+# Each full adder: x=a^b, s=x^c, g=a&b, p=x&c, cout=g|p
+
+.model comb_rca4
+.inputs a0 a1 a2 a3 b0 b1 b2 b3 cin
+.outputs s0 s1 s2 s3 cout
+
+# Bit 0
+.gate THmitll_XORT a=a0 b=b0 q=x0
+.gate THmitll_XORT a=x0 b=cin q=s0
+.gate THmitll_AND2T a=a0 b=b0 q=g0
+.gate THmitll_AND2T a=x0 b=cin q=p0
+.gate THmitll_OR2T a=g0 b=p0 q=c1
+
+# Bit 1
+.gate THmitll_XORT a=a1 b=b1 q=x1
+.gate THmitll_XORT a=x1 b=c1 q=s1
+.gate THmitll_AND2T a=a1 b=b1 q=g1
+.gate THmitll_AND2T a=x1 b=c1 q=p1
+.gate THmitll_OR2T a=g1 b=p1 q=c2
+
+# Bit 2
+.gate THmitll_XORT a=a2 b=b2 q=x2
+.gate THmitll_XORT a=x2 b=c2 q=s2
+.gate THmitll_AND2T a=a2 b=b2 q=g2
+.gate THmitll_AND2T a=x2 b=c2 q=p2
+.gate THmitll_OR2T a=g2 b=p2 q=c3
+
+# Bit 3
+.gate THmitll_XORT a=a3 b=b3 q=x3
+.gate THmitll_XORT a=x3 b=c3 q=s3
+.gate THmitll_AND2T a=a3 b=b3 q=g3
+.gate THmitll_AND2T a=x3 b=c3 q=p3
+.gate THmitll_OR2T a=g3 b=p3 q=cout
+
+.end

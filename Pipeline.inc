@@ -1,4 +1,4 @@
-﻿// Pipeline: row building, the pipeline painter, the pipeline model and the
+// Pipeline: row building, the pipeline painter, the pipeline model and the
 // mode/limit/slider UI. Included from MainWindow's implementation via
 // {$I Pipeline.inc}.
 procedure TForm1.FreePipelineRows;
@@ -64,6 +64,7 @@ var
   GateGridPos: TDictionary<TGateInstance, TPoint>;
   InputCol: TDictionary<string, Integer>;
   LevelMaxDepth, LevelYOffset: TList<Integer>;
+  HasGateRow: TArray<Boolean>;
   Placed: TDictionary<TGateInstance, Boolean>;
   LevelCols: TList<Integer>;
   MaxDepth, MaxCol, GridCol, GridRow, YOff: Integer;
@@ -372,9 +373,22 @@ begin
           Inc(YOff, LevelMaxDepth[i] + 1);
         end;
 
-        // Draw level labels to the left of each level's first row.
+        // Draw level labels to the left of each level's first row. Only rows that
+        // hold clocked gates are clock levels; the output-pad rows are not, so
+        // they get no label (row 0 is the input row).
+        SetLength(HasGateRow, LevelMaxDepth.Count);
+        for i := 0 to High(HasGateRow) do
+          HasGateRow[i] := False;
+        if ActiveModel <> nil then
+          for i := 0 to ActiveModel.Gates.Count - 1 do
+            if (ActiveModel.Gates[i].ClockLevel >= 0) and
+               (ActiveModel.Gates[i].ClockLevel < Length(HasGateRow)) then
+              HasGateRow[ActiveModel.Gates[i].ClockLevel] := True;
+
         for i := 0 to LevelMaxDepth.Count - 1 do
         begin
+          if (i > 0) and (not HasGateRow[i]) then
+            Continue; // output-pad row: not a clock level
           Y := FPanY + 4 * FZoom + LevelYOffset[i] * (Square + VGap);
           Canvas.Fill.Color := TAlphaColorRec.Dimgray;
           Canvas.FillText(TRectF.Create(FPanX, Y, FPanX + Left - 6 * FZoom, Y + Square),
@@ -519,7 +533,9 @@ begin
     // --- Heuristics panel ---
     MaxLevelDelay := 0;
     TotalArea := 0;
-    TotalLevels := MaxRows;
+    // Pipeline levels are the clock levels of the netlist. The drawn rows are
+    // MaxRows, which also counts the input row and the output-pad rows.
+    TotalLevels := Length(FPipelineRows);
 
     DelayMemo := TDictionary<TGateInstance, Double>.Create;
     try
@@ -554,14 +570,12 @@ begin
     if MaxLevelDelay > 0 then
     begin
       StatsText := Format(
-        'Levels: %d  |  Worst path/level: %.1f ps  |  Fmax: %.1f GHz  |  Area: %.1f um2',
-        [TotalLevels, MaxLevelDelay,
-         1000.0 / MaxLevelDelay,
-         TotalArea]);
+        'Pipeline Levels: %d  |  Worst path/level: %.1f ps  |  Area: %.1f um2',
+        [TotalLevels, MaxLevelDelay, TotalArea]);
     end
     else
       StatsText := Format(
-        'Levels: %d  |  Worst path/level: (no timing)  |  Area: %.1f um2',
+        'Pipeline Levels: %d  |  Worst path/level: (no timing)  |  Area: %.1f um2',
         [TotalLevels, TotalArea]);
 
     StatsR := TRectF.Create(4, PaintBox1.Height - 22, PaintBox1.Width - 4, PaintBox1.Height - 2);
@@ -960,17 +974,18 @@ end;
 
 procedure TForm1.UpdateLimitLabels;
 begin
-  // Slider end frequencies: the compact mode worst path (left) and the
-  // fastest possible level (right). Delays are in ps, so invert for GHz.
+  // Slider end delays: the compact mode worst path/level (left) and the fastest
+  // possible level delay (right). These are the raw numbers a clock frequency
+  // would be inferred from - the frequency itself is not a meaningful figure.
   if (FModel <> nil) and (FFlipFlopNames.Count > 0) then
   begin
     // Left end: compact mode's real worst path/level, matching the stats
     // bar; falls back to the pristine worst path before the first build.
     if FCompactWorstDelay > 0 then
-      LabelFreqLeft.Text := Format('%.2f GHz', [1000.0 / FCompactWorstDelay])
+      LabelFreqLeft.Text := Format('%.1f ps', [FCompactWorstDelay])
     else
-      LabelFreqLeft.Text := Format('%.2f GHz', [1000.0 / FMaxWorstPath]);
-    LabelFreqRight.Text := Format('%.2f GHz', [1000.0 / FMinDelay]);
+      LabelFreqLeft.Text := Format('%.1f ps', [FMaxWorstPath]);
+    LabelFreqRight.Text := Format('%.1f ps', [FMinDelay]);
   end
   else
   begin

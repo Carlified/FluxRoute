@@ -1,4 +1,4 @@
-﻿unit ExportLibrary;
+unit ExportLibrary;
 
 // Phase 2 of the export feature: the block library. A "block" is one DRC-clean,
 // reusable unit that the export tiles the design with, and each block is a
@@ -863,10 +863,13 @@ begin
           B.LefFile := '';
           B.CirFile := '';
         end
-        else if Head = 'BIAS' then
+        else if Pos('BIAS', Kinds[k]) > 0 then
         begin
-          // Bias lines are voltage sources: their geometry is placed but they
-          // carry no per-block CIR subckt.
+          // Bias straight runs and bias bends are voltage sources: their
+          // geometry is placed but they carry no per-block CIR subckt. Test the
+          // whole kind: KindInfo drops a bend's family (BEND:BIAS:M5 reports
+          // Layer = 'M5'), so Head/Layer cannot identify them. BIASCAP is
+          // caught by the branch above.
           B.NoCir := True;
           B.CirFile := '';
         end;

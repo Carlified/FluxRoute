@@ -1,0 +1,40 @@
+# Combinational test: 8-bit equality comparator (23 gates)
+# Inputs: a0-a7, b0-b7
+# Output: eq = 1 when a == b
+# Per bit: x_i = a_i XOR b_i, nx_i = NOT x_i (1 when bits match)
+# Then an AND tree over the 8 match bits
+
+.model comb_cmp8
+.inputs a0 a1 a2 a3 a4 a5 a6 a7 b0 b1 b2 b3 b4 b5 b6 b7
+.outputs eq
+
+# Per-bit XOR
+.gate THmitll_XORT a=a0 b=b0 q=x0
+.gate THmitll_XORT a=a1 b=b1 q=x1
+.gate THmitll_XORT a=a2 b=b2 q=x2
+.gate THmitll_XORT a=a3 b=b3 q=x3
+.gate THmitll_XORT a=a4 b=b4 q=x4
+.gate THmitll_XORT a=a5 b=b5 q=x5
+.gate THmitll_XORT a=a6 b=b6 q=x6
+.gate THmitll_XORT a=a7 b=b7 q=x7
+
+# Per-bit match (NOT of XOR)
+.gate THmitll_NOTT a=x0 q=nx0
+.gate THmitll_NOTT a=x1 q=nx1
+.gate THmitll_NOTT a=x2 q=nx2
+.gate THmitll_NOTT a=x3 q=nx3
+.gate THmitll_NOTT a=x4 q=nx4
+.gate THmitll_NOTT a=x5 q=nx5
+.gate THmitll_NOTT a=x6 q=nx6
+.gate THmitll_NOTT a=x7 q=nx7
+
+# AND tree
+.gate THmitll_AND2T a=nx0 b=nx1 q=e0
+.gate THmitll_AND2T a=nx2 b=nx3 q=e1
+.gate THmitll_AND2T a=nx4 b=nx5 q=e2
+.gate THmitll_AND2T a=nx6 b=nx7 q=e3
+.gate THmitll_AND2T a=e0 b=e1 q=f0
+.gate THmitll_AND2T a=e2 b=e3 q=f1
+.gate THmitll_AND2T a=f0 b=f1 q=eq
+
+.end

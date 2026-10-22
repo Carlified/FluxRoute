@@ -944,6 +944,7 @@ end;
 function TForm1.IncreaseBiasRowHeight(Band, Which, ByRows: Integer): Boolean;
 var
   DieHBlocks: Integer;
+  RowName: string;
 begin
   Result := False;
   if (Band < 0) or (Band >= Length(FBiasRowH)) or (Which < 0) or (Which > 1) or
@@ -955,7 +956,13 @@ begin
     Exit;
   if FPlanLastTotalH + ByRows + 2 > DieHBlocks then
   begin
-    AddFloorplanError('not enough space for the bias lines');
+    if Which = 0 then
+      RowName := 'top'
+    else
+      RowName := 'middle';
+    ReportBiasError(Format('Bias expansion: band %d needs %d more row(s) for its ' +
+      '%s bias row, but the die is full (%d of %d rows used).',
+      [Band, ByRows, RowName, FPlanLastTotalH, DieHBlocks]));
     Exit;
   end;
   FBiasRowH[Band][Which] := FBiasRowH[Band][Which] + ByRows;
@@ -969,6 +976,7 @@ function TForm1.IncreaseTopBottomBiasRow(IsTop: Boolean;
   ByRows: Integer): Boolean;
 var
   DieHBlocks: Integer;
+  Side: string;
 begin
   Result := False;
   if ByRows < 1 then
@@ -979,7 +987,13 @@ begin
     Exit;
   if FPlanLastTotalH + ByRows + 2 > DieHBlocks then
   begin
-    AddFloorplanError('not enough space for the bias lines');
+    if IsTop then
+      Side := 'top'
+    else
+      Side := 'bottom';
+    ReportBiasError(Format('Bias expansion: the %s bias row needs %d more row(s), ' +
+      'but the die is full (%d of %d rows used).',
+      [Side, ByRows, FPlanLastTotalH, DieHBlocks]));
     Exit;
   end;
   if IsTop then
@@ -1118,7 +1132,9 @@ begin
     // Could not recover enough width. Rebuild so the (nudged) cell positions
     // match the floorplan grid, then report the failure.
     RebuildFloorplanPreserve;
-    AddFloorplanError('no space for clock bias lines');
+    ReportBiasError(Format('Bias expansion: clock bias lane %d needs %d more ' +
+      'column(s), but the rows cannot be packed any tighter.',
+      [ColIdx, ByCols]));
   end;
 end;
 
@@ -1222,7 +1238,9 @@ begin
   else
   begin
     RebuildFloorplanPreserve;
-    AddFloorplanError('no space for the bias trunk');
+    ReportBiasError(Format('Bias expansion: the bias trunk needs %d more ' +
+      'column(s), but the rows cannot be packed any tighter.',
+      [ByCols]));
   end;
 end;
 
@@ -2540,16 +2558,22 @@ begin
   end;
 end;
 
-procedure TForm1.RunBiasExpansionAndRouting;
+function TForm1.RunBiasExpansionAndRouting: Boolean;
 var
   Saved, Report: TStringList;
 begin
+  Result := False;
   // The floorplan skips the validation buffers (their ClockLevel is -1), so they
   // are placed only here. Place them BEFORE the expansion so its row/trunk sizing
   // sees them (otherwise the bias rows under-size and the router overflows into
   // neighbouring rows), then again AFTER - the expansion's rebuild drops them.
   ReapplyValidationBuffers;
   ButtonExpandBiasClick(nil);
+  if FBiasExpansionFailed then
+  begin
+    MemoRouting.Lines.Add('[bias] routing skipped: the bias lines do not fit the die.');
+    Exit;
+  end;
   // ButtonExpandBiasClick only rebuilds the floorplan when the bias rows need
   // to grow, so FSpine/FClockSubtree may still predate a just-inserted trunk
   // buffer. Re-derive the clock placements unconditionally: routing only makes
@@ -2577,6 +2601,7 @@ begin
   // Bias lines after the main routing (RunRouting clears FRouteTraces, so the
   // bias traces must be appended afterwards, as in ButtonRunRoutingClick).
   RouteBiasLines;
+  Result := True;
 end;
 
 // Splits NetName at LoadPin with a min-delay buffer at the given slot and re-runs
@@ -2759,8 +2784,7 @@ begin
       FValidationBuffers[High(FValidationBuffers)] := VB;
     end;
 
-    RunBiasExpansionAndRouting;
-    if FFlowStage >= fsRouted then
+    if RunBiasExpansionAndRouting and (FFlowStage >= fsRouted) then
     begin
       MemoRouting.Lines.Add(Format(
         '  buffer %s inserted on %s (band %d, row %d, x %d, y %d).',

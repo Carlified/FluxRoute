@@ -16,7 +16,8 @@ var
   ClockArr, DataArr: TDictionary<TGateInstance, Double>;
   Rows: TArray<Integer>;
   Violations: TClockViolations;
-  Core, PerBlock, DataPer, SpacingPer: Double;
+  Core, PerBlock, DataPer, SpacingPer, TargetPer: Double;
+  Window, Tw: TInputWindow;
   i, Worst, Guard, Idx: Integer;
   Net: TNet;
   Tr: TRoutedTrace;
@@ -206,6 +207,14 @@ var
 begin
   AInserted := False;
   Result := True;
+  FInputWindowFound := False;
+  FInputWindowStartPs := 0;
+  FInputWindowEndPs := 0;
+  FInputWindowTargetFound := False;
+  FInputWindowTargetStartPs := 0;
+  FInputWindowTargetEndPs := 0;
+  FOutputTravelFound := False;
+  FOutputTravelPs := 0;
   Model := FClockBufferedModel;
   if Model = nil then
     Model := FClockModel;
@@ -250,12 +259,62 @@ begin
         FMinClockPeriodPs := DataPer;
         if SpacingPer > FMinClockPeriodPs then
           FMinClockPeriodPs := SpacingPer;
+        // Third constraint: the first input batch has to be launchable. When the
+        // window bounds conflict the period is too short, so grow it until the
+        // lower bound falls to meet the upper one.
+        if FMinClockPeriodPs > 0 then
+        begin
+          // Tightest window: the one the minimum period allows.
+          Window := InputTimingWindow(Model, ClockArr, WireDelays,
+            FMinClockPeriodPs);
+          FInputWindowFound := Window.Found;
+          if Window.Found then
+          begin
+            if Window.ExtraPeriodPs > 0 then
+            begin
+              FMinClockPeriodPs := FMinClockPeriodPs + Window.ExtraPeriodPs;
+              Window.StartPs := Window.EndPs; // the added period lowers it to meet
+              MemoRouting.Lines.Add(Format(
+                'Input window needs %.1f ps more period; min clock period is now %.1f ps.',
+                [Window.ExtraPeriodPs, FMinClockPeriodPs]));
+            end;
+            // The library testbenches send an initial clock edge before any
+            // data (NOTT/DFFT/AND2T/XORT clock at 20 ps, first data at 150 ps),
+            // so the first usable data launch is one clock period after the raw
+            // setup/hold window. Add the min clock period to both bounds: this
+            // keeps the window width unchanged while moving it to the first
+            // data edge a hand-written testbench can actually use.
+            FInputWindowStartPs := Window.StartPs + FMinClockPeriodPs;
+            FInputWindowEndPs := Window.EndPs + FMinClockPeriodPs;
+          end;
+
+          // Same walk at the frequency the user asked for, which is normally
+          // slower and therefore allows an earlier launch.
+          TargetPer := 0;
+          if FDesignConfig.FreqGHz > 0 then
+            TargetPer := 1000.0 / FDesignConfig.FreqGHz;
+          if TargetPer > 0 then
+          begin
+            Tw := InputTimingWindow(Model, ClockArr, WireDelays, TargetPer);
+            FInputWindowTargetFound := Tw.Found;
+            if Tw.Found then
+            begin
+              // Same one-period shift at the requested frequency: both bounds
+              // move together by one target clock period for the initial clock
+              // edge, so the exported values are directly usable without any
+              // period math in a hand-written testbench.
+              FInputWindowTargetStartPs := Tw.StartPs + TargetPer;
+              FInputWindowTargetEndPs := Tw.EndPs + TargetPer;
+            end;
+          end;
+        end;
+        // Period-independent part of the output window: how long data takes to
+        // get from the clock being sent to the first output pad.
+        FOutputTravelPs := MinOutputTravelPs(Model, ClockArr, WireDelays);
+        FOutputTravelFound := FOutputTravelPs >= 0;
         MemoRouting.Lines.Add(Format(
           'Clock arrivals are within the data-arrival limit (%d cell(s) timed).',
           [ClockArr.Count]));
-        MemoRouting.Lines.Add(Format(
-          'Min clock period: %.1f ps (data+setup %.1f, input spacing %.1f).',
-          [FMinClockPeriodPs, DataPer, SpacingPer]));
         Exit;
       end;
 

@@ -31,6 +31,17 @@ type
   end;
   TClockViolations = TArray<TClockViolation>;
 
+  // Launch window for the first batch of input data, measured from the moment
+  // the clock edge is SENT at the pad (t = 0 there), not from its arrival at the
+  // clocked cells. Later batches are spaced by the clock period, so only this
+  // first window has to be handed to the simulation.
+  TInputWindow = record
+    Found: Boolean;        // at least one clocked cell is driven from an input
+    StartPs: Double;       // lower bound: earliest safe launch
+    EndPs: Double;         // upper bound: latest launch that still meets setup
+    ExtraPeriodPs: Double; // > 0 when the bounds conflict (period too short)
+  end;
+
 // Key for the wire-delay lookup of the link entering pin APin of gate ALoad.
 function WireKey(AIndex: Integer; const APin: string): string;
 
@@ -59,6 +70,33 @@ function MinPeriodFromTiming(AModel: TBlifModel;
 
 // Largest input-to-input spacing constraint in the circuit (ps).
 function MaxInputSpacingPs(AModel: TBlifModel): Double;
+
+// Timing window for the first batch of input data. Walks data from every
+// primary input (arrival 0) through the combinational logic up to the first
+// clocked cells and reports the launch range that satisfies both bounds. Values
+// are relative to the clock edge as sent at the pad, so a negative bound simply
+// means the simulation would have to launch the data before the first edge (or
+// delay the clock instead):
+//
+//   StartPs = max over T of (clkArr(T) + hold(T) - period - earliestData(T))
+//   EndPs   = min over T of (clkArr(T) - setup(T) - latestData(T))
+//
+// The first keeps the *next* batch (one period later) from arriving before the
+// current one has been held; the second keeps the first batch from arriving
+// after the setup point. If EndPs ends up below StartPs the two are
+// inconsistent and ExtraPeriodPs is the period that has to be added.
+function InputTimingWindow(AModel: TBlifModel;
+  AClockArr: TDictionary<TGateInstance, Double>;
+  AWireDelays: TDictionary<string, Double>; APeriodPs: Double): TInputWindow;
+
+// Earliest travel time (ps) from the clock edge being SENT at the pad to any
+// primary output pad: down the clock tree to a clocked cell, its clk->q, then
+// the final combinational logic and interconnect out to the output. This is the
+// period-independent part of the output window; the testbench adds its clock
+// offset and levels * period. Returns -1 when no output is reachable.
+function MinOutputTravelPs(AModel: TBlifModel;
+  AClockArr: TDictionary<TGateInstance, Double>;
+  AWireDelays: TDictionary<string, Double>): Double;
 
 implementation
 
@@ -341,6 +379,240 @@ begin
     V.TrunkNet := TrunkAfterJunction(ARows[RowIdx]);
     SetLength(Result, Length(Result) + 1);
     Result[High(Result)] := V;
+  end;
+end;
+
+// Relaxes input data arrivals (ps from the pad) through the combinational logic,
+// stopping at clocked cells. ATakeMin keeps the earliest path (needed for the
+// second-batch bound); otherwise the latest path is kept.
+procedure RelaxInputArrivals(AModel: TBlifModel;
+  AWireDelays: TDictionary<string, Double>; ATakeMin: Boolean;
+  AClockedArr: TDictionary<TGateInstance, Double>);
+var
+  IndexMap: TDictionary<TGateInstance, Integer>;
+  NetArr: TDictionary<string, Double>;
+  Keys: TArray<string>;
+  Net: TNet;
+  NC: TNetConnection;
+  OutConn: TPinConnection;
+  Base, A, Old: Double;
+  Changed: Boolean;
+  Guard, i: Integer;
+
+  function LinkPs(ALoad: TGateInstance; const APin: string): Double;
+  begin
+    Result := 0;
+    if (ALoad <> nil) and IndexMap.ContainsKey(ALoad) then
+      AWireDelays.TryGetValue(WireKey(IndexMap[ALoad], APin), Result);
+  end;
+
+  function Better(const ANew, AOld: Double): Boolean;
+  begin
+    if ATakeMin then
+      Result := ANew < AOld - 1e-9
+    else
+      Result := ANew > AOld + 1e-9;
+  end;
+
+  procedure Offer(AGate: TGateInstance; AValue: Double);
+  begin
+    if (not AClockedArr.TryGetValue(AGate, Old)) or Better(AValue, Old) then
+    begin
+      AClockedArr.AddOrSetValue(AGate, AValue);
+      Changed := True;
+    end;
+  end;
+
+  procedure OfferNet(const AName: string; AValue: Double);
+  begin
+    if (not NetArr.TryGetValue(AName, Old)) or Better(AValue, Old) then
+    begin
+      NetArr.AddOrSetValue(AName, AValue);
+      Changed := True;
+    end;
+  end;
+
+begin
+  AClockedArr.Clear;
+  IndexMap := BuildIndexMap(AModel);
+  NetArr := TDictionary<string, Double>.Create;
+  try
+    Keys := AModel.Nets.Keys.ToArray;
+    for i := 0 to High(Keys) do
+      if AModel.Inputs.IndexOf(Keys[i]) >= 0 then
+        NetArr.AddOrSetValue(Keys[i], 0);
+
+    Guard := 0;
+    repeat
+      Changed := False;
+      for i := 0 to High(Keys) do
+        if NetArr.TryGetValue(Keys[i], Base) then
+        begin
+          Net := AModel.Nets[Keys[i]];
+          for NC in Net.Connections do
+          begin
+            if NC.IsDriver then
+              Continue;
+            A := Base + LinkPs(NC.Gate, NC.PinName);
+            if CellHasClock(NC.Gate.Cell) then
+              Offer(NC.Gate, A)
+            else
+              for OutConn in NC.Gate.Connections do
+                if (OutConn.Port <> nil) and
+                   (OutConn.Port.Direction = pdOutput) then
+                  OfferNet(OutConn.NetName, A + CellDelayPs(NC.Gate.Cell));
+          end;
+        end;
+      Inc(Guard);
+    until (not Changed) or (Guard >= AModel.Gates.Count + 8);
+  finally
+    NetArr.Free;
+    IndexMap.Free;
+  end;
+end;
+
+function InputTimingWindow(AModel: TBlifModel;
+  AClockArr: TDictionary<TGateInstance, Double>;
+  AWireDelays: TDictionary<string, Double>; APeriodPs: Double): TInputWindow;
+var
+  MinArr, MaxArr: TDictionary<TGateInstance, Double>;
+  Gate: TGateInstance;
+  Timing: TCellTiming;
+  C, DMin, DMax, Lo, Hi: Double;
+  i: Integer;
+begin
+  Result.Found := False;
+  Result.StartPs := 0;
+  Result.EndPs := 0;
+  Result.ExtraPeriodPs := 0;
+  MinArr := TDictionary<TGateInstance, Double>.Create;
+  MaxArr := TDictionary<TGateInstance, Double>.Create;
+  try
+    RelaxInputArrivals(AModel, AWireDelays, True, MinArr);
+    RelaxInputArrivals(AModel, AWireDelays, False, MaxArr);
+    for i := 0 to AModel.Gates.Count - 1 do
+    begin
+      Gate := AModel.Gates[i];
+      if not CellHasClock(Gate.Cell) then
+        Continue;
+      if not AClockArr.TryGetValue(Gate, C) then
+        Continue;
+      if not MinArr.TryGetValue(Gate, DMin) then
+        Continue;
+      if not MaxArr.TryGetValue(Gate, DMax) then
+        Continue;
+      Timing := CellTimingOf(Gate.Cell);
+      Lo := C - APeriodPs - DMin;
+      Hi := C - DMax;
+      if Timing <> nil then
+      begin
+        Lo := Lo + Timing.HoldPs;
+        Hi := Hi - Timing.SetupPs;
+      end;
+      if not Result.Found then
+      begin
+        Result.Found := True;
+        Result.StartPs := Lo;
+        Result.EndPs := Hi;
+      end
+      else
+      begin
+        if Lo > Result.StartPs then
+          Result.StartPs := Lo;
+        if Hi < Result.EndPs then
+          Result.EndPs := Hi;
+      end;
+    end;
+  finally
+    MaxArr.Free;
+    MinArr.Free;
+  end;
+  if Result.Found and (Result.EndPs < Result.StartPs) then
+    Result.ExtraPeriodPs := Result.StartPs - Result.EndPs;
+end;
+
+function MinOutputTravelPs(AModel: TBlifModel;
+  AClockArr: TDictionary<TGateInstance, Double>;
+  AWireDelays: TDictionary<string, Double>): Double;
+var
+  IndexMap: TDictionary<TGateInstance, Integer>;
+  NetArr: TDictionary<string, Double>;
+  Keys: TArray<string>;
+  Net: TNet;
+  NC: TNetConnection;
+  OutConn: TPinConnection;
+  Gate: TGateInstance;
+  Base, A, Old, Best: Double;
+  Changed, Found: Boolean;
+  Guard, i: Integer;
+
+  function LinkPs(ALoad: TGateInstance; const APin: string): Double;
+  begin
+    Result := 0;
+    if (ALoad <> nil) and IndexMap.ContainsKey(ALoad) then
+      AWireDelays.TryGetValue(WireKey(IndexMap[ALoad], APin), Result);
+  end;
+
+  procedure OfferNet(const AName: string; AValue: Double);
+  begin
+    if (not NetArr.TryGetValue(AName, Old)) or (AValue < Old - 1e-9) then
+    begin
+      NetArr.AddOrSetValue(AName, AValue);
+      Changed := True;
+    end;
+  end;
+
+begin
+  Result := -1;
+  IndexMap := BuildIndexMap(AModel);
+  NetArr := TDictionary<string, Double>.Create;
+  try
+    Keys := AModel.Nets.Keys.ToArray;
+
+    // Seed: every clocked cell launches its data one clk->q after its clock.
+    for Gate in AModel.Gates do
+      if CellHasClock(Gate.Cell) and AClockArr.ContainsKey(Gate) then
+        for OutConn in Gate.Connections do
+          if (OutConn.Port <> nil) and (OutConn.Port.Direction = pdOutput) then
+            OfferNet(OutConn.NetName, AClockArr[Gate] + CellDelayPs(Gate.Cell));
+
+    // Earliest arrival per net through the combinational logic; clocked cells
+    // are boundaries because they relaunch on their own clock.
+    Guard := 0;
+    repeat
+      Changed := False;
+      for i := 0 to High(Keys) do
+        if NetArr.TryGetValue(Keys[i], Base) then
+        begin
+          Net := AModel.Nets[Keys[i]];
+          for NC in Net.Connections do
+          begin
+            if NC.IsDriver or CellHasClock(NC.Gate.Cell) then
+              Continue;
+            A := Base + LinkPs(NC.Gate, NC.PinName) + CellDelayPs(NC.Gate.Cell);
+            for OutConn in NC.Gate.Connections do
+              if (OutConn.Port <> nil) and
+                 (OutConn.Port.Direction = pdOutput) then
+                OfferNet(OutConn.NetName, A);
+          end;
+        end;
+      Inc(Guard);
+    until (not Changed) or (Guard >= AModel.Gates.Count + 8);
+
+    Best := 0;
+    Found := False;
+    for i := 0 to AModel.Outputs.Count - 1 do
+      if NetArr.TryGetValue(AModel.Outputs[i], Old) then
+        if (not Found) or (Old < Best) then
+        begin
+          Best := Old;
+          Found := True;
+        end;
+    if Found then
+      Result := Best;
+  finally
+    NetArr.Free;
+    IndexMap.Free;
   end;
 end;
 

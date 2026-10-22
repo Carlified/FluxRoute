@@ -29,7 +29,8 @@ def main():
     ap.add_argument("--cols", required=True, help="comma-separated phase column substrings")
     ap.add_argument("--period", type=float, help="clock period in ps (default from design freq)")
     ap.add_argument("--slots", type=int, help="number of windows (default config.slots)")
-    ap.add_argument("--start", type=float, default=0.0, help="first window start in ps")
+    ap.add_argument("--start", type=float,
+                    help="first window start in ps (default: decodeWindowStartPs from <csv>.meta.json, else outputWatchStartPs, else 0)")
     ap.add_argument("--expect", help="expected bits (printed for comparison)")
     args = ap.parse_args()
 
@@ -42,7 +43,19 @@ def main():
     if not period:
         design = load_json(os.path.join(out_dir, cfg["designConfig"]))
         period = 1000.0 / design["freqGHz"]
-    slots = args.slots or int(cfg.get("slots", 8))
+    meta = {}
+    meta_path = os.path.splitext(csv_path)[0] + ".meta.json"
+    if os.path.exists(meta_path):
+        try:
+            meta = load_json(meta_path)
+        except (OSError, ValueError, TypeError):
+            meta = {}
+
+    slots = args.slots or int(meta.get("slots", cfg.get("slots", 8)))
+    start = args.start
+    if start is None:
+        start = float(meta.get("decodeWindowStartPs",
+                              meta.get("outputWatchStartPs", 0.0)))
 
     with open(csv_path, newline="") as f:
         rd = csvmod.reader(f)
@@ -55,7 +68,7 @@ def main():
             raise SystemExit(f"no column matches '{sub}'")
         return hits[0]
 
-    print(f"{os.path.basename(csv_path)}: period {period:g} ps, {slots} slots")
+    print(f"{os.path.basename(csv_path)}: period {period:g} ps, {slots} slots, window start {start:g} ps")
     if args.expect:
         print(f"expected : {args.expect}")
 
@@ -65,7 +78,7 @@ def main():
         tcol = 0  # time is column 0
         bits = []
         for k in range(slots):
-            lo = args.start + k * period
+            lo = start + k * period
             hi = lo + period
             vals = [data[r][ci] for r in range(len(data)) if lo <= data[r][tcol] * 1e12 < hi]
             if not vals:

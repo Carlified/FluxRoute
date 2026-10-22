@@ -270,10 +270,19 @@ procedure ButtonOptimizeClick(Sender: TObject);
     FValidationBuffers: TArray<TValidationBuffer>; // clock trunk buffers (validation)
     FLengthBuffers: TArray<TLengthBufferPlacement>; // length mask (validation)
     FMinClockPeriodPs: Double;                      // timing-derived min clock period
+  FInputWindowFound: Boolean;                     // first-batch launch window valid
+  FInputWindowStartPs: Double;                    // earliest launch at the min period (+1 initial period)
+  FInputWindowEndPs: Double;                      // latest launch (period independent) (+1 initial period)
+  FInputWindowTargetFound: Boolean;               // window at the requested frequency
+  FInputWindowTargetStartPs: Double;              // earliest launch at that period (+1 initial period)
+  FInputWindowTargetEndPs: Double;                // latest launch at that period (+1 initial period)
+  FOutputTravelFound: Boolean;                    // output travel time measured
+  FOutputTravelPs: Double;                        // clock sent -> first output pad
     FValidationBlocked: TStringList;               // failed buffer slots 'band:row:x'
     FValidationBufIdx: Integer;                    // unique suffix for split net names
     FPlacementErrorCount: Integer;
     FFloorplanErrorCount: Integer;
+  FBiasExpansionFailed: Boolean;                  // bias lines do not fit the die
     FSwitchingTab: Boolean;
     FFloorplan: TArray<TFloorplanCell>;
     FFloorplanLayer: TArray<SmallInt>; // clock level per cell, -1 = none
@@ -392,6 +401,7 @@ procedure ButtonOptimizeClick(Sender: TObject);
     procedure BuildFloorplan;
     procedure RepaintFloorplanPage;
     procedure AddFloorplanError(const Text: string);
+    procedure ReportBiasError(const Text: string);
     function TotalManhattanDistance: Double;
     procedure UpdateManhattanDiagnostic;
     function GetPad(const ANetName: string; var P: TPoint): Boolean;
@@ -435,6 +445,7 @@ procedure ButtonOptimizeClick(Sender: TObject);
     function RunClockValidation(out AInserted: Boolean): Boolean;
 procedure AppendScanTally(const D: TExportDesign;
       const Cells: TArray<TExportCellCount>; const Lines: TStrings);
+    procedure AppendClockSummary(const Lines: TStrings);
     procedure ReportLibraryCoverage(const D: TExportDesign;
       const Cells: TArray<TExportCellCount>; const Lines: TStrings);
     procedure ReportCellFileStatus(const Cells: TArray<TExportCellCount>;
@@ -453,7 +464,7 @@ procedure AppendScanTally(const D: TExportDesign;
     function FindMinDelayBufferCell: TCell;
     function FindMaxDelayBufferCell: TCell;
     procedure ReapplyValidationBuffers;
-    procedure RunBiasExpansionAndRouting;
+    function RunBiasExpansionAndRouting: Boolean;
     function TryInsertBuffer(IsClock: Boolean; const NetName: string;
       Driver, Load: TGateInstance; const DriverPin, LoadPin: string;
       APadLoad, AIsLengthFix: Boolean;
@@ -538,6 +549,9 @@ begin
   FBottomBiasH := 0;
   FBiasLaneW := nil;
   FPlanMaxRowW := 0;
+  // Growth state from the previous project must not narrow this one's rows:
+  // BuildFloorplan only ever raises these, never re-derives them from config.
+  FPlanBiasTrunkW := 1;
   ScrapValidationModel; // validation never survives a workspace reset
   FPlacementModel := nil;
   FRouteTraces := nil;   // the routed state dies with the circuit
@@ -1705,6 +1719,13 @@ procedure TForm1.ButtonRunRoutingClick(Sender: TObject);
 begin
   if FRoutingBusy then
     Exit;
+  if FBiasExpansionFailed then
+  begin
+    // The bias rows are under-sized; routing would spill into neighbouring rows.
+    MemoRouting.Lines.Add('[bias] routing blocked: the bias lines do not fit the die. ' +
+      'Increase the die size or reduce the bias current, then expand the bias lines again.');
+    Exit;
+  end;
   FRoutingBusy := True;
   try
     // Routing always starts from the pristine model: a committed validation
@@ -1971,9 +1992,61 @@ begin
   end;
 end;
 
-// Refreshes the Export page's readiness memo: the instance tally, block-library
-// coverage (missing kinds / triple-check failures) and the placed-cell file
-// status. Runs when entering the Export tab or on Recheck.
+// Clocking summary for the export page: the fastest clock the timing analysis
+// allows, the target set in the placement settings, and the depth of the clock
+// tree.
+procedure TForm1.AppendClockSummary(const Lines: TStrings);
+var
+  MaxGHz, TargetGHz: Double;
+  Levels: Integer;
+begin
+  if FClockNet = nil then
+  begin
+    Lines.Add('Clocking: no clock network built yet.');
+    Exit;
+  end;
+  // One clock level per row tree, so this is the number of clock subtrees and
+  // the depth of the pipeline (not the stage delays between the levels).
+  Levels := FClockNet.Rows.Count;
+  TargetGHz := FDesignConfig.FreqGHz;
+  MaxGHz := 0;
+  if FMinClockPeriodPs > 0 then
+    MaxGHz := 1000.0 / FMinClockPeriodPs; // ps period -> GHz
+  if MaxGHz > 0 then
+    Lines.Add(Format('Clocking: max %.2f GHz (%.1f ps period), ' +
+      'target %.2f GHz, %d pipeline level(s).',
+      [MaxGHz, FMinClockPeriodPs, TargetGHz, Levels]))
+  else
+    Lines.Add(Format('Clocking: max unknown (validation not run), ' +
+      'target %.2f GHz, %d pipeline level(s).',
+      [TargetGHz, Levels]));
+  if FInputWindowFound then
+  begin
+    Lines.Add(Format('Input window, tightest (%.1f ps period): %.1f to %.1f ps from ' +
+      'when the first clock edge is sent (includes one initial clock period for cell ' +
+      'reset; t = 0 at the pad, not its arrival at the cells); later batches are one ' +
+      'period apart.',
+      [FMinClockPeriodPs, FInputWindowStartPs, FInputWindowEndPs]));
+    if FInputWindowTargetFound then
+      Lines.Add(Format('Input window, target %.2f GHz (%.1f ps period): %.1f to %.1f ps ' +
+        'from when the first clock edge is sent (includes one initial clock period).',
+        [TargetGHz, 1000.0 / TargetGHz, FInputWindowTargetStartPs,
+         FInputWindowTargetEndPs]));
+  end;
+  if FOutputTravelFound then
+    Lines.Add(Format('Output start: the earliest output reaches a pad %.1f ps after ' +
+      'the clock edge is sent (clock tree, final logic layer and interconnect). ' +
+      'Add the clock send offset and levels x period to get the time to start ' +
+      'sampling the outputs.', [FOutputTravelPs]));
+  if (MaxGHz > 0) and (TargetGHz > MaxGHz) then
+    Lines.Add(Format('WARNING: target %.2f GHz is faster than the achievable max ' +
+      '%.2f GHz - the circuit cannot be clocked at the requested speed.',
+      [TargetGHz, MaxGHz]));
+end;
+
+// Recomputes the export preflight: routed-instance coverage (missing kinds /
+// triple-check failures) and the placed-cell file status. Runs when entering
+// the Export tab or on Recheck.
 procedure TForm1.RefreshExportPreflight;
 var
   D: TExportDesign;
@@ -2007,6 +2080,8 @@ begin
   ReportLibraryCoverage(D, Cells, MemoExportStatus.Lines);
   ReportCellFileStatus(Cells, MemoExportStatus.Lines,
     CheckExportGds.IsChecked, CheckExportCir.IsChecked);
+  MemoExportStatus.Lines.Add('');
+  AppendClockSummary(MemoExportStatus.Lines);
   ButtonExport.Enabled := FFlowStage >= fsValidated;
   if FFlowStage < fsValidated then
     MemoExportStatus.Lines.Add('~ Run Validate Routing first - Export is locked until then.');
@@ -2076,12 +2151,13 @@ var
   Sp: TExportSplit;
   Tm: TExportTerminal;
   P: TPlacedComponent;
+  Mb: TPoint;
   Node: TPlacedClockNode;
   Spine: TSpineComponent;
   Cell: TCell;
   CellH: Double;
   kk: Integer;
-  DieWb, DieHb, gx, gy, run0, fx0: Integer;
+  DieWb, DieHb, gx, gy, run0, f0, fx0: Integer;
   SrcSeen: TDictionary<string, Boolean>;
   CellOcc: TArray<Boolean>;
   LayerOcc: TDictionary<Int64, TDictionary<string, Boolean>>;
@@ -2214,6 +2290,28 @@ begin
       SetLength(Instances, n + 1);
       Instances[n] := Ins;
     end;
+    // Length-fixing buffers: they live behind the placement mask (only in
+    // FGatePlacement), so they are not in FPlacedComponents.
+    for i := 0 to High(FLengthBuffers) do
+    begin
+      if (FLengthBuffers[i].Gate = nil) or
+         (FLengthBuffers[i].Gate.CellName = '') then
+        Continue;
+      if not FGatePlacement.TryGetValue(FLengthBuffers[i].Gate, Mb) then
+        Continue;
+      Ins := GdsSingle(FLengthBuffers[i].Gate.CellName, Mb.X * Core, Mb.Y * Core);
+      Cell := FLib.FindCell(FLengthBuffers[i].Gate.CellName);
+      if Cell <> nil then
+        for j := 0 to Cell.SourceFiles.Count - 1 do
+          if SameText(ExtractFileExt(Cell.SourceFiles[j]), '.gds') then
+          begin
+            Ins.SrcFile := Cell.SourceFiles[j];
+            Break;
+          end;
+      n := Length(Instances);
+      SetLength(Instances, n + 1);
+      Instances[n] := Ins;
+    end;
     // Clock-tree interior cells (splitters/buffers), placed unrotated like the
     // logic cells; the clock leaves are real gates already in FPlacedComponents.
     for i := 0 to High(FClockSubtree) do
@@ -2290,6 +2388,13 @@ begin
               for gx := FClockSubtree[i][j].X to FClockSubtree[i][j].X + FClockSubtree[i][j].W - 1 do
                 if (gx >= 0) and (gx < DieWb) and (gy >= 0) and (gy < DieHb) then
                   CellOcc[gy * DieWb + gx] := True;
+      for i := 0 to High(FLengthBuffers) do
+        if (FLengthBuffers[i].Gate <> nil) and
+           FGatePlacement.TryGetValue(FLengthBuffers[i].Gate, Mb) then
+          for gy := Mb.Y to Mb.Y + FLengthBuffers[i].H - 1 do
+            for gx := Mb.X to Mb.X + FLengthBuffers[i].W - 1 do
+              if (gx >= 0) and (gx < DieWb) and (gy >= 0) and (gy < DieHb) then
+                CellOcc[gy * DieWb + gx] := True;
       for i := 0 to High(FSpine) do
         for gy := FSpine[i].Y to FSpine[i].Y + FSpine[i].H - 1 do
           for gx := FSpine[i].X to FSpine[i].X + FSpine[i].W - 1 do
@@ -2386,12 +2491,15 @@ begin
                   Inc(fx0);
                   Continue;
                 end;
-                run0 := fx0;
+                // f0, not run0: run0 is the whole tile run and the next
+                // if_unused layer has to start from its beginning, not from
+                // where this layer's last fill sub-run began.
+                f0 := fx0;
                 while (fx0 < gx) and
                       (not (LayerOcc.TryGetValue(Int64(gy) * DieWb + fx0, Lst) and
                             Lst.ContainsKey(Ly))) do
                   Inc(fx0);
-                Ins := GdsArrayed('', run0 * Core, gy * Core, 0, fx0 - run0, 1, Core, 0);
+                Ins := GdsArrayed('', f0 * Core, gy * Core, 0, fx0 - f0, 1, Core, 0);
                 Ins.Cell := ChangeFileExt(ExtractFileName(Ent.IfUnused[kk].Gds), '');
                 Ins.SrcFile := TPath.Combine(BlockRoot, Ent.IfUnused[kk].Gds);
                 n := Length(Instances);
@@ -2486,8 +2594,8 @@ begin
     if ClockModel = nil then
       ClockModel := FClockModel;
     CirText := ExportCIR.BuildCirText(FRouteTraces, FBiasCells, FRouteLayers,
-      FPlacedComponents, FClockSubtree, FSpine, FPlacementModel, ClockModel, Lib,
-      BlockRoot, Stem);
+      FPlacedComponents, FClockSubtree, FSpine, FLengthBuffers,
+      FPlacementModel, ClockModel, Lib, BlockRoot, Stem);
     TDirectory.CreateDirectory(OutDir);
     OutPath := TPath.Combine(OutDir, Stem + '.cir');
     TFile.WriteAllText(OutPath, CirText);
@@ -2506,7 +2614,7 @@ procedure TForm1.RunTbConfigExport(const OutDir, Stem: string);
 var
   ClockNet: string;
   Ins, Outs: TArray<string>;
-  i: Integer;
+  i, Levels: Integer;
 begin
   ClockNet := '';
   if (FClockPadIdx >= 0) and (FClockPadIdx <= High(FPads)) then
@@ -2530,14 +2638,22 @@ begin
       Outs[High(Outs)] := FPads[i].NetName;
     end;
   end;
+  Levels := 0;
+  if FClockNet <> nil then
+    Levels := FClockNet.Rows.Count;
   TDirectory.CreateDirectory(OutDir);
   TFile.WriteAllText(TPath.Combine(OutDir, Stem + '.tb.json'),
     ExportCIR.BuildTbJson(Stem, ClockNet, Ins, Outs,
-      FDesignConfig.FreqGHz, FDesignConfig.PtlDelayPsPerUm,
+      // The field is entered in fs/um, so export the same number the user set.
+      FDesignConfig.FreqGHz, FDesignConfig.PtlDelayPsPerUm * 1000,
       FDesignConfig.CoreUm, FDesignConfig.DieWUm, FDesignConfig.DieHUm,
-      FDesignConfig.MaxPtlLengthUm, FMinClockPeriodPs));
+      FDesignConfig.MaxPtlLengthUm, FMinClockPeriodPs,
+      FInputWindowFound, FInputWindowStartPs, FInputWindowEndPs,
+      FInputWindowTargetStartPs, FInputWindowTargetEndPs,
+      FOutputTravelFound, FOutputTravelPs, Levels));
   MemoExportLog.Lines.Add(Format('TB config: %d in / %d out, clock "%s".',
     [Length(Ins), Length(Outs), ClockNet]));
+  AppendClockSummary(MemoExportLog.Lines);
 end;
 
 
