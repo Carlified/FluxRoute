@@ -18,7 +18,9 @@ var
   Violations: TClockViolations;
   Core, PerBlock, DataPer, SpacingPer, TargetPer: Double;
   Window, Tw: TInputWindow;
-  i, Worst, Guard, Idx: Integer;
+  i, k, Worst, Guard, Idx: Integer;
+  SkLo, SkHi, SkD: Double;
+  SkFound: Boolean;
   Net: TNet;
   Tr: TRoutedTrace;
   V: TClockViolation;
@@ -44,7 +46,9 @@ var
       Result := GatePinBlock(G, PinName, 0, P);
   end;
 
-  // PTL blocks in the routed trace, excluding the two endpoint pin blocks.
+  // PTL blocks in the routed trace. The trace runs centre-to-centre between the
+  // two endpoint pin blocks, so each end contributes half a block: exclude one
+  // block in total, not one per end.
   function LineBlocks(const ATr: TRoutedTrace): Integer;
   var
     k, N: Integer;
@@ -54,7 +58,7 @@ var
       if (k = 0) or (ATr.Points[k].X <> ATr.Points[k - 1].X) or
          (ATr.Points[k].Y <> ATr.Points[k - 1].Y) then
         Inc(N);
-    Result := N - 2;
+    Result := N - 1;
     if Result < 0 then
       Result := 0;
   end;
@@ -215,6 +219,7 @@ begin
   FInputWindowTargetEndPs := 0;
   FOutputTravelFound := False;
   FOutputTravelPs := 0;
+  FClockLevelSkew := nil;
   Model := FClockBufferedModel;
   if Model = nil then
     Model := FClockModel;
@@ -308,6 +313,30 @@ begin
             end;
           end;
         end;
+        // Clock skew inside each level (max - min arrival), for the final audit.
+        SetLength(FClockLevelSkew, Length(Rows));
+        for i := 0 to High(Rows) do
+        begin
+          SkLo := 0;
+          SkHi := 0;
+          SkFound := False;
+          for k := 0 to Model.Gates.Count - 1 do
+            if CellHasClock(Model.Gates[k].Cell) and
+               (Model.Gates[k].ClockLevel = Rows[i]) and
+               ClockArr.TryGetValue(Model.Gates[k], SkD) then
+            begin
+              if (not SkFound) or (SkD < SkLo) then
+                SkLo := SkD;
+              if (not SkFound) or (SkD > SkHi) then
+                SkHi := SkD;
+              SkFound := True;
+            end;
+          if SkFound then
+            FClockLevelSkew[i] := SkHi - SkLo
+          else
+            FClockLevelSkew[i] := 0;
+        end;
+
         // Period-independent part of the output window: how long data takes to
         // get from the clock being sent to the first output pad.
         FOutputTravelPs := MinOutputTravelPs(Model, ClockArr, WireDelays);

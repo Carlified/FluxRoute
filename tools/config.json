@@ -1,10 +1,10 @@
 {
   "_comment": "Helper config for the RSFQ test-bench tools. Design-derived values (clock frequency, PTL delay, core pitch, die size, I/O nets) are exported by the app to die.tb.json next to die.cir; anything set here overrides or supplements them. Run the tools from this directory (or pass --config).",
 
-  "outputDir": "../Win64/Debug/output",
-  "cir": "die.cir",
-  "designConfig": "die.tb.json",
-  "tbOut": "die_tb.cir",
+  "outputDir": "../Win64/Debug/output/full_adder",
+  "cir": "full_adder.cir",
+  "designConfig": "full_adder.tb.json",
+  "tbOut": "full_adder_tb.cir",
   "tbSpec": "tb_spec.json",
 
   "josimCli": "C:/Users/27005348/Downloads/JoSIM-v2.7-windows-x64/bin/josim-cli.exe",

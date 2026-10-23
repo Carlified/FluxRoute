@@ -66,7 +66,7 @@ object Form1: TForm1
         Size.Width = 624.000000000000000000
         Size.Height = 20.000000000000000000
         Size.PlatformDefault = False
-        Text = 
+        Text =
           'Open a previous project to pick up where you left off, or start ' +
           'a new one.'
         TabOrder = 2
@@ -160,7 +160,7 @@ object Form1: TForm1
         Size.Width = 624.000000000000000000
         Size.Height = 28.000000000000000000
         Size.PlatformDefault = False
-        Text = 
+        Text =
           'Load a LEF file, then a library folder. Double-click a cell to v' +
           'iew it.'
         TabOrder = 1
@@ -262,7 +262,7 @@ object Form1: TForm1
         Size.Width = 624.000000000000000000
         Size.Height = 20.000000000000000000
         Size.PlatformDefault = False
-        Text = 
+        Text =
           'Double-click a cell on the left to add it, or double-click it in' +
           ' the list on the right to remove it.'
         TabOrder = 1
@@ -606,7 +606,7 @@ object Form1: TForm1
         object LabelCoreSize: TLabel
           Position.X = 24.000000000000000000
           Position.Y = 12.000000000000000000
-          Size.Width = 170.000000000000000000
+          Size.Width = 144.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
           Text = 'Core block size:'
@@ -615,7 +615,7 @@ object Form1: TForm1
         object EditCoreSize: TEdit
           Touch.InteractiveGestures = [LongTap, DoubleTap]
           TabOrder = 3
-          Position.X = 200.000000000000000000
+          Position.X = 170.000000000000000000
           Position.Y = 8.000000000000000000
           Size.Width = 70.000000000000000000
           Size.Height = 26.000000000000000000
@@ -624,7 +624,7 @@ object Form1: TForm1
           OnKeyDown = EditPlacementKeyDown
         end
         object LabelCoreDim: TLabel
-          Position.X = 278.000000000000000000
+          Position.X = 248.000000000000000000
           Position.Y = 12.000000000000000000
           Size.Width = 160.000000000000000000
           Size.Height = 20.000000000000000000
@@ -635,7 +635,7 @@ object Form1: TForm1
         object LabelRowHeight: TLabel
           Position.X = 24.000000000000000000
           Position.Y = 44.000000000000000000
-          Size.Width = 170.000000000000000000
+          Size.Width = 144.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
           Text = 'Row height:'
@@ -644,7 +644,7 @@ object Form1: TForm1
         object EditRowHeight: TEdit
           Touch.InteractiveGestures = [LongTap, DoubleTap]
           TabOrder = 5
-          Position.X = 200.000000000000000000
+          Position.X = 170.000000000000000000
           Position.Y = 40.000000000000000000
           Size.Width = 70.000000000000000000
           Size.Height = 26.000000000000000000
@@ -653,7 +653,7 @@ object Form1: TForm1
           OnKeyDown = EditPlacementKeyDown
         end
         object LabelRowCells: TLabel
-          Position.X = 278.000000000000000000
+          Position.X = 248.000000000000000000
           Position.Y = 44.000000000000000000
           Size.Width = 160.000000000000000000
           Size.Height = 20.000000000000000000
@@ -664,7 +664,7 @@ object Form1: TForm1
         object LabelDieArea: TLabel
           Position.X = 24.000000000000000000
           Position.Y = 76.000000000000000000
-          Size.Width = 170.000000000000000000
+          Size.Width = 144.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
           Text = 'Core die size:'
@@ -673,7 +673,7 @@ object Form1: TForm1
         object EditDieW: TEdit
           Touch.InteractiveGestures = [LongTap, DoubleTap]
           TabOrder = 12
-          Position.X = 200.000000000000000000
+          Position.X = 170.000000000000000000
           Position.Y = 72.000000000000000000
           Size.Width = 70.000000000000000000
           Size.Height = 26.000000000000000000
@@ -682,7 +682,7 @@ object Form1: TForm1
           OnKeyDown = EditPlacementKeyDown
         end
         object LabelDieX: TLabel
-          Position.X = 276.000000000000000000
+          Position.X = 246.000000000000000000
           Position.Y = 76.000000000000000000
           Size.Width = 12.000000000000000000
           Size.Height = 20.000000000000000000
@@ -693,7 +693,7 @@ object Form1: TForm1
         object EditDieH: TEdit
           Touch.InteractiveGestures = [LongTap, DoubleTap]
           TabOrder = 14
-          Position.X = 286.000000000000000000
+          Position.X = 256.000000000000000000
           Position.Y = 72.000000000000000000
           Size.Width = 70.000000000000000000
           Size.Height = 26.000000000000000000
@@ -702,7 +702,7 @@ object Form1: TForm1
           OnKeyDown = EditPlacementKeyDown
         end
         object LabelDieUm: TLabel
-          Position.X = 362.000000000000000000
+          Position.X = 332.000000000000000000
           Position.Y = 76.000000000000000000
           Size.Width = 30.000000000000000000
           Size.Height = 20.000000000000000000
@@ -711,7 +711,7 @@ object Form1: TForm1
           TabOrder = 15
         end
         object LabelDieAreaText: TLabel
-          Position.X = 396.000000000000000000
+          Position.X = 366.000000000000000000
           Position.Y = 76.000000000000000000
           Size.Width = 180.000000000000000000
           Size.Height = 20.000000000000000000
@@ -722,7 +722,7 @@ object Form1: TForm1
         object LabelUtilization: TLabel
           Position.X = 24.000000000000000000
           Position.Y = 108.000000000000000000
-          Size.Width = 170.000000000000000000
+          Size.Width = 144.000000000000000000
           Size.Height = 20.000000000000000000
           Size.PlatformDefault = False
           Text = 'Target utilization:'
@@ -731,7 +731,7 @@ object Form1: TForm1
         object EditUtilization: TEdit
           Touch.InteractiveGestures = [LongTap, DoubleTap]
           TabOrder = 18
-          Position.X = 200.000000000000000000
+          Position.X = 170.000000000000000000
           Position.Y = 104.000000000000000000
           Size.Width = 70.000000000000000000
           Size.Height = 26.000000000000000000
@@ -740,7 +740,7 @@ object Form1: TForm1
           OnKeyDown = EditPlacementKeyDown
         end
         object LabelUtilSuffix: TLabel
-          Position.X = 278.000000000000000000
+          Position.X = 248.000000000000000000
           Position.Y = 108.000000000000000000
           Size.Width = 20.000000000000000000
           Size.Height = 20.000000000000000000
@@ -1149,7 +1149,7 @@ object Form1: TForm1
           Size.Width = 192.000000000000000000
           Size.Height = 32.000000000000000000
           Size.PlatformDefault = False
-          Text = 'Run Routing'
+          Text = 'Route and Validate'
           TextSettings.Trimming = None
           OnClick = ButtonRunRoutingClick
         end
@@ -1165,17 +1165,6 @@ object Form1: TForm1
           TabOrder = 1
           Viewport.Width = 192.000000000000000000
           Viewport.Height = 336.000000000000000000
-        end
-        object ButtonValidateRouting: TButton
-          Align = Bottom
-          Position.Y = 376.000000000000000000
-          Size.Width = 192.000000000000000000
-          Size.Height = 32.000000000000000000
-          Size.PlatformDefault = False
-          TabOrder = 2
-          Text = 'Validate Routing'
-          TextSettings.Trimming = None
-          OnClick = ButtonValidateRoutingClick
         end
       end
       object SplitterRouting: TSplitter
@@ -1298,12 +1287,12 @@ object Form1: TForm1
         object lblExportStem: TLabel
           Align = Right
           Margins.Right = 8.000000000000000000
-          Position.X = 472.000000000000000000
-          Size.Width = 42.000000000000000000
+          Position.X = 432.000000000000000000
+          Size.Width = 82.000000000000000000
           Size.Height = 30.000000000000000000
           Size.PlatformDefault = False
           TextSettings.Trimming = None
-          Text = 'Stem:'
+          Text = 'Output name:'
         end
         object EditExportStem: TEdit
           Touch.InteractiveGestures = [LongTap, DoubleTap]
@@ -1328,32 +1317,41 @@ object Form1: TForm1
         TabOrder = 3
         object CheckExportGds: TCheckBox
           Align = Left
-          Size.Width = 100.000000000000000000
+          Size.Width = 96.000000000000000000
           Size.Height = 32.000000000000000000
           Size.PlatformDefault = False
           Text = 'Export .gds'
         end
         object CheckExportDef: TCheckBox
           Align = Left
-          Position.X = 100.000000000000000000
-          Size.Width = 100.000000000000000000
+          Enabled = False
+          Position.X = 96.000000000000000000
+          Size.Width = 92.000000000000000000
           Size.Height = 32.000000000000000000
           Size.PlatformDefault = False
           Text = 'Export .def'
         end
         object CheckExportCir: TCheckBox
           Align = Left
-          Position.X = 200.000000000000000000
-          Size.Width = 100.000000000000000000
+          Position.X = 188.000000000000000000
+          Size.Width = 86.000000000000000000
           Size.Height = 32.000000000000000000
           Size.PlatformDefault = False
           Text = 'Export .cir'
         end
+        object CheckExportMetrics: TCheckBox
+          Align = Left
+          Position.X = 274.000000000000000000
+          Size.Width = 104.000000000000000000
+          Size.Height = 32.000000000000000000
+          Size.PlatformDefault = False
+          Text = 'Export .stats'
+        end
         object ButtonPreflight: TButton
           Align = Right
           Margins.Right = 8.000000000000000000
-          Position.X = 372.000000000000000000
-          Size.Width = 90.000000000000000000
+          Position.X = 402.000000000000000000
+          Size.Width = 82.000000000000000000
           Size.Height = 32.000000000000000000
           Size.PlatformDefault = False
           TabOrder = 0
@@ -1363,8 +1361,8 @@ object Form1: TForm1
         end
         object ButtonExport: TButton
           Align = Right
-          Position.X = 470.000000000000000000
-          Size.Width = 154.000000000000000000
+          Position.X = 492.000000000000000000
+          Size.Width = 132.000000000000000000
           Size.Height = 32.000000000000000000
           Size.PlatformDefault = False
           TabOrder = 1

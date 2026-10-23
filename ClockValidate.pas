@@ -6,7 +6,7 @@ unit ClockValidate;
 //   clkArr(T) <= clkArr(P) + dataDelay(P -> T)   (worst-case data path)
 //
 // clkArr is accumulated from the clock pad down the clock tree: the routed PTL
-// delay of each link (per block, pin blocks excluded) plus the cell delay of
+// delay of each link (per block, half a pin block excluded at each end) plus the cell delay of
 // every splitter / buffer / junction on the way. dataDelay is a max-relaxation
 // of the logic netlist from every clocked cell (its clk->q plus the wire and
 // gate delays until the next clocked cell). A violation names the clock-trunk

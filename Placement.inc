@@ -311,16 +311,22 @@ end;
 
 procedure TForm1.ButtonOptimizeClick(Sender: TObject);
 begin
-  // Latching behavior: if the bias expansion has already run, this re-optimizes
-  // from a clean slate - reset the bias expansion state so the floorplan is
-  // built with base-width bias lines again, then optimise.
-  if FFlowStage >= fsBias then
+  // Optimize doubles as the placement reset: drop the bias expansion geometry
+  // (rows, lanes, trunk, run-time die growth) and optimise from clean state.
+  // This must NOT be gated on FFlowStage >= fsBias: a FAILED expansion leaves the
+  // stage at fsPlacement while the geometry is already partly grown, and then the
+  // reset never ran - the grown rows/die (and the latched failure) survived, so
+  // the next attempt started from the broken geometry and could never recover.
+  if (FFlowStage >= fsBias) or FBiasExpansionFailed or
+     (FPlanDieWExtra <> 0) or (FPlanBiasTrunkW > 1) then
   begin
     FBiasRowH := nil;
     FBottomBiasH := 0;
     FBiasLaneW := nil;
     FPlanMaxRowW := 0;
     FPlanBiasTrunkW := 1;
+    FPlanDieWExtra := 0;
+    FBiasExpansionFailed := False;
     FFlowStage := fsPlacement;
     BuildFloorplan;
   end;
@@ -630,8 +636,9 @@ begin
   begin
     // Some rows grew and the floorplan is still valid, but the bias network
     // cannot be completed. Stop before routing overlaps the neighbouring rows.
-    ReportBiasError('Bias expansion stopped: the die cannot hold the bias lines. ' +
-      'Increase the die height/width (or reduce the bias current) and rebuild.');
+    ReportBiasError('Bias expansion stopped: the bias lines do not fit. The die ' +
+      'widens automatically, so this is either the width cap or the die height - ' +
+      'raise the die height (or reduce the bias current) and rebuild.');
     UpdateUI;
     RepaintFloorplanPage;
     Exit;
@@ -696,16 +703,32 @@ end;
 
 // Rebuilds the bias geometry without reshuffling cells: snapshots each cell's X,
 // rebuilds, restores the optimized X, shifting rows left that no longer fit.
-procedure TForm1.RebuildFloorplanPreserve;
+procedure TForm1.RebuildFloorplanPreserve(OldModel: TBlifModel = nil);
 var
+  IdxModel: TBlifModel;
   LogicSnap, ClockSnap: TDictionary<TGateInstance, TPlaceSnapshot>;
+  OldIdx, NewIdx: TDictionary<TGateInstance, Integer>;
+  IdxSnap: TDictionary<Integer, TPlaceSnapshot>;
   CloneToPlace: TDictionary<TGateInstance, TGateInstance>;
+  ClockX: TArray<TArray<Integer>>;
   S: TPlaceSnapshot;
-  i, L, ci, band: Integer;
+  i, k, L, ci, band: Integer;
   RowCells: TArray<Integer>;
   j, MaxRight, Shift: Integer;
   Pt: TPoint;
   PGate: TGateInstance;
+
+  // Layer index of a clock level (-1 when the level is unknown).
+  function LevelIndexOf(ALevel: Integer): Integer;
+  var
+    k: Integer;
+  begin
+    Result := -1;
+    for k := 0 to High(FPlanLevels) do
+      if FPlanLevels[k] = ALevel then
+        Exit(k);
+  end;
+
 begin
   if not FFloorplanValid then
   begin
@@ -715,45 +738,97 @@ begin
   LogicSnap := TDictionary<TGateInstance, TPlaceSnapshot>.Create;
   ClockSnap := TDictionary<TGateInstance, TPlaceSnapshot>.Create;
   CloneToPlace := TDictionary<TGateInstance, TGateInstance>.Create;
+  // Gates are identified by index as well: validation rebuilds the map against a
+  // CLONED placement model, so the gate objects differ while the order does not.
+  OldIdx := TDictionary<TGateInstance, Integer>.Create;
+  NewIdx := TDictionary<TGateInstance, Integer>.Create;
+  IdxSnap := TDictionary<Integer, TPlaceSnapshot>.Create;
   try
-    // Logic cells: snapshot the horizontal offset from the row's left edge.
-    // (The vertical position is recomputed by BuildFloorplan for the new band
-    // geometry, so only the optimized X arrangement is preserved.)
+    IdxModel := OldModel;
+    if IdxModel = nil then
+      IdxModel := FPlacementModel;
+    if IdxModel <> nil then
+      for i := 0 to IdxModel.Gates.Count - 1 do
+        OldIdx.AddOrSetValue(IdxModel.Gates[i], i);
+    // Logic cells: snapshot the horizontal offset from the row's left edge and
+    // which wrapped band (layer chunk) the cell sits in. BuildFloorplan packs
+    // rows sequentially, so the band has to be restored as well - mixing the
+    // sequential row order with the optimised one overlaps cells.
     for i := 0 to High(FPlacedComponents) do
     begin
       S.Gate := FPlacedComponents[i].Gate;
       S.X := FPlacedComponents[i].X - FPlanXLeft;
+      // Which wrapped band the cell was optimised into: the sequential pack
+      // below assigns rows by its own order, so without this a cell can move to
+      // another chunk of its layer and land on top of another cell.
+      band := BandIndexOfY(FPlacedComponents[i].Y);
+      S.Chunk := 0;
+      L := LevelIndexOf(FPlacedComponents[i].ClockLevel);
+      if (L >= 0) and (L < Length(FPlanLevelFirstBand)) then
+        S.Chunk := band - FPlanLevelFirstBand[L];
+      if S.Chunk < 0 then
+        S.Chunk := 0;
       LogicSnap.AddOrSetValue(S.Gate, S);
+      if OldIdx.TryGetValue(S.Gate, k) then
+        IdxSnap.AddOrSetValue(k, S);
     end;
     // Clock tree interior nodes: same - keep the horizontal offset, let the
-    // rebuilt clock placement set the row Y.
+    // rebuilt clock placement set the row Y. The X is also kept by (level, index)
+    // because BuildFloorplan may rebuild the clock model, in which case the node
+    // gates are new objects and the gate-keyed lookup below would miss.
+    SetLength(ClockX, Length(FClockSubtree));
     for L := 0 to High(FClockSubtree) do
+    begin
+      SetLength(ClockX[L], Length(FClockSubtree[L]));
       for ci := 0 to High(FClockSubtree[L]) do
+      begin
+        ClockX[L][ci] := FClockSubtree[L][ci].X - FPlanXLeft;
         if not FClockSubtree[L][ci].IsLeaf then
         begin
           S.Gate := FClockSubtree[L][ci].Gate;
           S.X := FClockSubtree[L][ci].X - FPlanXLeft;
           ClockSnap.AddOrSetValue(S.Gate, S);
         end;
-
-    BuildFloorplan;
-
-    // Restore logic cells' X (keeps the optimized horizontal row layout). The
-    // Y is left as BuildFloorplan computed it for the current band geometry.
-    for i := 0 to High(FPlacedComponents) do
-      if LogicSnap.TryGetValue(FPlacedComponents[i].Gate, S) then
-      begin
-        FPlacedComponents[i].X := FPlanXLeft + S.X;
-        FGatePlacement.AddOrSetValue(FPlacedComponents[i].Gate,
-          TPoint.Create(FPlacedComponents[i].X, FPlacedComponents[i].Y));
       end;
-    // Restore clock tree interior nodes' X.
-    for L := 0 to High(FClockSubtree) do
-      for ci := 0 to High(FClockSubtree[L]) do
-        if (not FClockSubtree[L][ci].IsLeaf) and
-           ClockSnap.TryGetValue(FClockSubtree[L][ci].Gate, S) then
-          FClockSubtree[L][ci].X := FPlanXLeft + S.X;
+    end;
 
+    // The intermediate layout is only used to recompute the band geometry: its
+    // cells are packed sequentially and its clock nodes re-balanced, so checking
+    // it here would report overlaps that the restore below removes.
+    FSuppressLayoutCheck := True;
+    try
+      BuildFloorplan;
+    finally
+      FSuppressLayoutCheck := False;
+    end;
+
+    if FPlacementModel <> nil then
+      for i := 0 to FPlacementModel.Gates.Count - 1 do
+        NewIdx.AddOrSetValue(FPlacementModel.Gates[i], i);
+
+    // Restore logic cells' X and band (keeps the optimized row layout and the
+    // wrapping exactly as it was before the rebuild).
+    for i := 0 to High(FPlacedComponents) do
+    begin
+      if not LogicSnap.TryGetValue(FPlacedComponents[i].Gate, S) then
+        if (not NewIdx.TryGetValue(FPlacedComponents[i].Gate, k)) or
+           (not IdxSnap.TryGetValue(k, S)) then
+          Continue;
+      FPlacedComponents[i].X := FPlanXLeft + S.X;
+      // Keep the cell in the band (layer + chunk) it was optimised into.
+      L := LevelIndexOf(FPlacedComponents[i].ClockLevel);
+      if (L >= 0) and (L < Length(FPlanLevelFirstBand)) then
+      begin
+        band := FPlanLevelFirstBand[L] + Min(S.Chunk, FPlanLevelBandCount[L] - 1);
+        if band > High(FPlanBandStarts) then
+          band := High(FPlanBandStarts);
+        if band >= 0 then
+          FPlacedComponents[i].Y := BandLogicRowY(band) +
+            ((FPlanRowHBlocks - FPlacedComponents[i].H) div 2);
+      end;
+      FGatePlacement.AddOrSetValue(FPlacedComponents[i].Gate,
+        TPoint.Create(FPlacedComponents[i].X, FPlacedComponents[i].Y));
+    end;
     // A grown bias lane narrows the rows: shift each band's cells left uniformly
     // so they fit, moving logic cells and clock-row nodes together.
     for band := 0 to High(FPlanBandStarts) do
@@ -807,6 +882,28 @@ begin
       end;
     end;
 
+    // The clock rows were derived from the sequential layout BuildFloorplan
+    // produced, so re-derive them from the restored cell rows, then put the
+    // optimised interior X back (by gate when the model survived, otherwise by
+    // (level, index)).
+    BuildClockSubtreePlacements;
+    for L := 0 to High(FClockSubtree) do
+      for ci := 0 to High(FClockSubtree[L]) do
+        if not FClockSubtree[L][ci].IsLeaf then
+        begin
+          if ClockSnap.TryGetValue(FClockSubtree[L][ci].Gate, S) then
+            FClockSubtree[L][ci].X := FPlanXLeft + S.X
+          else if (L <= High(ClockX)) and (ci <= High(ClockX[L])) then
+            FClockSubtree[L][ci].X := FPlanXLeft + ClockX[L][ci];
+          // A stale offset must never escape the row.
+          if FClockSubtree[L][ci].W >= FPlanXRight - FPlanXLeft then
+            FClockSubtree[L][ci].X := FPlanXLeft
+          else if FClockSubtree[L][ci].X + FClockSubtree[L][ci].W > FPlanXRight then
+            FClockSubtree[L][ci].X := FPlanXRight - FClockSubtree[L][ci].W
+          else if FClockSubtree[L][ci].X < FPlanXLeft then
+            FClockSubtree[L][ci].X := FPlanXLeft;
+        end;
+
     // Re-sync clocked leaves to their (possibly shifted) logic cells: the subtree
     // gates are clock-model clones, mapped back by index before the lookup.
     if (FPlacementModel <> nil) and (FClockBufferedModel <> nil) and
@@ -837,6 +934,9 @@ begin
     LogicSnap.Free;
     ClockSnap.Free;
     CloneToPlace.Free;
+    OldIdx.Free;
+    NewIdx.Free;
+    IdxSnap.Free;
   end;
   RepaintFloorplanPage;
 end;
@@ -915,6 +1015,51 @@ begin
   Item.StyledSettings := Item.StyledSettings - [TStyledSetting.FontColor];
   Item.TextSettings.FontColor := PalRed;
   Inc(FFloorplanErrorCount);
+end;
+
+// Widens the die by AddCols blocks for the rest of this placement, so the bias
+// trunks and lanes can take the columns they need. The growth is a run-time
+// offset: the configured die width is never rewritten, so loading the project
+// again starts from the same die and reproduces the same row wrapping. Growth is
+// horizontal only (a taller die would move the pad rows) and capped at
+// MaxDieGrowthFactor times the configured width. The grid follows the die, so
+// the caller grows the trunk/lane by the same count: AvailableWidth - and with
+// it the wrapping - stays exactly as it was, and no cell, pad or trace moves.
+function TForm1.GrowDieWidth(AddCols: Integer): Boolean;
+var
+  Core, OldUm: Double;
+  BaseBlocks: Integer;
+begin
+  Result := False;
+  if AddCols < 1 then
+    Exit;
+  RefreshDesignConfig;
+  Core := FDesignConfig.CoreUm;
+  OldUm := FDesignConfig.DieWUm;
+  if (Core <= 0) or (OldUm <= 0) then
+    Exit;
+  BaseBlocks := Round(OldUm / Core);
+  if FPlanDieWExtra + AddCols >
+     Round(BaseBlocks * (MaxDieGrowthFactor - 1)) then
+    Exit;
+  if BaseBlocks + FPlanDieWExtra + AddCols > MaxGridBlocks then
+    Exit;
+  FPlanDieWExtra := FPlanDieWExtra + AddCols;
+  MemoRouting.Lines.Add(Format('[bias] die widened by %d block(s) for this run ' +
+    '(%s -> %s um); the configured width is unchanged.',
+    [AddCols, DimToStr(OldUm + (FPlanDieWExtra - AddCols) * Core),
+     DimToStr(OldUm + FPlanDieWExtra * Core)]));
+  Result := True;
+end;
+
+// The die width the layout actually uses: the configured width plus the
+// run-time bias growth (and the grid, once a floorplan exists).
+function TForm1.EffectiveDieWUm: Double;
+begin
+  if (FFloorplanW > 0) and (FPlanCore > 0) then
+    Result := FFloorplanW * FPlanCore
+  else
+    Result := FDesignConfig.DieWUm + FPlanDieWExtra * FDesignConfig.CoreUm;
 end;
 
 // Bias expansion can be triggered from the placement page (Expand Bias Lines)
@@ -1106,6 +1251,42 @@ begin
       FPadMap.AddOrSetValue(FPads[Idx].NetName, TPoint.Create(X, FPads[Idx].Y));
     end;
   end;
+end;
+
+// The X (grid blocks) at which a pad should be drawn. During a drag the dragged
+// pad follows the mouse and the rest of its set shift to the preview slots.
+function TForm1.PadDisplayX(Idx: Integer): Integer;
+var
+  N, k, Slot, Right: Integer;
+  Order: TArray<Integer>;
+begin
+  if (Idx < 0) or (Idx > High(FPads)) then
+    Exit(0);
+  if not FPadDragging then
+    Exit(FPads[Idx].X);
+  if Idx = FPadDragIdx then
+    Exit(Round(FPadDragX));
+  if FPads[Idx].IsInput then
+  begin
+    N := Length(FPadOrderInput);
+    Right := FPlanXRight;
+    Slot := NearestPadSlot(FPadDragX, N, Right);
+    Order := PreviewPadOrder(FPadOrderInput, FPadDragIdx, Slot);
+    for k := 0 to High(Order) do
+      if Order[k] = Idx then
+        Exit(Round(PadSlotX(k, N, Right)));
+  end
+  else
+  begin
+    N := Length(FPadOrderOutput);
+    Right := FPlanXRight + FPlanLane0W + FPlanTrunkW;
+    Slot := NearestPadSlot(FPadDragX, N, Right);
+    Order := PreviewPadOrder(FPadOrderOutput, FPadDragIdx, Slot);
+    for k := 0 to High(Order) do
+      if Order[k] = Idx then
+        Exit(Round(PadSlotX(k, N, Right)));
+  end;
+  Result := FPads[Idx].X;
 end;
 
 procedure TForm1.SetPlanCell(X, Y: Integer; Kind: TFloorplanCell; ALayer: Integer);

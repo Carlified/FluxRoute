@@ -123,7 +123,9 @@ begin
     end;
 
     Core := FDesignConfig.CoreUm;
-    DieW := FDesignConfig.DieWUm;
+    // The die the layout actually uses: bias expansion widens it at run time, and
+    // the routing grid has to cover that or every wire hugs the old edge.
+    DieW := EffectiveDieWUm;
     DieH := FDesignConfig.DieHUm;
 
     Cols := Round(DieW / Core);
@@ -785,6 +787,7 @@ begin
     MemoRouting.Lines.Add(Format(
       'Routed %d signal net(s) + %d clock link(s) on %d routing layer(s).',
       [SigRouted, ClkRouted, Length(FRouteLayers)]));
+    FRouteFailedLinks := Failed;
     if Failed > 0 then
       MemoRouting.Lines.Add(Format('%d link(s) could not be routed.',
         [Failed]));
@@ -890,7 +893,7 @@ begin
   W := 0;
   H := 0;
   if FDesignConfig.DieWUm > 0 then
-    W := Round(FDesignConfig.DieWUm / Core);
+    W := Round(EffectiveDieWUm / Core);
   if FDesignConfig.DieHUm > 0 then
     H := Round(FDesignConfig.DieHUm / Core);
   if (W <= 0) or (H <= 0) then
@@ -1013,39 +1016,15 @@ begin
   end;
 end;
 
-// Widens a vertical bias lane by ByCols (0 = left feed, 1 = far-right); if the
-// die is full, packs rows left to recover columns, else reports failure.
+// Widens a vertical bias lane by ByCols (0 = left feed, 1 = far-right). The die
+// takes the extra columns (GrowDieWidth), so the row wrap window is unchanged
+// and no cell moves; when the die cannot grow, the reason is reported.
 function TForm1.IncreaseClockTrunkColumn(ColIdx, ByCols: Integer): Boolean;
 var
-  DieWBlocks, MaxRowW, NewLaneW, Need: Integer;
-  TightMax, PrevRight, X: Integer;
-  b, i, Ci, n: Integer;
-  RowCells: TArray<Integer>;
-  Tmp: Integer;
+  DieWBlocks, MaxRowW, NewLaneW: Integer;
   NewLane: TArray<Integer>;
-
-  // Sorts the band's logic-row cell indices by X (insertion sort, stable).
-  procedure SortRowByX;
-  var
-    a, b2: Integer;
-  begin
-    for a := 1 to n - 1 do
-    begin
-      Tmp := RowCells[a];
-      b2 := a - 1;
-      while (b2 >= 0) and
-            (FPlacedComponents[RowCells[b2]].X > FPlacedComponents[Tmp].X) do
-      begin
-        RowCells[b2 + 1] := RowCells[b2];
-        Dec(b2);
-      end;
-      RowCells[b2 + 1] := Tmp;
-    end;
-  end;
-
 begin
   Result := False;
-  // ColIdx: 0 = left feed bias lane, 1 = far-right bias lane.
   if (ColIdx < 0) or (ColIdx > 1) or (ByCols < 1) then
     Exit;
   if Length(FBiasLaneW) <> 2 then
@@ -1072,103 +1051,24 @@ begin
   if MaxRowW < 1 then
     MaxRowW := 1;
   NewLaneW := FPlanLane0W + FPlanLane1W + ByCols; // widened lane adds ByCols
-  // Fits outright (far-left trunk 1 + rows + lane0 + trunk + lane1)?
-  if MaxRowW + 1 + NewLaneW + FPlanTrunkW <= DieWBlocks then
-  begin
-    FBiasLaneW[ColIdx] := FBiasLaneW[ColIdx] + ByCols;
-    RebuildFloorplanPreserve;
-    Result := True;
-    Exit;
-  end;
-  // Need to recover columns from the rows: pack each logic row's cells to the
-  // left (knock-on nudge) and compute the tightest row width.
-  Need := (MaxRowW + 1 + NewLaneW + FPlanTrunkW) - DieWBlocks;
-  if Need < 1 then
-    Need := 1;
-  TightMax := 0;
-  for b := 0 to High(FPlanBandStarts) do
-  begin
-    SetLength(RowCells, 0);
-    for i := 0 to High(FPlacedComponents) do
-      if (BandIndexOfY(FPlacedComponents[i].Y) = b) and
-         (FPlacedComponents[i].Y >= BandLogicRowY(b)) and
-         (FPlacedComponents[i].Y < BandLogicRowY(b) + FPlanRowHBlocks) then
-      begin
-        SetLength(RowCells, Length(RowCells) + 1);
-        RowCells[High(RowCells)] := i;
-      end;
-    n := Length(RowCells);
-    if n = 0 then
-      Continue;
-    SortRowByX;
-    // Knock-on: pack left from XLeft with one-cell gaps.
-    PrevRight := FPlanXLeft - 1;
-    for Ci := 0 to n - 1 do
+  if MaxRowW + FPlanBiasTrunkW + NewLaneW + FPlanTrunkW > DieWBlocks then
+    if not GrowDieWidth(ByCols) then
     begin
-      X := FPlanXLeft;
-      if PrevRight + 1 > X then
-        X := PrevRight + 1;
-      if FPlacedComponents[RowCells[Ci]].X > X then
-        FPlacedComponents[RowCells[Ci]].X := X;
-      FGatePlacement.AddOrSetValue(FPlacedComponents[RowCells[Ci]].Gate,
-        TPoint.Create(FPlacedComponents[RowCells[Ci]].X,
-          FPlacedComponents[RowCells[Ci]].Y));
-      PrevRight := FPlacedComponents[RowCells[Ci]].X +
-        FPlacedComponents[RowCells[Ci]].W;
+      ReportBiasError(Format('Bias expansion: clock bias lane %d needs %d more ' +
+        'column(s) and the die cannot be widened any further.', [ColIdx, ByCols]));
+      Exit;
     end;
-    if PrevRight - FPlanXLeft + 1 > TightMax then
-      TightMax := PrevRight - FPlanXLeft + 1;
-  end;
-  if MaxRowW - TightMax >= Need then
-  begin
-    // Recovered enough: shrink the row allocation, widen the lane, rebuild.
-    FPlanMaxRowW := MaxRowW - Need;
-    FBiasLaneW[ColIdx] := FBiasLaneW[ColIdx] + ByCols;
-    RebuildFloorplanPreserve;
-    Result := True;
-  end
-  else
-  begin
-    // Could not recover enough width. Rebuild so the (nudged) cell positions
-    // match the floorplan grid, then report the failure.
-    RebuildFloorplanPreserve;
-    ReportBiasError(Format('Bias expansion: clock bias lane %d needs %d more ' +
-      'column(s), but the rows cannot be packed any tighter.',
-      [ColIdx, ByCols]));
-  end;
+  FBiasLaneW[ColIdx] := FBiasLaneW[ColIdx] + ByCols;
+  RebuildFloorplanPreserve;
+  Result := True;
 end;
 
-// Widens the far-left bias trunk by ByCols columns. The trunk carries one
-// column per bias row (each row's wire is its own trunk line, all under the
-// current limit); if the die is full, packs rows left to recover columns, else
-// reports failure.
+// Widens the far-left bias trunk by ByCols columns, growing the die by the same
+// count so the rows keep their width (and therefore their wrapping). Rows are
+// never re-packed: a placement within a row does not change here.
 function TForm1.IncreaseBiasTrunkColumn(ByCols: Integer): Boolean;
 var
-  DieWBlocks, MaxRowW, NewTrunkW, Need: Integer;
-  TightMax, PrevRight, X: Integer;
-  b, i, Ci, n: Integer;
-  RowCells: TArray<Integer>;
-  Tmp: Integer;
-
-  // Sorts the band's logic-row cell indices by X (insertion sort, stable).
-  procedure SortRowByX;
-  var
-    a, b2: Integer;
-  begin
-    for a := 1 to n - 1 do
-    begin
-      Tmp := RowCells[a];
-      b2 := a - 1;
-      while (b2 >= 0) and
-            (FPlacedComponents[RowCells[b2]].X > FPlacedComponents[Tmp].X) do
-      begin
-        RowCells[b2 + 1] := RowCells[b2];
-        Dec(b2);
-      end;
-      RowCells[b2 + 1] := Tmp;
-    end;
-  end;
-
+  DieWBlocks, MaxRowW, NewTrunkW: Integer;
 begin
   Result := False;
   if ByCols < 1 then
@@ -1181,67 +1081,16 @@ begin
   if MaxRowW < 1 then
     MaxRowW := 1;
   NewTrunkW := FPlanBiasTrunkW + ByCols;
-  // Fits outright?
-  if MaxRowW + NewTrunkW + FPlanLane0W + FPlanTrunkW + FPlanLane1W <= DieWBlocks then
-  begin
-    FPlanBiasTrunkW := NewTrunkW;
-    RebuildFloorplanPreserve;
-    Result := True;
-    Exit;
-  end;
-  // Need to recover columns from the rows: pack each logic row's cells to the
-  // left (knock-on nudge) and compute the tightest row width.
-  Need := (MaxRowW + NewTrunkW + FPlanLane0W + FPlanTrunkW + FPlanLane1W) - DieWBlocks;
-  if Need < 1 then
-    Need := 1;
-  TightMax := 0;
-  for b := 0 to High(FPlanBandStarts) do
-  begin
-    SetLength(RowCells, 0);
-    for i := 0 to High(FPlacedComponents) do
-      if (BandIndexOfY(FPlacedComponents[i].Y) = b) and
-         (FPlacedComponents[i].Y >= BandLogicRowY(b)) and
-         (FPlacedComponents[i].Y < BandLogicRowY(b) + FPlanRowHBlocks) then
-      begin
-        SetLength(RowCells, Length(RowCells) + 1);
-        RowCells[High(RowCells)] := i;
-      end;
-    n := Length(RowCells);
-    if n = 0 then
-      Continue;
-    SortRowByX;
-    PrevRight := FPlanXLeft - 1;
-    for Ci := 0 to n - 1 do
+  if MaxRowW + NewTrunkW + FPlanLane0W + FPlanTrunkW + FPlanLane1W > DieWBlocks then
+    if not GrowDieWidth(ByCols) then
     begin
-      X := FPlanXLeft;
-      if PrevRight + 1 > X then
-        X := PrevRight + 1;
-      if FPlacedComponents[RowCells[Ci]].X > X then
-        FPlacedComponents[RowCells[Ci]].X := X;
-      FGatePlacement.AddOrSetValue(FPlacedComponents[RowCells[Ci]].Gate,
-        TPoint.Create(FPlacedComponents[RowCells[Ci]].X,
-          FPlacedComponents[RowCells[Ci]].Y));
-      PrevRight := FPlacedComponents[RowCells[Ci]].X +
-        FPlacedComponents[RowCells[Ci]].W;
+      ReportBiasError(Format('Bias expansion: the bias trunk needs %d more ' +
+        'column(s) and the die cannot be widened any further.', [ByCols]));
+      Exit;
     end;
-    if PrevRight - FPlanXLeft + 1 > TightMax then
-      TightMax := PrevRight - FPlanXLeft + 1;
-  end;
-  if MaxRowW - TightMax >= Need then
-  begin
-    // Recovered enough: shrink the row allocation, widen the trunk, rebuild.
-    FPlanMaxRowW := MaxRowW - Need;
-    FPlanBiasTrunkW := NewTrunkW;
-    RebuildFloorplanPreserve;
-    Result := True;
-  end
-  else
-  begin
-    RebuildFloorplanPreserve;
-    ReportBiasError(Format('Bias expansion: the bias trunk needs %d more ' +
-      'column(s), but the rows cannot be packed any tighter.',
-      [ByCols]));
-  end;
+  FPlanBiasTrunkW := NewTrunkW;
+  RebuildFloorplanPreserve;
+  Result := True;
 end;
 
 // Collects the power ports of one placed cell on AEdge (top/bottom) as TBiasPort
@@ -1743,6 +1592,7 @@ var
   MaxUa, TrunkLimit: Double;
   BiasLayer: string;
   Cells: TDictionary<Int64, TBiasCell>;
+  GateSeen: TDictionary<TGateInstance, Boolean>;
   B: TBiasCell;
   Rows: TArray<TBiasRow>;
   Currents: TArray<Double>;
@@ -1994,6 +1844,41 @@ begin
     begin
       SetLength(FBiasCells, Length(FBiasCells) + 1);
       FBiasCells[High(FBiasCells)] := B;
+    end;
+
+    // Record how many powered cells this allocation covered: the final audit
+    // re-counts them after validation (which may have inserted cells) and fails
+    // if the two disagree.
+    FBiasGatesSeen := 0;
+    GateSeen := TDictionary<TGateInstance, Boolean>.Create;
+    try
+      for a := 0 to High(FPlacedComponents) do
+        if (FPlacedComponents[a].Gate <> nil) and
+           (FPlacedComponents[a].Gate.Cell <> nil) and
+           (FPlacedComponents[a].Gate.Cell.PowerPorts.Count > 0) then
+          GateSeen.AddOrSetValue(FPlacedComponents[a].Gate, True);
+      // Clock-tree interiors only: the leaves ARE the clocked cells, already
+      // counted from FPlacedComponents - and they are different gate objects
+      // (the clock model is a clone), so identity dedupe would not merge them.
+      for a := 0 to High(FClockSubtree) do
+        for b2 := 0 to High(FClockSubtree[a]) do
+          if (not FClockSubtree[a][b2].IsLeaf) and
+             (FClockSubtree[a][b2].Gate <> nil) and
+             (FClockSubtree[a][b2].Gate.Cell <> nil) and
+             (FClockSubtree[a][b2].Gate.Cell.PowerPorts.Count > 0) then
+            GateSeen.AddOrSetValue(FClockSubtree[a][b2].Gate, True);
+      for a := 0 to High(FSpine) do
+        if (FSpine[a].Gate <> nil) and (FSpine[a].Gate.Cell <> nil) and
+           (FSpine[a].Gate.Cell.PowerPorts.Count > 0) then
+          GateSeen.AddOrSetValue(FSpine[a].Gate, True);
+      for a := 0 to High(FLengthBuffers) do
+        if (FLengthBuffers[a].Gate <> nil) and
+           (FLengthBuffers[a].Gate.Cell <> nil) and
+           (FLengthBuffers[a].Gate.Cell.PowerPorts.Count > 0) then
+          GateSeen.AddOrSetValue(FLengthBuffers[a].Gate, True);
+      FBiasGatesSeen := GateSeen.Count;
+    finally
+      GateSeen.Free;
     end;
   finally
     Cells.Free;
@@ -3156,6 +3041,7 @@ procedure TForm1.RunRoutingValidation;
 var
   Core, Limit, Len, Man, BestLen: Double;
   i, BestIdx: Integer;
+  OldModel: TBlifModel;
   Pt0, Pt1: TPoint;
   ClockInserted, LengthInserted: Boolean;
 begin
@@ -3184,23 +3070,21 @@ begin
   // input traces match the netlist being validated.
   if HasValidationBufferTraces then
   begin
-    // Re-route the PRISTINE model through the same build+optimize the router
-    // uses, so the input traces match the optimized placement (a missing
-    // OptimizePlacement here made validate run on the un-optimized circuit).
-    BuildFloorplan;
-    if FFloorplanErrorCount = 0 then
-      OptimizePlacement;
+    // Re-route the PRISTINE model on the SAME placement, so the input traces
+    // match what the routing page shows. Rebuilding + re-optimising here would
+    // discard the layout the user optimised and bias-expanded.
+    RebuildFloorplanPreserve;
     RunRouting;
   end;
   if FPlacementModel <> nil then
   begin
+    OldModel := FPlacementModel;
     FOwnedPlacementModel := FPlacementModel.Clone;
     FPlacementModel := FOwnedPlacementModel;
     // Rebuild the placement maps against the CLONE's gates so resolution and
-    // overlap checks see the mutated netlist (content-equal, layout still lines up).
-    BuildFloorplan;
-    if FFloorplanErrorCount = 0 then
-      OptimizePlacement;
+    // overlap checks see the mutated netlist; the rebuild re-keys the rows by
+    // gate index (against the pre-clone model), so the layout stays put.
+    RebuildFloorplanPreserve(OldModel);
   end;
   // A fresh validation session: the buffers inserted on a previous run stay in
   // the netlist (they are now part of the circuit) but are re-applied fresh.
@@ -3280,6 +3164,10 @@ begin
 
   MemoRouting.Lines.Add('All PTL lengths are within the limit.');
   if FFlowStage < fsValidated then FFlowStage := fsValidated;
+  // Requirement audit: printed below the validation output; the stage is only
+  // cleared as validated when every requirement holds.
+  if not RunFinalChecks then
+    FFlowStage := fsRouted;
   RepaintRoutingPage;
 end;
 

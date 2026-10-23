@@ -1,4 +1,4 @@
-﻿unit UConstants;
+unit UConstants;
 
 // Single source of truth for the numeric tuning constants that shape the
 // algorithms: maze-router costs, resonance-marker geometry, trace rendering,
@@ -32,6 +32,7 @@ const
   BorderHalf = 1.5;  // half-thickness (px) of the die boundary
   MinBlockPx = 3.0;  // below this on-screen block size, skip the cell grid
   MaxGridBlocks = 4096; // die grid cap (visualisation guard)
+  MaxDieGrowthFactor = 4.0; // bias expansion may widen the die to this multiple
 
 implementation
 

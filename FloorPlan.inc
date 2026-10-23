@@ -116,7 +116,8 @@ begin
   if Util <= 0 then
     Util := 60;
 
-  DieWBlocks := Round(DieW / Core);
+  // The configured width plus any run-time bias growth (never written back).
+  DieWBlocks := Round(DieW / Core) + FPlanDieWExtra;
   DieHBlocks := Round(DieH / Core);
   RowHBlocks := Round(RowH / Core);
   if RowHBlocks < 1 then
@@ -170,16 +171,13 @@ begin
         RowWidths[L] := 1;
     end;
 
-    // calc2 needs a usable clock network (model *and* a row per level). It can be
-    // left half-built by an earlier BuildClockModel - FClockModel set but
-    // FClockNet nil - and then every level silently loses its subtree width and
-    // the rows come out too narrow on the first build. Rebuild it here, where the
-    // levels to check are known.
+    // calc2 needs a usable clock network. It can be left half-built by an earlier
+    // BuildClockModel - FClockModel set but FClockNet nil - and then every level
+    // silently loses its subtree width and the rows come out too narrow on the
+    // first build. Only that case (or no model at all) triggers a rebuild:
+    // rebuilding on a weaker condition would discard the clock model on later
+    // builds, which invalidates the placements held against its gate objects.
     NeedsBuild := (FClockModel = nil) or (FClockNet = nil);
-    if not NeedsBuild then
-      for L := 0 to NumLayers - 1 do
-        if FClockNet.Rows.IndexOf(Levels[L]) < 0 then
-          NeedsBuild := True;
     if NeedsBuild then
       BuildClockModel;
 
@@ -643,7 +641,11 @@ begin
 
   BuildClockSubtreePlacements;
   BuildSpinePlacement;
-  ValidateFloorplanLayout;
+  // RebuildFloorplanPreserve suppresses this: the layout BuildFloorplan produces
+  // is a plain sequential repack (clock nodes re-balanced from their children),
+  // so checking it reports overlaps that its X restore immediately undoes.
+  if not FSuppressLayoutCheck then
+    ValidateFloorplanLayout;
   UpdateManhattanDiagnostic;
   RepaintFloorplanPage;
 end;
@@ -1313,6 +1315,7 @@ var
   BlockPx, WorldX0, WorldX1, WorldY0, WorldY1: Single;
   I0, I1, J0, J1: Integer;
   BX0, BX1, BY0, BY1, RunStart, RowIdx: Integer;
+  PadPx, PadPy: Integer;
   ClkL, ClkIdx, ClkChild, Ci: Integer;
   ClkNode: TPlacedClockNode;
   SpineComp: TSpineComponent;
@@ -1381,7 +1384,7 @@ begin
     end;
 
     Core := FDesignConfig.CoreUm;
-    DieW := FDesignConfig.DieWUm;
+    DieW := EffectiveDieWUm;
     DieH := FDesignConfig.DieHUm;
 
     Cols := Round(DieW / Core);
@@ -1534,6 +1537,32 @@ begin
               WY((FSpine[i].Y + FSpine[i].H) * Core)),
               FSpine[i].Gate.CellName, False, 1.0, [],
               TTextAlign.Center, TTextAlign.Center);
+      end;
+
+      // Immobile I/O anchor pads (dark) with their port names. During a drag the
+      // dragged pad follows the mouse and its set shifts to the preview slots.
+      for i := 0 to High(FPads) do
+      begin
+        PadPx := PadDisplayX(i);
+        PadPy := FPads[i].Y;
+        if (PadPx + 1 <= BX0) or (PadPx >= BX1) or
+           (PadPy + 1 <= BY0) or (PadPy >= BY1) then
+          Continue;
+        Canvas.Fill.Color := PalPads;
+        Canvas.FillRect(TRectF.Create(WX(PadPx * Core), WY(PadPy * Core),
+          WX((PadPx + 1) * Core), WY((PadPy + 1) * Core)), 0, 0, [], 1.0);
+        Canvas.Fill.Color := TAlphaColorRec.Black;
+        // Input labels sit above the block, output labels below it.
+        if FPads[i].IsInput then
+          Canvas.FillText(TRectF.Create(
+            WX(PadPx * Core) + 2, WY(PadPy * Core) - 16,
+            WX(PadPx * Core) + 130, WY(PadPy * Core) - 2),
+            FPads[i].NetName, False, 1.0, [], TTextAlign.Leading, TTextAlign.Center)
+        else
+          Canvas.FillText(TRectF.Create(
+            WX(PadPx * Core) + 2, WY((PadPy + 1) * Core) + 2,
+            WX(PadPx * Core) + 130, WY((PadPy + 1) * Core) + 16),
+            FPads[i].NetName, False, 1.0, [], TTextAlign.Leading, TTextAlign.Center);
       end;
 
     end;

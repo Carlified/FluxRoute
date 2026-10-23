@@ -4,13 +4,15 @@ interface
 
 uses
   System.SysUtils, System.Types, System.UITypes, System.Classes, System.Variants,
+  System.Diagnostics,
   FMX.Types, FMX.Controls, FMX.Forms, FMX.Graphics, FMX.Dialogs, FMX.StdCtrls,
   FMX.Controls.Presentation, FMX.ListBox, FMX.Memo, FMX.Layouts, FMX.TabControl,
   FMX.Objects, FMX.Edit,
   System.IOUtils, System.JSON, System.Math, System.Math.Vectors,
   System.Generics.Collections, System.StrUtils,
   UGeometry, UPhysics, UColors, UNetNaming, URoutingLegend,
-  PlacementTypes, UDesignConfig, UConstants, ExportModel, ExportLibrary, ExportGDS,
+  PlacementTypes, UDesignConfig, UConstants,
+  ExportModel, ExportLibrary, ExportGDS,
   ExportCIR, ClockValidate,
   UPython,
   LefLibrary,
@@ -144,7 +146,6 @@ type
     SplitterErrors: TSplitter;
     ButtonRunRouting: TButton;
     MemoRouting: TMemo;
-    ButtonValidateRouting: TButton;
     SplitterRouting: TSplitter;
     PaintBox4: TPaintBox;
     ButtonBack: TButton;
@@ -157,6 +158,7 @@ type
     CheckExportGds: TCheckBox;
     CheckExportDef: TCheckBox;
     CheckExportCir: TCheckBox;
+    CheckExportMetrics: TCheckBox;
     ButtonPreflight: TButton;
     ButtonExport: TButton;
     ButtonHelp: TButton;
@@ -177,6 +179,7 @@ type
     procedure ListBoxBuffersDblClick(Sender: TObject);
     procedure ListBoxSelectedDblClick(Sender: TObject);
     procedure TabControl1Change(Sender: TObject);
+  procedure TabControl1Changing(Sender: TObject; var AllowChange: Boolean);
     procedure TrackBar1Change(Sender: TObject);
     procedure ButtonBackClick(Sender: TObject);
     procedure ButtonNextClick(Sender: TObject);
@@ -195,7 +198,6 @@ procedure ButtonOptimizeClick(Sender: TObject);
     procedure CheckBoxToggleChange(Sender: TObject);
   procedure CheckBoxSeedBuffersChange(Sender: TObject);
     procedure ButtonRunRoutingClick(Sender: TObject);
-    procedure ButtonValidateRoutingClick(Sender: TObject);
     procedure ButtonBrowseLibClick(Sender: TObject);
     procedure ButtonPreflightClick(Sender: TObject);
     procedure ButtonExportClick(Sender: TObject);
@@ -217,6 +219,16 @@ procedure ButtonOptimizeClick(Sender: TObject);
     FBufferCandidates: TList<TCell>;
     FPipelineRows: TArray<TList<TGateInstance>>;
     FPipelineModel: TBlifModel;
+    // Cached pipeline-page layout: rebuilt only when the model changes, so
+    // panning/zooming never re-walks the circuit.
+    FPipeRowsModel: TBlifModel;
+    FPipeGridPos: TDictionary<TGateInstance, TPoint>; // tree position per gate
+    FPipeInputCol: TDictionary<string, Integer>;      // level-0 column per input
+    FPipeOutGrid: TDictionary<string, TPoint>;        // (column, level) per output
+    FPipeLevelDepth: TArray<Integer>;                 // rows used per clock level
+    FPipeLevelYOff: TArray<Integer>;                  // first-row offset per level
+    FPipeHasGateRow: TArray<Boolean>;                 // level holds clocked gates
+    FPipeArea, FPipeWorstPath: Double;
     FSliderPos: Integer;
     FSliderUpdating: Boolean;
     FSliderTimer: TTimer;
@@ -283,6 +295,10 @@ procedure ButtonOptimizeClick(Sender: TObject);
     FPlacementErrorCount: Integer;
     FFloorplanErrorCount: Integer;
   FBiasExpansionFailed: Boolean;                  // bias lines do not fit the die
+  FRouteFailedLinks: Integer;                     // links the router could not route
+  FBiasGatesSeen: Integer;                        // powered cells allotted bias
+  FClockLevelSkew: TArray<Double>;                // per clock level, max-min arrival
+  FRouteRuntimeMs: Int64;                         // wall-clock of the routing stage
     FSwitchingTab: Boolean;
     FFloorplan: TArray<TFloorplanCell>;
     FFloorplanLayer: TArray<SmallInt>; // clock level per cell, -1 = none
@@ -332,11 +348,13 @@ procedure ButtonOptimizeClick(Sender: TObject);
     FBiasCells: TArray<TBiasCell>;
     FPlanMaxRowW: Integer;              // row-width override for the nudge (0=auto)
     FPlanBiasTrunkW: Integer;           // far-left bias trunk width in columns (>=1)
+    FPlanDieWExtra: Integer;            // run-time die widening (bias growth), in blocks
     FPlanTrunkW: Integer;               // snapshot: clock trunk width (RowHBlocks)
     FPlanLane0W: Integer;               // snapshot: left feed bias lane width
     FPlanLane1W: Integer;               // snapshot: far-right bias lane width
     FPlanLastTotalH: Integer;           // snapshot: last TotalH (bias-fit checks)
     FOrderChanged: Boolean;
+    FSuppressLayoutCheck: Boolean; // skip the intermediate layout validation
     FManhattanItem: TListBoxItem; // live 'total wire length' diagnostic line
     // ---- Ownership ----
     // The form owns FLib, FModel, FPipelineModel, FClockModel/FClockBufferedModel
@@ -402,6 +420,9 @@ procedure ButtonOptimizeClick(Sender: TObject);
     procedure RepaintFloorplanPage;
     procedure AddFloorplanError(const Text: string);
     procedure ReportBiasError(const Text: string);
+    function RunFinalChecks: Boolean;
+    function BuildMetricsJson: string;
+    procedure RunMetricsExport(const OutDir, Stem: string);
     function TotalManhattanDistance: Double;
     procedure UpdateManhattanDiagnostic;
     function GetPad(const ANetName: string; var P: TPoint): Boolean;
@@ -410,6 +431,7 @@ procedure ButtonOptimizeClick(Sender: TObject);
     function PreviewPadOrder(const Ord: TArray<Integer>;
       DragIdx, Slot: Integer): TArray<Integer>;
     procedure ReapplyPadOrder;
+    function PadDisplayX(Idx: Integer): Integer; // pad X while dragging
     procedure BuildClockSubtreePlacements;
     procedure BuildSpinePlacement;
     procedure ValidatePlacement;
@@ -485,11 +507,16 @@ procedure AppendScanTally(const D: TExportDesign;
     procedure OrderLayer(L: Integer; CrossOnly: Boolean);
     procedure ResolvePlacementOverlaps;
     procedure OptimizePlacement;
-    procedure RebuildFloorplanPreserve; // rebuild bias geometry, keep placement
+    // Rebuilds the geometry (bands, bias rows/lanes, die) and puts the optimized
+    // placement back. OldModel is the model the current placement was built
+    // from, when FPlacementModel has already been swapped for a clone.
+    procedure RebuildFloorplanPreserve(OldModel: TBlifModel = nil);
     function BandIndexOfY(Y: Integer): Integer; // band containing grid row Y
-    // Bias-line current-capacity helpers. Each returns True on success; on
-    // failure it reports the reason via AddFloorplanError and leaves the layout
-    // unchanged.
+    // Bias-line current-capacity helpers. Each returns True on success; a
+    // horizontal shortage is absorbed by widening the die (GrowDieWidth); any
+    // remaining failure is reported via AddFloorplanError, layout unchanged.
+    function GrowDieWidth(AddCols: Integer): Boolean;
+    function EffectiveDieWUm: Double; // die width in use (config + growth)
     function IncreaseBiasRowHeight(Band, Which, ByRows: Integer): Boolean;
     function IncreaseClockTrunkColumn(ColIdx, ByCols: Integer): Boolean;
     function IncreaseBiasTrunkColumn(ByCols: Integer): Boolean;
@@ -552,6 +579,11 @@ begin
   // Growth state from the previous project must not narrow this one's rows:
   // BuildFloorplan only ever raises these, never re-derives them from config.
   FPlanBiasTrunkW := 1;
+  FPlanDieWExtra := 0; // run-time growth never survives a reset
+  FRouteFailedLinks := 0;
+  FBiasGatesSeen := 0;
+  FClockLevelSkew := nil;
+  FRouteRuntimeMs := 0;
   ScrapValidationModel; // validation never survives a workspace reset
   FPlacementModel := nil;
   FRouteTraces := nil;   // the routed state dies with the circuit
@@ -771,8 +803,10 @@ begin
     ButtonExpandBias.Enabled := False;
   // Routing page: validation only after routing; re-routing is locked until the
   // validation loop completes, so a new state is never routed over an unverified one.
-  ButtonRunRouting.Enabled := (FFlowStage < fsRouted) or (FFlowStage >= fsValidated);
-  ButtonValidateRouting.Enabled := (FFlowStage >= fsRouted) and (FFlowStage < fsValidated);
+  // Export stays unreachable until the circuit is validated, so gate Next here
+  // rather than bouncing back after the click.
+  if TabControl1.TabIndex = TabRouting then
+    ButtonNext.Enabled := ButtonNext.Enabled and (FFlowStage >= fsValidated);
   UpdateNavButtons;
 end;
 
@@ -877,6 +911,7 @@ begin
   FPlanZoom := 1.0;
   FRouteZoom := 1.0;
   TabControl1.OnChange := TabControl1Change;
+  TabControl1.OnChanging := TabControl1Changing;
   FSliderPos := 0;
   FSliderTimer.Interval := 200;
   FSliderTimer.Enabled := False;
@@ -1402,6 +1437,8 @@ end;
 
 {$I Routing.inc}
 {$I ClockValidate.inc}
+{$I FinalChecks.inc}
+{$I ExportMetrics.inc}
 
 
 procedure TForm1.FormMouseWheel(Sender: TObject; Shift: TShiftState;
@@ -1465,7 +1502,7 @@ begin
     if (FDesignConfig.CoreUm > 0) and (FDesignConfig.DieWUm > 0) and
        (FDesignConfig.DieHUm > 0) and (PaintBox3.Height > 20) then
     begin
-      MinZ := (Min(PaintBox3.Width, PaintBox3.Height) - 20) / Max(FDesignConfig.DieWUm, FDesignConfig.DieHUm);
+      MinZ := (Min(PaintBox3.Width, PaintBox3.Height) - 20) / Max(EffectiveDieWUm, FDesignConfig.DieHUm);
       MaxZ := (Max(PaintBox3.Width, PaintBox3.Height) - 20) / FDesignConfig.CoreUm;
       if MinZ < 0.01 then
         MinZ := 0.01;
@@ -1486,7 +1523,7 @@ begin
     if (FDesignConfig.CoreUm > 0) and (FDesignConfig.DieWUm > 0) and
        (FDesignConfig.DieHUm > 0) and (PaintBox4.Height > 20) then
     begin
-      MinZ := (Min(PaintBox4.Width, PaintBox4.Height) - 20) / Max(FDesignConfig.DieWUm, FDesignConfig.DieHUm);
+      MinZ := (Min(PaintBox4.Width, PaintBox4.Height) - 20) / Max(EffectiveDieWUm, FDesignConfig.DieHUm);
       MaxZ := (Max(PaintBox4.Width, PaintBox4.Height) - 20) / FDesignConfig.CoreUm;
       if MinZ < 0.01 then
         MinZ := 0.01;
@@ -1505,6 +1542,18 @@ end;
 {$I ClockPage.inc}
 {$I PageHelp.inc}
 
+
+// Routing (and the validation that runs with it) owns the workspace while it
+// runs: leaving would scrap the traces it is building.
+procedure TForm1.TabControl1Changing(Sender: TObject; var AllowChange: Boolean);
+begin
+  if FRoutingBusy then
+  begin
+    AllowChange := False;
+    MemoRouting.Lines.Add('[routing] still running - wait for it to finish before ' +
+      'leaving this page.');
+  end;
+end;
 
 procedure TForm1.TabControl1Change(Sender: TObject);
 begin
@@ -1552,7 +1601,13 @@ begin
       ValidatePlacement;
   end;
   if TabControl1.TabIndex = TabFloorplan then
-    BuildFloorplan;
+  begin
+    // Opening the tab must not reshuffle an optimised/expanded placement.
+    if FFlowStage >= fsPlacement then
+      RebuildFloorplanPreserve
+    else
+      BuildFloorplan;
+  end;
   if TabControl1.TabIndex = TabRouting then
   begin
     FRoutePanX := 0;
@@ -1700,6 +1755,8 @@ end;
 
 procedure TForm1.ButtonBackClick(Sender: TObject);
 begin
+  if FRoutingBusy then
+    Exit;
   if TabControl1.TabIndex > 0 then
     TabControl1.TabIndex := TabControl1.TabIndex - 1;
   UpdateUI;
@@ -1707,6 +1764,8 @@ end;
 
 procedure TForm1.ButtonNextClick(Sender: TObject);
 begin
+  if FRoutingBusy then
+    Exit;
   // Leaving the BLIF tab runs the splitter insertion automatically.
   if (TabControl1.TabIndex = TabNetlist) and (FFlowStage < fsSplitters) then
     RunSplitterInsertion;
@@ -1716,6 +1775,8 @@ begin
 end;
 
 procedure TForm1.ButtonRunRoutingClick(Sender: TObject);
+var
+  SW: TStopwatch;
 begin
   if FRoutingBusy then
     Exit;
@@ -1731,36 +1792,38 @@ begin
     // Routing always starts from the pristine model: a committed validation
     // clone (with its buffers) is never what the router works on.
     ScrapValidationModel;
-    // Start from a clean floorplan so every run routes the same placement.
+    // Validation-inserted extra rows go away, but never the placement itself:
+    // once the user has optimised (and bias-expanded) the rows, routing rebuilds
+    // the geometry only. Re-packing here would discard the layout they approved
+    // and re-optimise from the sequential starting positions.
     FLogicRowExtra := nil;
     FClockRowExtra := nil;
-    BuildFloorplan;
-    if FFloorplanErrorCount = 0 then
-      OptimizePlacement;
+    if FFlowStage >= fsPlacement then
+      RebuildFloorplanPreserve
+    else
+    begin
+      BuildFloorplan;
+      if FFloorplanErrorCount = 0 then
+        OptimizePlacement;
+    end;
     // Maze route: all nets on the first layer, then the next layer for the
     // failures, ... then a via pass. Reports its own per-layer progress.
+    SW := TStopwatch.StartNew;
     RunRouting;
     // Bias lines: always routable programmatically, run after the main circuit
     // routing so the floorplan is settled. Each partition group becomes one track.
     RouteBiasLines;
+    // Routing and validation are one action now: validate immediately when the
+    // route completed cleanly (RunRouting only advances the stage on success).
+    if FFlowStage >= fsRouted then
+      RunRoutingValidation;
+    // The reported route time covers the whole action, validation included.
+    FRouteRuntimeMs := SW.ElapsedMilliseconds;
     MemoRouting.Lines.Add(
       'Bias lines routed from the partition groups.');
     // Validation-inserted buffers (ClockLevel -1, so BuildFloorplan skips them)
     // must be re-applied to the layout after the rebuild.
     ReapplyValidationBuffers;
-    UpdateUI;
-  finally
-    FRoutingBusy := False;
-  end;
-end;
-
-procedure TForm1.ButtonValidateRoutingClick(Sender: TObject);
-begin
-  if FRoutingBusy then
-    Exit;
-  FRoutingBusy := True;
-  try
-    RunRoutingValidation;
     UpdateUI;
   finally
     FRoutingBusy := False;
@@ -1868,7 +1931,7 @@ var
   Lib: TExportLibrary;
   BlockRoot, ManifestPath, KindsText: string;
   Pitch: Double;
-  NeedGds, NeedLef, NeedCir: Boolean;
+  NeedGds, NeedCir: Boolean;
   i: Integer;
   MissingTally: Integer;
   Missing, Errors: TStringList;
@@ -1881,7 +1944,6 @@ begin
   // Per-format preflight: only the export types the user selected are required,
   // so missing files for the other types never block the chosen export.
   NeedGds := CheckExportGds.IsChecked;
-  NeedLef := CheckExportDef.IsChecked;
   NeedCir := CheckExportCir.IsChecked;
   try
     CollectDesignKinds(D, Kinds);
@@ -1913,14 +1975,14 @@ begin
           Inc(MissingTally);
         end
         else if not CheckBlockTriple(BlockRoot, Lib.Blocks[k], Errors,
-          NeedGds, NeedLef, NeedCir and KindNeedsCir(k)) then
+          NeedGds, NeedCir and KindNeedsCir(k)) then
           Missing.Add(k + ' (triple FAIL)');
       end;
       FExportMissingKinds := Missing.Count;
       Lines.Add(Format('  library %s: %d kinds loaded; %d needed, %d missing/failed',
         [ManifestPath, Lib.BlockCount, Kinds.Count, Missing.Count]));
-      Lines.Add(Format('  checking: GDS=%s DEF/LEF=%s CIR=%s',
-        [BoolToStr(NeedGds, True), BoolToStr(NeedLef, True), BoolToStr(NeedCir, True)]));
+      Lines.Add(Format('  checking: GDS=%s CIR=%s',
+        [BoolToStr(NeedGds, True), BoolToStr(NeedCir, True)]));
       for i := 0 to Missing.Count - 1 do
         Lines.Add('    missing ' + Missing[i]);
       if Missing.Count > 0 then
@@ -2084,7 +2146,7 @@ begin
   AppendClockSummary(MemoExportStatus.Lines);
   ButtonExport.Enabled := FFlowStage >= fsValidated;
   if FFlowStage < fsValidated then
-    MemoExportStatus.Lines.Add('~ Run Validate Routing first - Export is locked until then.');
+    MemoExportStatus.Lines.Add('~ Run Routing first - Export is locked until then.');
 end;
 
 procedure TForm1.ButtonBrowseLibClick(Sender: TObject);
@@ -2110,7 +2172,7 @@ begin
   RefreshExportPreflight;
   if FFlowStage < fsValidated then
   begin
-    MemoExportLog.Lines.Add('Export locked: run Validate Routing first.');
+    MemoExportLog.Lines.Add('Export locked: run Routing first.');
     Exit;
   end;
   if FExportMissingKinds > 0 then
@@ -2125,8 +2187,11 @@ begin
     RunGdsExport(EditExportDir.Text, EditExportStem.Text);
   if CheckExportCir.IsChecked then
     RunCirExport(EditExportDir.Text, EditExportStem.Text);
-  if (not CheckExportGds.IsChecked) and (not CheckExportCir.IsChecked) then
-    MemoExportLog.Lines.Add('No output format selected - tick .gds/.def/.cir first.');
+  if CheckExportMetrics.IsChecked then
+    RunMetricsExport(EditExportDir.Text, EditExportStem.Text);
+  if (not CheckExportGds.IsChecked) and (not CheckExportCir.IsChecked) and
+     (not CheckExportMetrics.IsChecked) then
+    MemoExportLog.Lines.Add('No output format selected - tick .gds/.cir/.stats first.');
 end;
 
 // Phase 4 (GDS): builds the write_die_gds.py placement recipe from the routed
@@ -2186,7 +2251,7 @@ begin
     Core := FDesignConfig.CoreUm;
     if Core <= 0 then
       Core := FPlanCore;
-    DieWUm := FDesignConfig.DieWUm;
+    DieWUm := EffectiveDieWUm;
     DieHUm := FDesignConfig.DieHUm;
     if (DieWUm <= 0) or (DieHUm <= 0) then
     begin
@@ -2259,13 +2324,25 @@ begin
       Instances[n] := Ins;
     end;
     // Every line endpoint (deg-1 cell) gets a cap block whose single stub points
-    // at the wire, rotated to face its neighbour.
+    // at the wire, rotated to face its neighbour. The bias trunk is the exception:
+    // it ends in the top row heading straight up out of the die, and a cap would
+    // close the line at the cell edge. Emit a straight bias tile there (same
+    // orientation as a vertical bias run) so the metal runs to the boundary.
     for i := 0 to High(D.Terminals) do
     begin
       Tm := D.Terminals[i];
-      Ins := GdsSingle(
-        KindDefaultName(KindCap(Tm.Family, Tm.Layer, Tm.Taps)), Tm.X * Core, Tm.Y * Core);
-      Ins.RotDeg := 90 * NodeRotation(Tm.Dirs);
+      if (Tm.Family = xfBias) and (Tm.Y = 0) then
+      begin
+        Ins := GdsSingle(KindDefaultName(KindRun(xfBias, Tm.Layer, '')),
+          Tm.X * Core, Tm.Y * Core);
+        Ins.RotDeg := 90;
+      end
+      else
+      begin
+        Ins := GdsSingle(
+          KindDefaultName(KindCap(Tm.Family, Tm.Layer, Tm.Taps)), Tm.X * Core, Tm.Y * Core);
+        Ins.RotDeg := 90 * NodeRotation(Tm.Dirs);
+      end;
       n := Length(Instances);
       SetLength(Instances, n + 1);
       Instances[n] := Ins;
@@ -2455,6 +2532,19 @@ begin
             LayerOcc.Add(Key, Lst);
           end;
           Lst.AddOrSetValue(D.Splits[i].Layer, True);
+        end;
+        // Terminators carry metal too: the bias trunk's top end is a straight bias
+        // tile and a cap is a line endpoint. Every terminal block counts as
+        // occupied on its own layer, otherwise the per-layer fill is laid over it.
+        for i := 0 to High(D.Terminals) do
+        begin
+          Key := Int64(D.Terminals[i].Y) * DieWb + D.Terminals[i].X;
+          if not LayerOcc.TryGetValue(Key, Lst) then
+          begin
+            Lst := TDictionary<string, Boolean>.Create;
+            LayerOcc.Add(Key, Lst);
+          end;
+          Lst.AddOrSetValue(D.Terminals[i].Layer, True);
         end;
 
         // Emit track tiles (and fills) as horizontal runs, row by row.

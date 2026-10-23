@@ -134,7 +134,8 @@ type
   // geometry rebuild must not reshuffle the cells horizontally).
   TPlaceSnapshot = record
     Gate: TGateInstance;
-    X: Integer; // X offset from the row's left edge at snapshot time
+    X: Integer;    // X offset from the row's left edge at snapshot time
+    Chunk: Integer; // wrapped-row index within its layer (which band it is in)
   end;
 
 const

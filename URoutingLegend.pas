@@ -1,4 +1,4 @@
-﻿unit URoutingLegend;
+unit URoutingLegend;
 
 // The interactive routing-page layer legend (top-right of the routing canvas):
 // one row per routing layer (colour box + name; box filled = visible, outlined =
@@ -11,7 +11,7 @@
 interface
 
 uses
-  System.Classes, FMX.Graphics;
+  System.Classes, System.UITypes, FMX.Graphics;
 
 type
   // What a click on the legend hit.
@@ -28,10 +28,28 @@ procedure DrawLegend(Canvas: TCanvas; ACanvasWidth: Single;
 function HitTestLegend(X, Y, ACanvasWidth: Single; ALayerCount: Integer;
   out ALayerIndex: Integer): TLegendHit;
 
+type
+  // Informational legend entry (not clickable): swatch colour, label, and an
+  // indent level for sub-items of the row above.
+  TLegendInfoItem = record
+    Colour: TAlphaColor;
+    Text: string;
+    Indent: Integer;
+  end;
+
+function LegendItem(AColour: TAlphaColor; const AText: string;
+  AIndent: Integer = 0): TLegendInfoItem;
+
+// Draws a descriptive legend panel in the canvas' top-right corner: a heading
+// then one swatch+label row per item. Purely informational - DrawLegend above is
+// the interactive (routing layer) one.
+procedure DrawInfoLegend(Canvas: TCanvas; ACanvasWidth: Single;
+  const AItems: TArray<TLegendInfoItem>; const ATitle: string = 'Legend');
+
 implementation
 
 uses
-  System.UITypes, System.Types, FMX.Types,
+  System.Types, FMX.Types,
   UColors;
 
 const
@@ -40,6 +58,59 @@ const
   BoxSize = 12;        // colour-box side length
   TextX = 26;          // text left offset within a row
   PanelW = 70;         // legend panel width (names are short)
+
+function LegendItem(AColour: TAlphaColor; const AText: string;
+  AIndent: Integer): TLegendInfoItem;
+begin
+  Result.Colour := AColour;
+  Result.Text := AText;
+  Result.Indent := AIndent;
+end;
+
+procedure DrawInfoLegend(Canvas: TCanvas; ACanvasWidth: Single;
+  const AItems: TArray<TLegendInfoItem>; const ATitle: string);
+const
+  Pad = 8;
+  InfoRowH = 16;
+  BoxSz = 10;
+  PanelW = 158;
+var
+  PanelX, PanelY, PanelH, BoxL, BoxT: Single;
+  i: Integer;
+begin
+  PanelH := Pad * 2 + InfoRowH * (Length(AItems) + 1);
+  PanelX := ACanvasWidth - PanelW - Pad;
+  PanelY := Pad;
+  Canvas.Fill.Color := PalPanelFrost;
+  Canvas.FillRect(TRectF.Create(PanelX, PanelY, PanelX + PanelW,
+    PanelY + PanelH), 0, 0, [], 1.0);
+  Canvas.Fill.Color := PalGreyDark;
+  Canvas.FillRect(TRectF.Create(PanelX, PanelY, PanelX + PanelW, PanelY + 1), 0, 0, [], 1.0);
+  Canvas.FillRect(TRectF.Create(PanelX, PanelY + PanelH - 1, PanelX + PanelW,
+    PanelY + PanelH), 0, 0, [], 1.0);
+  Canvas.FillRect(TRectF.Create(PanelX, PanelY, PanelX + 1, PanelY + PanelH), 0, 0, [], 1.0);
+  Canvas.FillRect(TRectF.Create(PanelX + PanelW - 1, PanelY, PanelX + PanelW,
+    PanelY + PanelH), 0, 0, [], 1.0);
+
+  Canvas.Font.Size := 10;
+  Canvas.Fill.Color := TAlphaColorRec.Black;
+  Canvas.FillText(TRectF.Create(PanelX + Pad, PanelY + Pad - 2,
+    PanelX + PanelW - Pad, PanelY + Pad + InfoRowH), ATitle, False, 1.0, [],
+    TTextAlign.Leading, TTextAlign.Center);
+
+  for i := 0 to High(AItems) do
+  begin
+    BoxL := PanelX + Pad + AItems[i].Indent * 12;
+    BoxT := PanelY + Pad + (i + 1) * InfoRowH + (InfoRowH - BoxSz) / 2;
+    Canvas.Fill.Color := AItems[i].Colour;
+    Canvas.FillRect(TRectF.Create(BoxL, BoxT, BoxL + BoxSz, BoxT + BoxSz),
+      0, 0, [], 1.0);
+    Canvas.Fill.Color := TAlphaColorRec.Black;
+    Canvas.FillText(TRectF.Create(BoxL + BoxSz + 6, BoxT - 3,
+      PanelX + PanelW - Pad, BoxT + 13), AItems[i].Text, False, 1.0, [],
+      TTextAlign.Leading, TTextAlign.Center);
+  end;
+end;
 
 procedure DrawLegend(Canvas: TCanvas; ACanvasWidth: Single;
   ALayers: TStrings; const AEnabled: TArray<Boolean>; ALengthColorOn: Boolean);

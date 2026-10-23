@@ -121,7 +121,9 @@ begin
         '- Die area: die width and height in um; the circuit must fit inside.' + sLineBreak +
         '- Utilisation: target fraction of each row filled by cells.' + sLineBreak +
         '- Bias current, bias layer, trunk current: how the bias supply is split ' +
-        'into tracks, on which metal layer, and the current in the main trunk.' + sLineBreak +
+        'into tracks, on which metal layer, and the current in the main trunk. ' +
+        'The trunk carries whole taps, so its current must be at least the bias ' +
+        'tap current.' + sLineBreak +
         '- Frequency: target clock frequency, used to budget interconnect delay.' + sLineBreak +
         '- PTL length, PTL delay: modelled passive transmission line length, and ' +
         'its delay per um.' + sLineBreak +
@@ -135,7 +137,11 @@ begin
         sLineBreak +
         '- Optimize Placement: re-pack the cells within their rows to shorten wiring.' + sLineBreak +
         '- Expand Bias Lines: grow the bias distribution to match the current ' +
-        'settings. This has to be run once before routing.' + sLineBreak +
+        'settings. This has to be run once before routing. When the bias trunk ' +
+        'or a clock lane needs more columns the die widens automatically for this ' +
+        'run (up to a fixed multiple of its configured width) while the configured ' +
+        'width is left untouched, so a reload reproduces the same layout. The die ' +
+        'is never made taller: vertical space has to come from the configuration.' + sLineBreak +
         sLineBreak +
         'The check boxes toggle the overlays: cell names, logic connections, ' +
         'clock connections, the floorplan grid and the cells themselves.';
@@ -144,12 +150,12 @@ begin
       Result :=
         'Route every net, then verify the result.' + sLineBreak +
         sLineBreak +
-        '- Run Routing: build the floorplan, route the signal nets layer by ' +
-        'layer, then route the bias lines. Nets that do not complete on one ' +
-        'layer are retried on the next, then with vias.' + sLineBreak +
-        '- Validate Routing: check trace length against the delay budget, and ' +
-        'clock arrival against data arrival. Violations are repaired by inserting ' +
-        'buffer cells, and the check repeats until it is clean.' + sLineBreak +
+        '- Route and Validate: build the floorplan, route the signal nets layer ' +
+        'by layer, route the bias lines, then validate. Nets that do not ' +
+        'complete on one layer are retried on the next, then with vias; ' +
+        'validation checks trace length against the delay budget and clock ' +
+        'arrival against data arrival, repairing violations by inserting buffer ' +
+        'cells until it is clean.' + sLineBreak +
         sLineBreak +
         'Routing stays locked once it has run until validation completes, so a ' +
         'routed circuit is always a verified one.';
@@ -160,10 +166,12 @@ begin
         sLineBreak +
         '- Library folder: the block decks used by the exported netlist. ' +
         'Defaults to ./blocklib.' + sLineBreak +
-        '- Output folder and stem: files are written as stem.gds, stem.def, ' +
-        'stem.cir and stem.tb.json.' + sLineBreak +
-        '- Export .gds: the layout. Export .def: the placed netlist. ' +
-        'Export .cir: the JoSIM deck.' + sLineBreak +
+        '- Output folder and name: the name is shared by every output file, so ' +
+        'naming it "netlist" writes netlist.gds, netlist.cir, netlist.tb.json ' +
+        'and netlist.metrics.json.' + sLineBreak +
+        '- Export .gds: the layout. Export .cir: the JoSIM deck. ' +
+        'Export .stats: design statistics (junction count, area and packing, ' +
+        'wirelength, timing, routing runtime). (.def is not implemented yet.)' + sLineBreak +
         '- Recheck: re-run the preflight, which checks that every placed cell has ' +
         'a library source and a block deck.' + sLineBreak +
         '- Export: write the selected files.' + sLineBreak +

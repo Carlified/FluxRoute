@@ -113,6 +113,8 @@ def derive_launch(design, cfg, period):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default=os.path.join(HERE, "config.json"))
+    ap.add_argument("--dir", help="circuit directory (overrides config outputDir)")
+    ap.add_argument("--stem", help="use <stem>.cir and <stem>.tb.json; write <stem>_tb.cir")
     ap.add_argument("--bits", help="comma-separated net=bits, e.g. a=101,b=110")
     ap.add_argument("--spec", help="JSON spec file {net: bits}")
     ap.add_argument("--out", help="output .cir (default: config.tbOut)")
@@ -137,6 +139,14 @@ def main():
     if args.decode_start_periods is not None:
         cfg = dict(cfg)
         cfg["decodeStartPeriods"] = args.decode_start_periods
+    if args.dir:
+        cfg = dict(cfg)
+        cfg["outputDir"] = args.dir
+    if args.stem:
+        cfg = dict(cfg)
+        cfg["cir"] = args.stem + ".cir"
+        cfg["designConfig"] = args.stem + ".tb.json"
+        cfg["tbOut"] = args.stem + "_tb.cir"
     out_dir = os.path.join(HERE, cfg["outputDir"])
     design = load_json(os.path.join(out_dir, cfg["designConfig"]))
     rsfq = cfg["rsfqLib"]

@@ -513,6 +513,14 @@ begin
       WY(ClkY) + WLen(Sq) / 2, WX(TrunkX) + WLen(40),
       WY(ClkY) + WLen(Sq) / 2 + WLen(16)), ClkLbl, False, 1.0, [],
       TTextAlign.Center, TTextAlign.Center);
+
+    // Colour key for the clock tree.
+    DrawInfoLegend(Canvas, PaintBox2.Width, [
+      LegendItem(PalBlueDark, 'Clocked cell'),
+      LegendItem(PalRedDeep, 'Flip-flop'),
+      LegendItem(PalGreen, 'Splitter'),
+      LegendItem(PalBlueLight, 'Tree buffer'),
+      LegendItem(PalYellow, 'Clock input')]);
   finally
     Roots.Free;
     Visited.Free;

@@ -222,7 +222,7 @@ end;
 
 procedure TForm1.ValidatePlacement;
 var
-  Core, RowH, CellH, DieW, DieH, Util, Bias, PTL: Double;
+  Core, RowH, CellH, DieW, DieH, Util, Bias, PTL, TrunkUa: Double;
   Cell: TCell;
   Used: Boolean;
   UsedNames: TDictionary<string, Boolean>;
@@ -238,6 +238,7 @@ begin
   EditDieW.StyledSettings := EditDieW.StyledSettings + [TStyledSetting.FontColor];
   EditDieH.StyledSettings := EditDieH.StyledSettings + [TStyledSetting.FontColor];
   EditUtilization.StyledSettings := EditUtilization.StyledSettings + [TStyledSetting.FontColor];
+  EditTrunkCurrent.StyledSettings := EditTrunkCurrent.StyledSettings + [TStyledSetting.FontColor];
 
   if not TryDimParse(EditCoreSize.Text, Core) or not TryDimParse(EditRowHeight.Text, RowH) then
   begin
@@ -297,6 +298,18 @@ begin
     AddPlacementMsg('Max bias current must be a valid number.', PalRed, True);
   if not TryDimParse(EditTrunkCurrent.Text, Bias) then
     AddPlacementMsg('Max trunk current must be a valid number.', PalRed, True);
+  // A trunk carries whole bias taps, so its limit can never be below the tap
+  // limit: a lower value could not carry even one branch.
+  TrunkUa := 0;
+  if TryDimParse(EditBiasCurrent.Text, Bias) and
+     TryDimParse(EditTrunkCurrent.Text, TrunkUa) and
+     (Bias > 0) and (TrunkUa > 0) and (TrunkUa < Bias) then
+  begin
+    EditTrunkCurrent.StyledSettings := EditTrunkCurrent.StyledSettings - [TStyledSetting.FontColor];
+    EditTrunkCurrent.TextSettings.FontColor := TAlphaColorRec.Red;
+    AddPlacementMsg(Format('Max trunk current must be at least the max bias current (trunk %s uA is below the tap current %s uA).',
+      [DimToStr(TrunkUa), DimToStr(Bias)]), PalRed, True);
+  end;
   if not TryDimParse(EditPTLLength.Text, PTL) then
     AddPlacementMsg('Max PTL length must be a valid number.', PalRed, True);
   if not TryDimParse(EditFreqGHz.Text, Bias) then

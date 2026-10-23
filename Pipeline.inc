@@ -1,6 +1,6 @@
-// Pipeline: row building, the pipeline painter, the pipeline model and the
-// mode/limit/slider UI. Included from MainWindow's implementation via
-// {$I Pipeline.inc}.
+// Pipeline: cached layout, the (culled, batched) pipeline painter, the pipeline
+// model and the mode/limit/slider UI. Included from MainWindow's implementation
+// via {$I Pipeline.inc}.
 procedure TForm1.FreePipelineRows;
 var
   i: Integer;
@@ -8,141 +8,45 @@ begin
   for i := 0 to High(FPipelineRows) do
     FPipelineRows[i].Free;
   FPipelineRows := nil;
+  FPipeGridPos.Free;
+  FPipeGridPos := nil;
+  FPipeInputCol.Free;
+  FPipeInputCol := nil;
+  FPipeOutGrid.Free;
+  FPipeOutGrid := nil;
+  FPipeLevelDepth := nil;
+  FPipeLevelYOff := nil;
+  FPipeHasGateRow := nil;
+  FPipeArea := 0;
+  FPipeWorstPath := 0;
+  FPipeRowsModel := nil;
 end;
 
+// Builds everything the pipeline page draws that does NOT depend on zoom or pan:
+// the rows per clock level, each gate's tree position, the input columns and
+// output grid positions, the per-level extents and the aggregate area / worst
+// path. The painter re-projects this, so panning and the slider never rebuild
+// or re-walk the whole circuit.
 procedure TForm1.BuildPipelineRows(const AModel: TBlifModel);
 var
   Gate: TGateInstance;
-  i, MaxLevel: Integer;
-begin
-  FreePipelineRows;
-  if (AModel = nil) or (AModel.Gates.Count = 0) then
-    Exit;
-  MaxLevel := -1;
-  for Gate in AModel.Gates do
-    if (Gate.ClockLevel >= 0) and (Gate.ClockLevel > MaxLevel) then
-      MaxLevel := Gate.ClockLevel;
-  if MaxLevel < 0 then
-    Exit;
-  SetLength(FPipelineRows, MaxLevel + 1);
-  for i := 0 to MaxLevel do
-    FPipelineRows[i] := TList<TGateInstance>.Create;
-  for Gate in AModel.Gates do
-    if Gate.ClockLevel >= 0 then
-      FPipelineRows[Gate.ClockLevel].Add(Gate);
-end;
-
-procedure TForm1.PaintPipeline(Sender: TObject; Canvas: TCanvas);
-var
-  R, NoteR: TRectF;
   i, j, k: Integer;
-  ClipState: TCanvasSaveState;
-  Gate, Src: TGateInstance;
-  MaxRows, MaxOutputLevel: Integer;
-  Square, HGap, VGap, Left, X, Y: Single;
-  Color: TAlphaColor;
-  ActiveModel: TBlifModel;
-  Note: string;
-  GateCenters: TDictionary<TGateInstance, TPointF>;
-  InputPositions: TDictionary<string, TPointF>;
-  OutputPositions: TDictionary<string, TPointF>;
-  SrcPt, DstPt: TPointF;
-  Conn: TPinConnection;
-  Net: TNet;
-  NC: TNetConnection;
-  InputNets: TStringList;
-  OutputNets: TStringList;
-  OutputLevels: TList<Integer>;
-  OutColCount: TDictionary<Integer, Integer>;
+  MaxLevel, MaxRows, MaxOutputLevel: Integer;
+  MaxCol, GridCol, MaxDepth, YOff, OutLevel: Integer;
   OutName: string;
-  OutLevel: Integer;
-  LevelDelay, MaxLevelDelay, TotalArea, GateArea: Double;
-  LevelIdx, TotalLevels: Integer;
-  StatsText: string;
-  StatsR: TRectF;
-  DelayMemo: TDictionary<TGateInstance, Double>;
-  GateGridPos: TDictionary<TGateInstance, TPoint>;
-  InputCol: TDictionary<string, Integer>;
-  LevelMaxDepth, LevelYOffset: TList<Integer>;
-  HasGateRow: TArray<Boolean>;
+  InputNets, OutputNets: TStringList;
+  OutputLevels: TList<Integer>;
+  LevelMaxDepth, LevelCols: TList<Integer>;
   Placed: TDictionary<TGateInstance, Boolean>;
-  LevelCols: TList<Integer>;
-  MaxDepth, MaxCol, GridCol, GridRow, YOff: Integer;
-  HasParent: Boolean;
+  OutColCount: TDictionary<Integer, Integer>;
   GatePair: TPair<TGateInstance, TPoint>;
-
-  function DelayToOutput(G: TGateInstance): Double;
-  var
-    MaxIn, Dly: Double;
-    m: Integer;
-    C: TPinConnection;
-    N: TNet;
-    NC: TNetConnection;
-  begin
-    if DelayMemo.TryGetValue(G, Result) then
-      Exit;
-    if CellHasClock(G.Cell) then
-    begin
-      // Starting clocked component: its clock-to-output delay is
-      // counted. It ends the path, so we do not recurse into it.
-      Dly := CellDelayPs(G.Cell);
-      if Dly < 0 then Dly := 0;
-      Result := Dly;
-      DelayMemo.Add(G, Result);
-      Exit;
-    end;
-    MaxIn := 0;
-    for m := 0 to G.Connections.Count - 1 do
-    begin
-      C := G.Connections[m];
-      if C.Port.Direction <> pdInput then Continue;
-      if IsClockPinName(C.Port.Name) then Continue;
-      if ActiveModel.Nets.TryGetValue(C.NetName, N) then
-        for NC in N.Connections do
-          if NC.IsDriver then
-          begin
-            Dly := DelayToOutput(NC.Gate);
-            if Dly > MaxIn then
-              MaxIn := Dly;
-          end;
-    end;
-    Dly := CellDelayPs(G.Cell);
-    if Dly < 0 then Dly := 0;
-    Result := MaxIn + Dly;
-    DelayMemo.Add(G, Result);
-  end;
-
-  procedure DFSLayout(Gate: TGateInstance; Depth, BaseCol: Integer);
-  var
-    C: TPinConnection;
-    N: TNet;
-    NCC: TNetConnection;
-    ParentCol: Integer;
-  begin
-    if Placed.ContainsKey(Gate) then
-      Exit;
-    while LevelCols.Count <= Depth do
-      LevelCols.Add(0);
-    if LevelCols[Depth] < BaseCol then
-      LevelCols[Depth] := BaseCol;
-    ParentCol := LevelCols[Depth];
-    GateGridPos.Add(Gate, TPoint.Create(ParentCol, Depth));
-    Placed.Add(Gate, True);
-    LevelCols[Depth] := ParentCol + 1;
-    for C in Gate.Connections do
-    begin
-      if C.Port.Direction <> pdOutput then
-        Continue;
-      if not ActiveModel.Nets.TryGetValue(C.NetName, N) then
-        Continue;
-      for NCC in N.Connections do
-        if (not NCC.IsDriver) and (NCC.Gate.ClockLevel = Gate.ClockLevel) then
-          DFSLayout(NCC.Gate, Depth + 1, ParentCol);
-    end;
-    if Depth + 1 < LevelCols.Count then
-      if LevelCols[Depth] < LevelCols[Depth + 1] then
-        LevelCols[Depth] := LevelCols[Depth + 1];
-  end;
+  PtTmp: TPoint;
+  Conn: TPinConnection;
+  NNet: TNet;
+  NC: TNetConnection;
+  HasParent: Boolean;
+  DelayMemo: TDictionary<TGateInstance, Double>;
+  Dly: Double;
 
   // True if G has a non-clock data input on the given net.
   function GateUsesNet(G: TGateInstance; const ANetName: string): Boolean;
@@ -163,6 +67,361 @@ var
     end;
   end;
 
+  // Depth-first tree layout within one clock level.
+  procedure DFSLayout(AGate: TGateInstance; Depth, BaseCol: Integer);
+  var
+    C: TPinConnection;
+    N: TNet;
+    NCC: TNetConnection;
+    ParentCol: Integer;
+  begin
+    if Placed.ContainsKey(AGate) then
+      Exit;
+    while LevelCols.Count <= Depth do
+      LevelCols.Add(0);
+    if LevelCols[Depth] < BaseCol then
+      LevelCols[Depth] := BaseCol;
+    ParentCol := LevelCols[Depth];
+    FPipeGridPos.Add(AGate, TPoint.Create(ParentCol, Depth));
+    Placed.Add(AGate, True);
+    LevelCols[Depth] := ParentCol + 1;
+    for C in AGate.Connections do
+    begin
+      if C.Port.Direction <> pdOutput then
+        Continue;
+      if not AModel.Nets.TryGetValue(C.NetName, N) then
+        Continue;
+      for NCC in N.Connections do
+        if (not NCC.IsDriver) and (NCC.Gate.ClockLevel = AGate.ClockLevel) then
+          DFSLayout(NCC.Gate, Depth + 1, ParentCol);
+    end;
+    if Depth + 1 < LevelCols.Count then
+      if LevelCols[Depth] < LevelCols[Depth + 1] then
+        LevelCols[Depth] := LevelCols[Depth + 1];
+  end;
+
+  // Length of the worst combinational path from a clocked boundary to G.
+  function DelayToOutput(G: TGateInstance): Double;
+  var
+    MaxIn, Dly2: Double;
+    m: Integer;
+    C: TPinConnection;
+    N: TNet;
+    NC2: TNetConnection;
+  begin
+    if DelayMemo.TryGetValue(G, Result) then
+      Exit;
+    if CellHasClock(G.Cell) then
+    begin
+      Dly2 := CellDelayPs(G.Cell);
+      if Dly2 < 0 then
+        Dly2 := 0;
+      Result := Dly2;
+      DelayMemo.Add(G, Result);
+      Exit;
+    end;
+    MaxIn := 0;
+    for m := 0 to G.Connections.Count - 1 do
+    begin
+      C := G.Connections[m];
+      if C.Port.Direction <> pdInput then
+        Continue;
+      if IsClockPinName(C.Port.Name) then
+        Continue;
+      if AModel.Nets.TryGetValue(C.NetName, N) then
+        for NC2 in N.Connections do
+          if NC2.IsDriver then
+          begin
+            Dly2 := DelayToOutput(NC2.Gate);
+            if Dly2 > MaxIn then
+              MaxIn := Dly2;
+          end;
+    end;
+    Dly2 := CellDelayPs(G.Cell);
+    if Dly2 < 0 then
+      Dly2 := 0;
+    Result := MaxIn + Dly2;
+    DelayMemo.Add(G, Result);
+  end;
+
+begin
+  FreePipelineRows;
+  FPipeRowsModel := AModel;
+  if (AModel = nil) or (AModel.Gates.Count = 0) then
+    Exit;
+  MaxLevel := -1;
+  for Gate in AModel.Gates do
+    if (Gate.ClockLevel >= 0) and (Gate.ClockLevel > MaxLevel) then
+      MaxLevel := Gate.ClockLevel;
+  if MaxLevel < 0 then
+    Exit;
+  SetLength(FPipelineRows, MaxLevel + 1);
+  for i := 0 to MaxLevel do
+    FPipelineRows[i] := TList<TGateInstance>.Create;
+  for Gate in AModel.Gates do
+    if Gate.ClockLevel >= 0 then
+      FPipelineRows[Gate.ClockLevel].Add(Gate);
+
+  InputNets := TStringList.Create;
+  OutputNets := TStringList.Create;
+  OutputLevels := TList<Integer>.Create;
+  LevelMaxDepth := TList<Integer>.Create;
+  LevelCols := TList<Integer>.Create;
+  Placed := TDictionary<TGateInstance, Boolean>.Create;
+  FPipeGridPos := TDictionary<TGateInstance, TPoint>.Create;
+  FPipeInputCol := TDictionary<string, Integer>.Create;
+  FPipeOutGrid := TDictionary<string, TPoint>.Create;
+  try
+    // Primary inputs (level 0), skipping the clock net.
+    for i := 0 to AModel.Inputs.Count - 1 do
+      if not SameText(AModel.Inputs[i], UNetNaming.ClockRootName) then
+        InputNets.Add(AModel.Inputs[i]);
+
+    // Primary outputs with their clock level (driver level + 1).
+    MaxOutputLevel := 0;
+    for i := 0 to AModel.Outputs.Count - 1 do
+    begin
+      OutName := AModel.Outputs[i];
+      if AModel.Nets.TryGetValue(OutName, NNet) then
+      begin
+        OutLevel := 0;
+        for NC in NNet.Connections do
+          if NC.IsDriver then
+          begin
+            OutLevel := NC.Gate.ClockLevel + 1;
+            Break;
+          end;
+        OutputNets.Add(OutName);
+        OutputLevels.Add(OutLevel);
+        if OutLevel > MaxOutputLevel then
+          MaxOutputLevel := OutLevel;
+      end;
+    end;
+
+    MaxRows := Length(FPipelineRows);
+    if MaxOutputLevel >= MaxRows then
+      MaxRows := MaxOutputLevel + 1;
+    if MaxRows = 0 then
+      MaxRows := 1;
+
+    // Tree layout within each clock level.
+    for i := 0 to High(FPipelineRows) do
+    begin
+      LevelCols.Clear;
+      LevelCols.Add(0);
+      Placed.Clear;
+
+      if (i = 0) and (InputNets.Count > 0) then
+      begin
+        // Level 0: primary inputs are the roots; each claims a row-0 column and
+        // pushes the next input right, like the general tree layout.
+        for j := 0 to InputNets.Count - 1 do
+        begin
+          GridCol := LevelCols[0];
+          FPipeInputCol.AddOrSetValue(InputNets[j], GridCol);
+          LevelCols[0] := LevelCols[0] + 1;
+          for k := 0 to FPipelineRows[i].Count - 1 do
+          begin
+            Gate := FPipelineRows[i][k];
+            if Placed.ContainsKey(Gate) then
+              Continue;
+            if not GateUsesNet(Gate, InputNets[j]) then
+              Continue;
+            HasParent := False;
+            for Conn in Gate.Connections do
+            begin
+              if Conn.Port.Direction <> pdInput then
+                Continue;
+              if IsClockPinName(Conn.Port.Name) then
+                Continue;
+              if not AModel.Nets.TryGetValue(Conn.NetName, NNet) then
+                Continue;
+              for NC in NNet.Connections do
+                if NC.IsDriver and (NC.Gate.ClockLevel = i) then
+                begin
+                  HasParent := True;
+                  Break;
+                end;
+              if HasParent then
+                Break;
+            end;
+            if HasParent then
+              Continue;
+            DFSLayout(Gate, 1, GridCol);
+          end;
+          // Push the input row right to cover the subtree just placed.
+          if LevelCols.Count > 1 then
+            if LevelCols[0] < LevelCols[1] then
+              LevelCols[0] := LevelCols[1];
+        end;
+        // Remaining level-0 gates (cycles or disconnected).
+        for k := 0 to FPipelineRows[i].Count - 1 do
+        begin
+          Gate := FPipelineRows[i][k];
+          if not Placed.ContainsKey(Gate) then
+            DFSLayout(Gate, 1, LevelCols[0]);
+        end;
+      end
+      else
+      begin
+        // Other levels: ordinary roots at the level's top row.
+        for j := 0 to FPipelineRows[i].Count - 1 do
+        begin
+          Gate := FPipelineRows[i][j];
+          if Placed.ContainsKey(Gate) then
+            Continue;
+          HasParent := False;
+          for Conn in Gate.Connections do
+          begin
+            if Conn.Port.Direction <> pdInput then
+              Continue;
+            if IsClockPinName(Conn.Port.Name) then
+              Continue;
+            if not AModel.Nets.TryGetValue(Conn.NetName, NNet) then
+              Continue;
+            for NC in NNet.Connections do
+              if NC.IsDriver and (NC.Gate.ClockLevel = i) then
+              begin
+                HasParent := True;
+                Break;
+              end;
+            if HasParent then
+              Break;
+          end;
+          if not HasParent then
+            DFSLayout(Gate, 0, 0);
+        end;
+        // Remaining gates (cycles or disconnected).
+        for j := 0 to FPipelineRows[i].Count - 1 do
+        begin
+          Gate := FPipelineRows[i][j];
+          if not Placed.ContainsKey(Gate) then
+            DFSLayout(Gate, 0, 0);
+        end;
+      end;
+
+      // Rows used by this level.
+      MaxDepth := 0;
+      for j := 0 to FPipelineRows[i].Count - 1 do
+      begin
+        Gate := FPipelineRows[i][j];
+        if FPipeGridPos.TryGetValue(Gate, PtTmp) then
+          if PtTmp.Y > MaxDepth then
+            MaxDepth := PtTmp.Y;
+      end;
+      LevelMaxDepth.Add(MaxDepth + 1);
+    end;
+
+    // Cumulative first-row offset per level, with a gap between levels.
+    while LevelMaxDepth.Count < MaxRows do
+      LevelMaxDepth.Add(1);
+    SetLength(FPipeLevelDepth, LevelMaxDepth.Count);
+    SetLength(FPipeLevelYOff, LevelMaxDepth.Count);
+    SetLength(FPipeHasGateRow, LevelMaxDepth.Count);
+    YOff := 0;
+    for i := 0 to LevelMaxDepth.Count - 1 do
+    begin
+      FPipeLevelDepth[i] := LevelMaxDepth[i];
+      FPipeLevelYOff[i] := YOff;
+      FPipeHasGateRow[i] := False;
+      Inc(YOff, LevelMaxDepth[i] + 1);
+    end;
+    for i := 0 to AModel.Gates.Count - 1 do
+      if (AModel.Gates[i].ClockLevel >= 0) and
+         (AModel.Gates[i].ClockLevel < Length(FPipeHasGateRow)) then
+        FPipeHasGateRow[AModel.Gates[i].ClockLevel] := True;
+
+    // Output grid positions: one column past the widest gate column of the
+    // level, stacked right for several outputs on the same level.
+    OutColCount := TDictionary<Integer, Integer>.Create;
+    try
+      for j := 0 to OutputLevels.Count - 1 do
+      begin
+        OutLevel := OutputLevels[j];
+        MaxCol := 0;
+        for GatePair in FPipeGridPos do
+          if GatePair.Key.ClockLevel = OutLevel then
+          begin
+            GridCol := GatePair.Value.X;
+            if GridCol + 1 > MaxCol then
+              MaxCol := GridCol + 1;
+          end;
+        if OutColCount.TryGetValue(OutLevel, i) then
+          GridCol := MaxCol + i
+        else
+          GridCol := MaxCol;
+        OutColCount.AddOrSetValue(OutLevel, GridCol - MaxCol + 1);
+        FPipeOutGrid.AddOrSetValue(OutputNets[j], TPoint.Create(GridCol, OutLevel));
+      end;
+    finally
+      OutColCount.Free;
+    end;
+
+    // Stats: total area and the worst per-level combinational path.
+    DelayMemo := TDictionary<TGateInstance, Double>.Create;
+    try
+      FPipeArea := 0;
+      for i := 0 to High(FPipelineRows) do
+        for j := 0 to FPipelineRows[i].Count - 1 do
+          FPipeArea := FPipeArea +
+            FPipelineRows[i][j].Cell.Width * FPipelineRows[i][j].Cell.Height;
+      FPipeWorstPath := 0;
+      for i := 0 to High(FPipelineRows) do
+        for j := 0 to FPipelineRows[i].Count - 1 do
+        begin
+          Dly := DelayToOutput(FPipelineRows[i][j]);
+          if Dly > FPipeWorstPath then
+            FPipeWorstPath := Dly;
+        end;
+    finally
+      DelayMemo.Free;
+    end;
+  finally
+    InputNets.Free;
+    OutputNets.Free;
+    OutputLevels.Free;
+    LevelMaxDepth.Free;
+    LevelCols.Free;
+    Placed.Free;
+  end;
+end;
+
+procedure TForm1.PaintPipeline(Sender: TObject; Canvas: TCanvas);
+var
+  R, NoteR, StatsR: TRectF;
+  i, j: Integer;
+  ClipState: TCanvasSaveState;
+  Gate, Src: TGateInstance;
+  Square, HGap, VGap, Left, X, Y: Single;
+  Color: TAlphaColor;
+  ActiveModel: TBlifModel;
+  Note, StatsText: string;
+  GateCenters: TDictionary<TGateInstance, TPointF>;
+  InputPositions, OutputPositions: TDictionary<string, TPointF>;
+  SrcPt, DstPt: TPointF;
+  Conn: TPinConnection;
+  Net: TNet;
+  NC: TNetConnection;
+  Pt: TPoint;
+  InCol: Integer;
+  WirePath: TPathData;
+  WireCount: Integer;
+  DrawCells: Boolean;
+
+  // True when the square whose top-left is (AX, AY) touches the canvas.
+  function OnScreen(const AX, AY: Single): Boolean;
+  begin
+    Result := (AX + Square >= 0) and (AX <= PaintBox1.Width) and
+              (AY + Square >= 0) and (AY <= PaintBox1.Height);
+  end;
+
+  procedure AddWire(const AFrom, ATo: TPointF);
+  begin
+    WirePath.MoveTo(AFrom);
+    WirePath.LineTo(ATo);
+    Inc(WireCount);
+  end;
+
 begin
   R := TRectF.Create(0, 0, PaintBox1.Width, PaintBox1.Height);
   Canvas.Fill.Color := TAlphaColorRec.White;
@@ -176,12 +435,9 @@ begin
   if (ActiveModel <> nil) and (FFlipFlopNames.Count = 0) then
     Note := 'No flip-flop cells selected on the Flip-flops page.';
 
-  // Mask to the paint box so drawing doesn't bleed over the slider/tab edges;
-  // D2D honours IntersectClipRect only inside SaveState/RestoreState.
   ClipState := Canvas.SaveState;
   try
     Canvas.IntersectClipRect(R);
-
     if ActiveModel = nil then
     begin
       Canvas.Fill.Color := TAlphaColorRec.Dimgray;
@@ -190,7 +446,10 @@ begin
       Exit;
     end;
 
-    BuildPipelineRows(ActiveModel);
+    // The layout does not depend on zoom or pan: rebuild only when the model
+    // changes, so panning never re-walks the circuit.
+    if FPipeRowsModel <> ActiveModel then
+      BuildPipelineRows(ActiveModel);
 
     if Note <> '' then
     begin
@@ -199,232 +458,66 @@ begin
       Canvas.FillText(NoteR, Note, False, 1.0, [], TTextAlign.Leading, TTextAlign.Center);
     end;
 
-  InputNets := TStringList.Create;
-  OutputNets := TStringList.Create;
-  OutputLevels := TList<Integer>.Create;
-  InputPositions := TDictionary<string, TPointF>.Create;
-  OutputPositions := TDictionary<string, TPointF>.Create;
-  GateCenters := TDictionary<TGateInstance, TPointF>.Create;
-  try
-    // Collect primary inputs (level 0), skipping the clock net.
-    for i := 0 to ActiveModel.Inputs.Count - 1 do
-      if not SameText(ActiveModel.Inputs[i], UNetNaming.ClockRootName) then
-        InputNets.Add(ActiveModel.Inputs[i]);
-
-    // Collect primary outputs with their clock level (driver level + 1).
-    MaxOutputLevel := 0;
-    for i := 0 to ActiveModel.Outputs.Count - 1 do
-    begin
-      OutName := ActiveModel.Outputs[i];
-      if ActiveModel.Nets.TryGetValue(OutName, Net) then
-      begin
-        OutLevel := 0;
-        for NC in Net.Connections do
-          if NC.IsDriver then
-          begin
-            OutLevel := NC.Gate.ClockLevel + 1;
-            Break;
-          end;
-        OutputNets.Add(OutName);
-        OutputLevels.Add(OutLevel);
-        if OutLevel > MaxOutputLevel then
-          MaxOutputLevel := OutLevel;
-      end;
-    end;
-
     HGap := 4 * FZoom;
     VGap := 4 * FZoom;
     Left := 40 * FZoom;
     Square := 18 * FZoom;
+    // Zoomed far out the cells are sub-pixel noise: skip them and the wires
+    // entirely (the level labels and the stats line still describe the design).
+    DrawCells := (FZoom > 0) and (Square >= MinBlockPx);
 
-    MaxRows := Length(FPipelineRows);
-    if MaxOutputLevel >= MaxRows then
-      MaxRows := MaxOutputLevel + 1;
-    if MaxRows = 0 then
-      MaxRows := 1;
+    // Level labels, culled vertically.
+    for i := 0 to High(FPipeLevelDepth) do
+    begin
+      if (i > 0) and (not FPipeHasGateRow[i]) then
+        Continue; // output-pad row: not a clock level
+      Y := FPanY + 4 * FZoom + FPipeLevelYOff[i] * (Square + VGap);
+      if (Y > PaintBox1.Height) or (Y + Square < 0) then
+        Continue;
+      Canvas.Fill.Color := TAlphaColorRec.Dimgray;
+      Canvas.FillText(TRectF.Create(FPanX, Y, FPanX + Left - 6 * FZoom, Y + Square),
+        IntToStr(i), False, 1.0, [], TTextAlign.Trailing, TTextAlign.Center);
+    end;
 
-    GateGridPos := TDictionary<TGateInstance, TPoint>.Create;
-    InputCol := TDictionary<string, Integer>.Create;
-    LevelMaxDepth := TList<Integer>.Create;
-    LevelYOffset := TList<Integer>.Create;
-    Placed := TDictionary<TGateInstance, Boolean>.Create;
+    GateCenters := TDictionary<TGateInstance, TPointF>.Create;
+    InputPositions := TDictionary<string, TPointF>.Create;
+    OutputPositions := TDictionary<string, TPointF>.Create;
+    WirePath := TPathData.Create;
     try
-      LevelCols := TList<Integer>.Create;
-      try
-        // Compute tree layout within each clock level.
-        for i := 0 to High(FPipelineRows) do
-        begin
-          LevelCols.Clear;
-          LevelCols.Add(0);
-          Placed.Clear;
-
-          // Level 0: primary inputs are the roots; each claims a row-0 column and
-          // pushes the next input right, like the general tree layout.
-          if (i = 0) and (InputNets.Count > 0) then
-          begin
-            for j := 0 to InputNets.Count - 1 do
-            begin
-              GridCol := LevelCols[0];
-              InputCol.AddOrSetValue(InputNets[j], GridCol);
-              LevelCols[0] := LevelCols[0] + 1;
-              for k := 0 to FPipelineRows[i].Count - 1 do
-              begin
-                Gate := FPipelineRows[i][k];
-                if Placed.ContainsKey(Gate) then
-                  Continue;
-                if not GateUsesNet(Gate, InputNets[j]) then
-                  Continue;
-                HasParent := False;
-                for Conn in Gate.Connections do
-                begin
-                  if Conn.Port.Direction <> pdInput then
-                    Continue;
-                  if IsClockPinName(Conn.Port.Name) then
-                    Continue;
-                  if not ActiveModel.Nets.TryGetValue(Conn.NetName, Net) then
-                    Continue;
-                  for NC in Net.Connections do
-                    if NC.IsDriver and (NC.Gate.ClockLevel = i) then
-                    begin
-                      HasParent := True;
-                      Break;
-                    end;
-                  if HasParent then
-                    Break;
-                end;
-                if HasParent then
-                  Continue;
-                DFSLayout(Gate, 1, GridCol);
-              end;
-              // Push the input row right to cover the subtree just placed,
-              // mirroring the push-up the tree layout applies to its roots.
-              if LevelCols.Count > 1 then
-                if LevelCols[0] < LevelCols[1] then
-                  LevelCols[0] := LevelCols[1];
-            end;
-            // Remaining level-0 gates (cycles or disconnected).
-            for k := 0 to FPipelineRows[i].Count - 1 do
-            begin
-              Gate := FPipelineRows[i][k];
-              if not Placed.ContainsKey(Gate) then
-                DFSLayout(Gate, 1, LevelCols[0]);
-            end;
-          end
-          else
-          begin
-            // Other levels: ordinary roots at the level's top row.
-            for j := 0 to FPipelineRows[i].Count - 1 do
-            begin
-              Gate := FPipelineRows[i][j];
-              if Placed.ContainsKey(Gate) then
-                Continue;
-              HasParent := False;
-              for Conn in Gate.Connections do
-              begin
-                if Conn.Port.Direction <> pdInput then
-                  Continue;
-                if IsClockPinName(Conn.Port.Name) then
-                  Continue;
-                if not ActiveModel.Nets.TryGetValue(Conn.NetName, Net) then
-                  Continue;
-                for NC in Net.Connections do
-                  if NC.IsDriver and (NC.Gate.ClockLevel = i) then
-                  begin
-                    HasParent := True;
-                    Break;
-                  end;
-                if HasParent then
-                  Break;
-              end;
-              if not HasParent then
-                DFSLayout(Gate, 0, 0);
-            end;
-            // Remaining gates (cycles or disconnected).
-            for j := 0 to FPipelineRows[i].Count - 1 do
-            begin
-              Gate := FPipelineRows[i][j];
-              if not Placed.ContainsKey(Gate) then
-                DFSLayout(Gate, 0, 0);
-            end;
-          end;
-
-          // Find max depth for this level.
-          MaxDepth := 0;
-          for j := 0 to FPipelineRows[i].Count - 1 do
-          begin
-            Gate := FPipelineRows[i][j];
-            if GateGridPos.ContainsKey(Gate) then
-            begin
-              GridRow := GateGridPos[Gate].Y;
-              if GridRow > MaxDepth then
-                MaxDepth := GridRow;
-            end;
-          end;
-          LevelMaxDepth.Add(MaxDepth + 1);
-        end;
-
-        // Compute cumulative Y offsets per level with a gap between levels.
-        while LevelMaxDepth.Count < MaxRows do
-          LevelMaxDepth.Add(1);
-        YOff := 0;
-        for i := 0 to LevelMaxDepth.Count - 1 do
-        begin
-          LevelYOffset.Add(YOff);
-          Inc(YOff, LevelMaxDepth[i] + 1);
-        end;
-
-        // Draw level labels to the left of each level's first row. Only rows that
-        // hold clocked gates are clock levels; the output-pad rows are not, so
-        // they get no label (row 0 is the input row).
-        SetLength(HasGateRow, LevelMaxDepth.Count);
-        for i := 0 to High(HasGateRow) do
-          HasGateRow[i] := False;
-        if ActiveModel <> nil then
-          for i := 0 to ActiveModel.Gates.Count - 1 do
-            if (ActiveModel.Gates[i].ClockLevel >= 0) and
-               (ActiveModel.Gates[i].ClockLevel < Length(HasGateRow)) then
-              HasGateRow[ActiveModel.Gates[i].ClockLevel] := True;
-
-        for i := 0 to LevelMaxDepth.Count - 1 do
-        begin
-          if (i > 0) and (not HasGateRow[i]) then
-            Continue; // output-pad row: not a clock level
-          Y := FPanY + 4 * FZoom + LevelYOffset[i] * (Square + VGap);
-          Canvas.Fill.Color := TAlphaColorRec.Dimgray;
-          Canvas.FillText(TRectF.Create(FPanX, Y, FPanX + Left - 6 * FZoom, Y + Square),
-            IntToStr(i), False, 1.0, [], TTextAlign.Trailing, TTextAlign.Center);
-        end;
-
-        // Draw primary inputs at level 0, at the columns the layout assigned
-        // them (pushed right by their subtrees, like the other roots).
+      WireCount := 0;
+      if DrawCells then
+      begin
+        // Primary inputs at level 0, at their layout columns.
         Y := FPanY + 4 * FZoom;
-        for j := 0 to InputNets.Count - 1 do
+        for j := 0 to ActiveModel.Inputs.Count - 1 do
         begin
-          GridCol := 0;
-          if not InputCol.TryGetValue(InputNets[j], GridCol) then
-            GridCol := j;
-          X := FPanX + Left + GridCol * (Square + HGap);
+          if SameText(ActiveModel.Inputs[j], UNetNaming.ClockRootName) then
+            Continue;
+          if not FPipeInputCol.TryGetValue(ActiveModel.Inputs[j], InCol) then
+            Continue;
+          X := FPanX + Left + InCol * (Square + HGap);
+          if not OnScreen(X, Y) then
+            Continue;
           Canvas.Fill.Color := PalYellow;
           Canvas.FillRect(TRectF.Create(X, Y, X + Square, Y + Square), 0, 0, [], 1.0);
-          InputPositions.AddOrSetValue(InputNets[j],
+          InputPositions.AddOrSetValue(ActiveModel.Inputs[j],
             TPointF.Create(X + Square * 0.5, Y + Square * 0.5));
         end;
 
-        // Draw gates at their tree positions.
+        // Gates at their tree positions, culled to the canvas.
         for i := 0 to ActiveModel.Gates.Count - 1 do
         begin
           Gate := ActiveModel.Gates[i];
-          if Gate.ClockLevel < 0 then
+          if not FPipeGridPos.TryGetValue(Gate, Pt) then
             Continue;
-          if not GateGridPos.ContainsKey(Gate) then
-            Continue;
-          GridCol := GateGridPos[Gate].X;
-          GridRow := GateGridPos[Gate].Y;
-          X := FPanX + Left + GridCol * (Square + HGap);
-          if Gate.ClockLevel < LevelYOffset.Count then
-            Y := FPanY + 4 * FZoom + (LevelYOffset[Gate.ClockLevel] + GridRow) * (Square + VGap)
+          X := FPanX + Left + Pt.X * (Square + HGap);
+          if Gate.ClockLevel < Length(FPipeLevelYOff) then
+            Y := FPanY + 4 * FZoom +
+              (FPipeLevelYOff[Gate.ClockLevel] + Pt.Y) * (Square + VGap)
           else
             Y := FPanY + 4 * FZoom + Gate.ClockLevel * (Square + VGap);
+          if not OnScreen(X, Y) then
+            Continue;
           if FSplitterNames.IndexOf(Gate.Cell.Name) >= 0 then
             Color := PalGreen
           else if FFlipFlopNames.IndexOf(Gate.Cell.Name) >= 0 then
@@ -439,162 +532,105 @@ begin
             TPointF.Create(X + Square * 0.5, Y + Square * 0.5));
         end;
 
-        // Draw primary outputs at their driver's level + 1, each in its own
-        // column to the right of that level's gates.
-        OutColCount := TDictionary<Integer, Integer>.Create;
-        try
-          for j := 0 to OutputLevels.Count - 1 do
-          begin
-            OutLevel := OutputLevels[j];
-            MaxCol := 0;
-            for GatePair in GateGridPos do
-              if GatePair.Key.ClockLevel = OutLevel then
-              begin
-                GridCol := GatePair.Value.X;
-                if GridCol + 1 > MaxCol then
-                  MaxCol := GridCol + 1;
-              end;
-            if OutColCount.TryGetValue(OutLevel, i) then
-              GridCol := MaxCol + i
-            else
-              GridCol := MaxCol;
-            OutColCount.AddOrSetValue(OutLevel, GridCol - MaxCol + 1);
-            X := FPanX + Left + GridCol * (Square + HGap);
-            Y := FPanY + 4 * FZoom + LevelYOffset[OutLevel] * (Square + VGap);
-            Canvas.Fill.Color := PalPurple;
-            Canvas.FillRect(TRectF.Create(X, Y, X + Square, Y + Square), 0, 0, [], 1.0);
-            OutputPositions.AddOrSetValue(OutputNets[j],
-              TPointF.Create(X + Square * 0.5, Y + Square * 0.5));
-          end;
-        finally
-          OutColCount.Free;
+        // Primary outputs at their driver's level + 1.
+        for j := 0 to ActiveModel.Outputs.Count - 1 do
+        begin
+          if not FPipeOutGrid.TryGetValue(ActiveModel.Outputs[j], Pt) then
+            Continue;
+          if Pt.Y > High(FPipeLevelYOff) then
+            Continue;
+          X := FPanX + Left + Pt.X * (Square + HGap);
+          Y := FPanY + 4 * FZoom + FPipeLevelYOff[Pt.Y] * (Square + VGap);
+          if not OnScreen(X, Y) then
+            Continue;
+          Canvas.Fill.Color := PalPurple;
+          Canvas.FillRect(TRectF.Create(X, Y, X + Square, Y + Square), 0, 0, [], 1.0);
+          OutputPositions.AddOrSetValue(ActiveModel.Outputs[j],
+            TPointF.Create(X + Square * 0.5, Y + Square * 0.5));
         end;
 
-      finally
-        LevelCols.Free;
-      end;
-
-    finally
-      GateGridPos.Free;
-      InputCol.Free;
-      LevelMaxDepth.Free;
-      LevelYOffset.Free;
-      Placed.Free;
-    end;
-
-    // Draw connection lines.
-    Canvas.Stroke.Kind := TBrushKind.Solid;
-    Canvas.Stroke.Color := PalWireDim;
-    Canvas.Stroke.Thickness := 1;
-
-    // Gate-to-gate.
-    for i := 0 to ActiveModel.Gates.Count - 1 do
-    begin
-      Src := ActiveModel.Gates[i];
-      if not GateCenters.TryGetValue(Src, SrcPt) then
-        Continue;
-      for j := 0 to Src.Connections.Count - 1 do
-      begin
-        Conn := Src.Connections[j];
-        if Conn.Port.Direction <> pdOutput then
-          Continue;
-        if not ActiveModel.Nets.TryGetValue(Conn.NetName, Net) then
-          Continue;
-        for NC in Net.Connections do
-          if (not NC.IsDriver) and GateCenters.TryGetValue(NC.Gate, DstPt) then
-            Canvas.DrawLine(SrcPt, DstPt, 1.0);
-      end;
-    end;
-
-    // Input-to-gate.
-    for i := 0 to InputNets.Count - 1 do
-    begin
-      if not InputPositions.TryGetValue(InputNets[i], SrcPt) then
-        Continue;
-      if not ActiveModel.Nets.TryGetValue(InputNets[i], Net) then
-        Continue;
-      for NC in Net.Connections do
-        if (not NC.IsDriver) and GateCenters.TryGetValue(NC.Gate, DstPt) then
-          Canvas.DrawLine(SrcPt, DstPt, 1.0);
-    end;
-
-    // Gate-to-output.
-    for i := 0 to OutputNets.Count - 1 do
-    begin
-      if not OutputPositions.TryGetValue(OutputNets[i], DstPt) then
-        Continue;
-      if not ActiveModel.Nets.TryGetValue(OutputNets[i], Net) then
-        Continue;
-      for NC in Net.Connections do
-        if NC.IsDriver and GateCenters.TryGetValue(NC.Gate, SrcPt) then
-          Canvas.DrawLine(SrcPt, DstPt, 1.0);
-    end;
-
-    // --- Heuristics panel ---
-    MaxLevelDelay := 0;
-    TotalArea := 0;
-    // Pipeline levels are the clock levels of the netlist. The drawn rows are
-    // MaxRows, which also counts the input row and the output-pad rows.
-    TotalLevels := Length(FPipelineRows);
-
-    DelayMemo := TDictionary<TGateInstance, Double>.Create;
-    try
-      // Accumulate area from all gates.
-      for LevelIdx := 0 to MaxRows - 1 do
-        if LevelIdx <= High(FPipelineRows) then
-          for j := 0 to FPipelineRows[LevelIdx].Count - 1 do
-            TotalArea := TotalArea +
-              FPipelineRows[LevelIdx][j].Cell.Width *
-              FPipelineRows[LevelIdx][j].Cell.Height;
-
-      // Per-level worst path: longest combinational path from a source register
-      // (clk-to-q counted) to the next receiver register (its delay not counted).
-      for LevelIdx := 0 to MaxRows - 1 do
-      begin
-        LevelDelay := 0;
-        if LevelIdx <= High(FPipelineRows) then
-          for j := 0 to FPipelineRows[LevelIdx].Count - 1 do
+        // Wires, batched into one path: one DrawLine per connection builds a
+        // path geometry per wire, which is what exhausted memory on large
+        // circuits. Only wires between drawn endpoints are added (culling).
+        for i := 0 to ActiveModel.Gates.Count - 1 do
+        begin
+          Src := ActiveModel.Gates[i];
+          if not GateCenters.TryGetValue(Src, SrcPt) then
+            Continue;
+          for j := 0 to Src.Connections.Count - 1 do
           begin
-            Gate := FPipelineRows[LevelIdx][j];
-            GateArea := DelayToOutput(Gate);
-            if GateArea > LevelDelay then
-              LevelDelay := GateArea;
+            Conn := Src.Connections[j];
+            if Conn.Port.Direction <> pdOutput then
+              Continue;
+            if not ActiveModel.Nets.TryGetValue(Conn.NetName, Net) then
+              Continue;
+            for NC in Net.Connections do
+              if (not NC.IsDriver) and GateCenters.TryGetValue(NC.Gate, DstPt) then
+                AddWire(SrcPt, DstPt);
           end;
-        if LevelDelay > MaxLevelDelay then
-          MaxLevelDelay := LevelDelay;
+        end;
+        for j := 0 to ActiveModel.Inputs.Count - 1 do
+        begin
+          if not InputPositions.TryGetValue(ActiveModel.Inputs[j], SrcPt) then
+            Continue;
+          if not ActiveModel.Nets.TryGetValue(ActiveModel.Inputs[j], Net) then
+            Continue;
+          for NC in Net.Connections do
+            if (not NC.IsDriver) and GateCenters.TryGetValue(NC.Gate, DstPt) then
+              AddWire(SrcPt, DstPt);
+        end;
+        for j := 0 to ActiveModel.Outputs.Count - 1 do
+        begin
+          if not OutputPositions.TryGetValue(ActiveModel.Outputs[j], DstPt) then
+            Continue;
+          if not ActiveModel.Nets.TryGetValue(ActiveModel.Outputs[j], Net) then
+            Continue;
+          for NC in Net.Connections do
+            if NC.IsDriver and GateCenters.TryGetValue(NC.Gate, SrcPt) then
+              AddWire(SrcPt, DstPt);
+        end;
+        if WireCount > 0 then
+        begin
+          Canvas.Stroke.Kind := TBrushKind.Solid;
+          Canvas.Stroke.Color := PalWireDim;
+          Canvas.Stroke.Thickness := 1;
+          Canvas.DrawPath(WirePath, 1.0);
+        end;
       end;
-    finally
-      DelayMemo.Free;
-    end;
 
-    if MaxLevelDelay > 0 then
-    begin
-      StatsText := Format(
-        'Pipeline Levels: %d  |  Worst path/level: %.1f ps  |  Area: %.1f um2',
-        [TotalLevels, MaxLevelDelay, TotalArea]);
-    end
-    else
-      StatsText := Format(
-        'Pipeline Levels: %d  |  Worst path/level: (no timing)  |  Area: %.1f um2',
-        [TotalLevels, TotalArea]);
+      // --- Heuristics panel ---
+      if FPipeWorstPath > 0 then
+        StatsText := Format(
+          'Pipeline Levels: %d  |  Worst path/level: %.1f ps  |  Area: %.1f um2',
+          [Length(FPipelineRows), FPipeWorstPath, FPipeArea])
+      else
+        StatsText := Format(
+          'Pipeline Levels: %d  |  Worst path/level: (no timing)  |  Area: %.1f um2',
+          [Length(FPipelineRows), FPipeArea]);
+    finally
+      GateCenters.Free;
+      InputPositions.Free;
+      OutputPositions.Free;
+      WirePath.Free;
+    end;
 
     StatsR := TRectF.Create(4, PaintBox1.Height - 22, PaintBox1.Width - 4, PaintBox1.Height - 2);
-    // White shelf along the bottom so the text stays readable over gate
-    // squares.
+    // White shelf along the bottom so the text stays readable over gate squares.
     Canvas.Fill.Color := TAlphaColorRec.White;
     Canvas.FillRect(TRectF.Create(0, PaintBox1.Height - 26, PaintBox1.Width,
       PaintBox1.Height), 0, 0, [], 0.8);
     Canvas.Fill.Color := TAlphaColorRec.Dimgray;
     Canvas.FillText(StatsR, StatsText, False, 1.0, [], TTextAlign.Leading, TTextAlign.Center);
 
-  finally
-    InputNets.Free;
-    OutputNets.Free;
-    OutputLevels.Free;
-    InputPositions.Free;
-    OutputPositions.Free;
-    GateCenters.Free;
-  end;
+    // Colour key: cell types only.
+    DrawInfoLegend(Canvas, PaintBox1.Width, [
+      LegendItem(PalBlueLight, 'Logic cell'),
+      LegendItem(PalBlueDark, 'Clocked logic cell'),
+      LegendItem(PalRedDeep, 'Flip-flop'),
+      LegendItem(PalGreen, 'Splitter'),
+      LegendItem(PalYellow, 'Input pad'),
+      LegendItem(PalPurple, 'Output pad')]);
+
   finally
     Canvas.RestoreState(ClipState);
   end;
@@ -602,6 +638,9 @@ end;
 
 procedure TForm1.FreePipelineModel;
 begin
+  // The painter's cached layout keys on gate pointers into this model; a new
+  // model can be allocated at the same address, so drop the cache first.
+  FreePipelineRows;
   if FPlacementModel = FPipelineModel then
     FPlacementModel := nil; // drop the non-owning alias before its target dies
   FPipelineModel.Free;
@@ -995,14 +1034,10 @@ begin
 end;
 
 procedure TForm1.RepaintPipelinePage;
-var
-  i: Integer;
 begin
-  // Partial redraws around the clipped canvas corrupt neighbouring controls, so
-  // repaint every direct child (the form itself is not a TControl).
+  // Only the canvas holds circuit-dependent content; repainting every child
+  // turned one pan step into a storm of full-canvas paints.
   if TabControl1.TabIndex <> TabPipeline then
     Exit;
-  for i := 0 to Children.Count - 1 do
-    if Children[i] is TControl then
-      TControl(Children[i]).Repaint;
+  PaintBox1.Repaint;
 end;

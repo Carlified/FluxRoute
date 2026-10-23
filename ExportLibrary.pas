@@ -24,13 +24,6 @@ uses
   ExportModel;
 
 type
-  TLibraryPin = record
-    Name: string;
-    Layer: string;
-    Dir: string; // informational ('IN'/'OUT'/'INOUT' etc.)
-    DXUm, DYUm: Double;
-  end;
-
   // One optional GDS fill for a layer: if the export never placed geometry on
   // Layer, the cleanup stage fills the remaining areas from the Gds cell/file.
   TIfUnusedFill = record
@@ -39,15 +32,14 @@ type
   end;
 
   TExportBlockEntry = record
-    Name: string;              // GDS cell / LEF macro / CIR subckt name
+    Name: string;              // GDS cell / CIR subckt name
     GdsFile: string;           // path relative to the library root ('' = Name+'.gds')
-    LefFile: string;           // '' = Name+'.lef'
     CirFile: string;           // '' = Name+'.cir'
     SizeWUm, SizeHUm: Double;  // tile dimensions
     StructuralOnly: Boolean;   // TRACK: purely structural - no CIR, LEF optional
     NoCir: Boolean;            // BIAS: voltage-source lines - no CIR subckt needed
     IfUnused: TArray<TIfUnusedFill>; // fill GDS for layers left empty post-export
-    Pins: TArray<TLibraryPin>;
+    Ports: Integer;            // .SUBCKT port count the CIR check expects
   end;
 
   // The loaded manifest + block index, one per process/PDK.
@@ -92,21 +84,20 @@ function KindDefaultName(const AKind: string): string;   // GDS/LEF/CIR/tile nam
 // the export preflight diffs against the library.
 procedure CollectDesignKinds(const D: TExportDesign; const Kinds: TList<string>);
 
-// Verifies the block triple against its files on disk: the LEF file must hold a
-// MACRO named entry.Name whose SIZE matches and whose PIN count equals the pin
-// list; the CIR file must hold a .SUBCKT named entry.Name whose port count
-// equals the pin count; the GDS file must exist and be non-empty. Returns False
-// and fills Msgs with the mismatches. Only the requested formats are required:
-// NeedGds verifies the GDS (and any structural fills); NeedLef the LEF macro;
-// NeedCir the CIR subckt. Formats the caller is not exporting are ignored.
+// Verifies the block against its files on disk: the CIR file must hold a .SUBCKT
+// named entry.Name whose port count equals the pin count; the GDS file must
+// exist and be non-empty. Returns False and fills Msgs with the mismatches. Only
+// the requested formats are required: NeedGds verifies the GDS (and any
+// structural fills); NeedCir the CIR subckt. Formats the caller is not exporting
+// are ignored.
 function CheckBlockTriple(const RootDir: string; const B: TExportBlockEntry;
-  var Msgs: TStringList; NeedGds: Boolean = True; NeedLef: Boolean = True;
+  var Msgs: TStringList; NeedGds: Boolean = True;
   NeedCir: Boolean = True): Boolean;
 
 // Writes a ready-to-fill manifest for APath (one entry per kind in Kinds) with
 // kind-derived names and pin placeholders, so the user only has to supply real
-// sizes/pins and drop the .gds/.lef/.cir files. GridPitchUm seeds the default
-// unit-tile size and pin offsets.
+// sizes/pins and drop the .gds/.cir files. GridPitchUm seeds the default
+// unit-tile size.
 procedure WriteManifestTemplate(const APath: string; GridPitchUm: Double;
   const Kinds: TList<string>);
 
@@ -218,7 +209,14 @@ begin
   for i := 0 to High(D.Splits) do
     AddUnique(Kinds, KindSplit(D.Splits[i].Layer, D.Splits[i].ConnCount, D.Splits[i].Taps));
   for i := 0 to High(D.Terminals) do
-    AddUnique(Kinds, KindCap(D.Terminals[i].Family, D.Terminals[i].Layer, D.Terminals[i].Taps));
+    // The bias trunk ends in the top row heading straight up out of the die; that
+    // end is exported as a straight bias tile (see RunGdsExport), so ask for the
+    // run kind rather than a cap for it.
+    if (D.Terminals[i].Family = xfBias) and (D.Terminals[i].Y = 0) then
+      AddUnique(Kinds, KindRun(xfBias, D.Terminals[i].Layer, ''))
+    else
+      AddUnique(Kinds, KindCap(D.Terminals[i].Family, D.Terminals[i].Layer,
+        D.Terminals[i].Taps));
   AddUnique(Kinds, AlwaysRequiredKind);
 end;
 
@@ -271,13 +269,12 @@ end;
 procedure TExportLibrary.LoadFile(const APath: string);
 var
   Root: TJSONObject;
-  JBlocks, JBlock, JPins, JPin: TJSONObject;
+  JBlocks, JBlock, JPin: TJSONObject;
   JVal: TJSONValue;
   JArr: TJSONArray;
-  Pair, PinPair: TJSONPair;
+  Pair: TJSONPair;
   i: Integer;
   B: TExportBlockEntry;
-  P: TLibraryPin;
 begin
   Clear;
   if not TFile.Exists(APath) then
@@ -305,8 +302,6 @@ begin
         B.Name := (JBlock.GetValue('name') as TJSONString).Value;
       if JBlock.GetValue('gds') is TJSONString then
         B.GdsFile := (JBlock.GetValue('gds') as TJSONString).Value;
-      if JBlock.GetValue('lef') is TJSONString then
-        B.LefFile := (JBlock.GetValue('lef') as TJSONString).Value;
       if JBlock.GetValue('cir') is TJSONString then
         B.CirFile := (JBlock.GetValue('cir') as TJSONString).Value;
       if JBlock.GetValue('structuralOnly') is TJSONBool then
@@ -334,34 +329,17 @@ begin
         B.SizeWUm := JArr.Items[0].AsType<Double>;
         B.SizeHUm := JArr.Items[1].AsType<Double>;
       end;
-      JVal := JBlock.GetValue('pins');
-      if (JVal is TJSONObject) then
-      begin
-        JPins := JVal as TJSONObject;
-        SetLength(B.Pins, JPins.Count);
-        i := 0;
-        for PinPair in JPins do
-        begin
-          if PinPair.JsonValue is TJSONObject then
-          begin
-            JPin := PinPair.JsonValue as TJSONObject;
-            P := Default(TLibraryPin);
-            P.Name := PinPair.JsonString.Value;
-            if JPin.GetValue('layer') is TJSONString then
-              P.Layer := (JPin.GetValue('layer') as TJSONString).Value;
-            if JPin.GetValue('dir') is TJSONString then
-              P.Dir := (JPin.GetValue('dir') as TJSONString).Value;
-            if JPin.GetValue('dx') is TJSONNumber then
-              P.DXUm := (JPin.GetValue('dx') as TJSONNumber).AsDouble;
-            if JPin.GetValue('dy') is TJSONNumber then
-              P.DYUm := (JPin.GetValue('dy') as TJSONNumber).AsDouble;
-            B.Pins[i] := P;
-          end;
-          Inc(i);
-        end;
-      end
+      // Port count for the CIR subckt check. Legacy manifests stored a "pins"
+      // object; its key count is used when "ports" is absent.
+      B.Ports := 0;
+      if JBlock.GetValue('ports') is TJSONNumber then
+        B.Ports := (JBlock.GetValue('ports') as TJSONNumber).AsInt
       else
-        SetLength(B.Pins, 0);
+      begin
+        JVal := JBlock.GetValue('pins');
+        if JVal is TJSONObject then
+          B.Ports := (JVal as TJSONObject).Count;
+      end;
       FBlocks.AddOrSetValue(Pair.JsonString.Value, B);
     end;
   finally
@@ -372,12 +350,11 @@ end;
 
 procedure TExportLibrary.SaveFile(const APath: string);
 var
-  Root, JBlocks, JBlock, JPins, JPin: TJSONObject;
+  Root, JBlocks, JBlock, JPin: TJSONObject;
   JArr: TJSONArray;
-  Kind, S: string;
+  Kind: string;
   i: Integer;
   B: TExportBlockEntry;
-  P: TLibraryPin;
 begin
   Root := TJSONObject.Create;
   JBlocks := TJSONObject.Create;
@@ -395,8 +372,6 @@ begin
         JBlock.AddPair('name', TJSONString.Create(B.Name));
       if B.GdsFile <> '' then
         JBlock.AddPair('gds', TJSONString.Create(B.GdsFile));
-      if B.LefFile <> '' then
-        JBlock.AddPair('lef', TJSONString.Create(B.LefFile));
       if B.CirFile <> '' then
 JBlock.AddPair('cir', TJSONString.Create(B.CirFile));
       if B.StructuralOnly then
@@ -419,22 +394,8 @@ JBlock.AddPair('cir', TJSONString.Create(B.CirFile));
   JArr.Add(B.SizeWUm);
   JArr.Add(B.SizeHUm);
   JBlock.AddPair('sizeUm', JArr);
-      JPins := TJSONObject.Create;
-      for i := 0 to High(B.Pins) do
-      begin
-        P := B.Pins[i];
-        S := P.Name;
-        if S = '' then
-          S := 'P' + IntToStr(i);
-        JPin := TJSONObject.Create;
-        JPin.AddPair('layer', TJSONString.Create(P.Layer));
-        if P.Dir <> '' then
-          JPin.AddPair('dir', TJSONString.Create(P.Dir));
-        JPin.AddPair('dx', TJSONNumber.Create(P.DXUm));
-        JPin.AddPair('dy', TJSONNumber.Create(P.DYUm));
-        JPins.AddPair(S, JPin);
-      end;
-      JBlock.AddPair('pins', JPins);
+      if B.Ports > 0 then
+        JBlock.AddPair('ports', TJSONNumber.Create(B.Ports));
       JBlocks.AddPair(Kind, JBlock);
     end;
     Root.AddPair('blocks', JBlocks);
@@ -453,80 +414,6 @@ begin
     Result := TPath.Combine(RootDir, F)
   else
     Result := TPath.Combine(RootDir, Name + Ext);
-end;
-
-function CheckLef(const RootDir: string; const B: TExportBlockEntry; var Msgs: TStringList): Boolean;
-var
-  Path: string;
-  Lines: TArray<string>;
-  Up: string;
-  i, PinCount: Integer;
-  InMacro: Boolean;
-  SizeW, SizeH: Double;
-  HaveSize: Boolean;
-begin
-  Result := True;
-  Path := FileFor(RootDir, B.LefFile, B.Name, '.lef');
-  if not TFile.Exists(Path) then
-  begin
-    Msgs.Add('LEF file not found: ' + Path);
-    Exit(False);
-  end;
-  Lines := TFile.ReadAllLines(Path);
-  InMacro := False;
-  PinCount := 0;
-  SizeW := 0;
-  SizeH := 0;
-  HaveSize := False;
-  for i := 0 to High(Lines) do
-  begin
-    Up := UpperCase(Trim(Lines[i]));
-    if not InMacro then
-    begin
-      if Up.StartsWith('MACRO ') then
-        if Up.Substring(6).Trim() = UpperCase(B.Name) then
-          InMacro := True;
-    end
-    else
-    begin
-      if Up.StartsWith('SIZE ') then
-      begin
-        // SIZE w BY h
-        SizeW := StrToFloatDef(Copy(Up, 6, Pos(' BY ', Up) - 6), 0);
-        SizeH := StrToFloatDef(Copy(Up, Pos(' BY ', Up) + 4, MaxInt), 0);
-        HaveSize := True;
-      end
-      else if Up.StartsWith('PIN ') then
-        Inc(PinCount)
-      else if Up = 'END ' + UpperCase(B.Name) then
-        Break;
-    end;
-  end;
-  if not InMacro then
-  begin
-    Msgs.Add(Format('LEF %s: no MACRO named "%s".', [Path, B.Name]));
-    Result := False;
-  end
-  else
-  begin
-    if not HaveSize then
-    begin
-      Msgs.Add(Format('LEF %s: MACRO "%s" has no SIZE.', [Path, B.Name]));
-      Result := False;
-    end
-    else if (Abs(SizeW - B.SizeWUm) > 0.01) or (Abs(SizeH - B.SizeHUm) > 0.01) then
-    begin
-      Msgs.Add(Format('LEF %s: SIZE %.3f x %.3f != manifest %.3f x %.3f um.',
-        [Path, SizeW, SizeH, B.SizeWUm, B.SizeHUm]));
-      Result := False;
-    end;
-    if PinCount <> Length(B.Pins) then
-    begin
-      Msgs.Add(Format('LEF %s: %d pins, manifest declares %d.',
-        [Path, PinCount, Length(B.Pins)]));
-      Result := False;
-    end;
-  end;
 end;
 
 function CheckCir(const RootDir: string; const B: TExportBlockEntry; var Msgs: TStringList): Boolean;
@@ -581,16 +468,16 @@ begin
     Msgs.Add(Format('CIR %s: no .SUBCKT named "%s".', [Path, B.Name]));
     Result := False;
   end
-  else if PortCount <> Length(B.Pins) then
+  else if PortCount <> B.Ports then
   begin
-    Msgs.Add(Format('CIR %s: subckt "%s" has %d ports, manifest declares %d pins.',
-      [Path, B.Name, PortCount, Length(B.Pins)]));
+    Msgs.Add(Format('CIR %s: subckt "%s" has %d ports, manifest declares %d.',
+      [Path, B.Name, PortCount, B.Ports]));
     Result := False;
   end;
 end;
 
 function CheckBlockTriple(const RootDir: string; const B: TExportBlockEntry;
-  var Msgs: TStringList; NeedGds, NeedLef, NeedCir: Boolean): Boolean;
+  var Msgs: TStringList; NeedGds, NeedCir: Boolean): Boolean;
 var
   Path: string;
   i: Integer;
@@ -616,11 +503,7 @@ begin
   end;
   if (B.StructuralOnly) or (B.NoCir) then
   begin
-    // Structural (TRACK) and bias (voltage-source) blocks carry no CIR subckt;
-    // their LEF is optional - validate it only if the file is actually present.
-    if NeedLef and TFile.Exists(FileFor(RootDir, B.LefFile, B.Name, '.lef')) then
-      if not CheckLef(RootDir, B, Msgs) then
-        Result := False;
+    // Structural (TRACK) and bias (voltage-source) blocks carry no CIR subckt.
     if B.StructuralOnly and NeedGds then
       for i := 0 to High(B.IfUnused) do
         if B.IfUnused[i].Gds <> '' then
@@ -633,9 +516,6 @@ begin
           end;
     Exit;
   end;
-  if NeedLef then
-    if not CheckLef(RootDir, B, Msgs) then
-      Result := False;
   if NeedCir then
     if not CheckCir(RootDir, B, Msgs) then
       Result := False;
@@ -731,77 +611,24 @@ begin
   end;
 end;
 
-// The pin list a template entry is born with: 2 through pins on a run/bend/via,
-// N on a split, none yet on a cell/track (the user fills those by hand).
-procedure KindTemplatePins(const AKind: string; GridPitchUm: Double;
-  var Pins: TArray<TLibraryPin>);
+// The port count a template entry is born with: 2 on a run/bend/via, N on a
+// split, 1 on a bias cap, none on a cell/track (the user fills those by hand).
+function KindPortCount(const AKind: string): Integer;
 var
-  Head, Layer, Sub, Aux, Lo, Hi: string;
-  n, i, q: Integer;
-  P: TLibraryPin;
+  Head, Layer, Sub, Aux: string;
 begin
-  SetLength(Pins, 0);
   KindInfo(AKind, Head, Layer, Sub, Aux);
   if Head = 'VIA' then
-  begin
-    // Layer is '<lo>_<hi>': P0 on the lower metal (W side), P1 on the higher.
-    Lo := Layer;
-    Hi := '';
-    q := Pos('_', Layer);
-    if q > 0 then
-    begin
-      Lo := Copy(Layer, 1, q - 1);
-      Hi := Copy(Layer, q + 1, MaxInt);
-    end;
-    SetLength(Pins, 2);
-    Pins[0].Name := 'P0';
-    Pins[0].Layer := Lo;
-    Pins[0].Dir := 'IN';
-    Pins[1].Name := 'P1';
-    Pins[1].Layer := Hi;
-    Pins[1].Dir := 'OUT';
-    Exit;
-  end;
-  if Head = 'SPLIT' then
-  begin
-    n := StrToIntDef(Sub, 3);
-    SetLength(Pins, n);
-    for i := 0 to n - 1 do
-    begin
-      P := Default(TLibraryPin);
-      P.Name := 'P' + IntToStr(i);
-      P.Layer := Layer;
-      P.DXUm := i * GridPitchUm;
-      P.Dir := 'INOUT';
-      Pins[i] := P;
-    end;
-    Exit;
-  end;
-  if Head = 'BIASCAP' then
-  begin
-    // One contact to the cell's power pin on the bias layer (structural).
-    SetLength(Pins, 1);
-    Pins[0].Name := 'P0';
-    Pins[0].Layer := Layer;
-    Pins[0].DXUm := 0;
-    Pins[0].Dir := 'INOUT';
-    Exit;
-  end;
-  if (Head = 'PTL') or (Head = 'PTLCAP') or (Head = 'BIAS') or (Head = 'BEND') then
-  begin
-    // Two through pins (a PTL cap is a short two-port segment too).
-    SetLength(Pins, 2);
-    Pins[0].Name := 'P0';
-    Pins[0].Layer := Layer;
-    Pins[0].DXUm := 0;
-    Pins[0].Dir := 'IN';
-    Pins[1].Name := 'P1';
-    Pins[1].Layer := Layer;
-    Pins[1].DXUm := GridPitchUm;
-    Pins[1].Dir := 'OUT';
-    Exit;
-  end;
-  // CELL / TRACK: leave blank for the user.
+    Result := 2
+  else if Head = 'SPLIT' then
+    Result := StrToIntDef(Sub, 3)
+  else if Head = 'BIASCAP' then
+    Result := 1
+  else if (Head = 'PTL') or (Head = 'PTLCAP') or (Head = 'BIAS') or
+          (Head = 'BEND') then
+    Result := 2
+  else
+    Result := 0; // CELL / TRACK
 end;
 
 procedure WriteManifestTemplate(const APath: string; GridPitchUm: Double;
@@ -836,7 +663,6 @@ begin
       B := Default(TExportBlockEntry);
       B.Name := KindDefaultName(Kinds[k]);
       B.GdsFile := B.Name + '.gds';
-      B.LefFile := B.Name + '.lef';
       B.CirFile := B.Name + '.cir';
       // Unit-tile size seed; the user overrides width/height for their cells.
       B.SizeWUm := GridPitchUm;
@@ -846,7 +672,6 @@ begin
         // TRACK: purely structural - no CIR, LEF optional. Show the optional
         // per-layer fill format (M0 here is a sample row; edit/replace it).
         B.StructuralOnly := True;
-        B.LefFile := '';
         B.CirFile := '';
         SetLength(B.IfUnused, 1);
         B.IfUnused[0].Layer := 'M0';
@@ -860,8 +685,7 @@ begin
           // Bias pin cap: a physical contact, no CIR subckt and no LEF
           // (structural, like TRACK). A PTL cap is a real two-port element.
           B.StructuralOnly := True;
-          B.LefFile := '';
-          B.CirFile := '';
+            B.CirFile := '';
         end
         else if Pos('BIAS', Kinds[k]) > 0 then
         begin
@@ -874,7 +698,7 @@ begin
           B.CirFile := '';
         end;
       end;
-      KindTemplatePins(Kinds[k], GridPitchUm, B.Pins);
+      B.Ports := KindPortCount(Kinds[k]);
       Lib.AddBlock(Kinds[k], B);
     end;
     Lib.SaveFile(APath);
