@@ -1,0 +1,24 @@
+# 2-bit ripple-carry adder (2 full adders, 10 gates)
+# Inputs: a0 a1 b0 b1 cin
+# Outputs: s0 s1 cout
+# Full adder: x=a^b, s=x^c, g=a&b, p=x&c, cout=g|p
+
+.model rca2
+.inputs a0 a1 b0 b1 cin
+.outputs s0 s1 cout
+
+# Bit 0
+.gate THmitll_XORT a=a0 b=b0 q=x0
+.gate THmitll_XORT a=x0 b=cin q=s0
+.gate THmitll_AND2T a=a0 b=b0 q=g0
+.gate THmitll_AND2T a=x0 b=cin q=p0
+.gate THmitll_OR2T a=g0 b=p0 q=c1
+
+# Bit 1
+.gate THmitll_XORT a=a1 b=b1 q=x1
+.gate THmitll_XORT a=x1 b=c1 q=s1
+.gate THmitll_AND2T a=a1 b=b1 q=g1
+.gate THmitll_AND2T a=x1 b=c1 q=p1
+.gate THmitll_OR2T a=g1 b=p1 q=cout
+
+.end

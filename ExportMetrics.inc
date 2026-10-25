@@ -60,7 +60,6 @@ var
   Bx0, By0, Bx1, By1: Integer;
   i, k, Junc, GateCount, NetTotal, InTotal, OutTotal: Integer;
   ClockCells, TreeNodes, Levels, WorstLvl: Integer;
-  Tr: TRoutedTrace;
   Gate: TGateInstance;
   Ma: TPoint;
   RowsText, SkewText: string;
@@ -377,6 +376,11 @@ begin
     S.Add('  "timing": {');
     S.Add(Format('    "minClockPeriodPs": %s,', [Num(FMinClockPeriodPs)]));
     S.Add(Format('    "maxClockGHz": %s,', [Num(MaxGHz)]));
+    // The three limits behind minClockPeriodPs, and which one binds.
+    S.Add(Format('    "minPeriodTimingPs": %s,', [Num(FMinPeriodTimingPs)]));
+    S.Add(Format('    "minPeriodSpacingPs": %s,', [Num(FMinPeriodSpacingPs)]));
+    S.Add(Format('    "minPeriodWindowExtraPs": %s,', [Num(FMinPeriodWindowExtraPs)]));
+    S.Add(Format('    "clockLimiter": "%s",', [ClockLimiterName]));
     S.Add(Format('    "targetGHz": %s,', [Num(FDesignConfig.FreqGHz)]));
     S.Add(Format('    "pipelineLevels": %d,', [Levels]));
     S.Add(Format('    "clockRows": %s,', [RowsText]));

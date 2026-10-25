@@ -41,6 +41,13 @@ type
     Gate: TGateInstance;
     PinName: string;
     Conn: TPinConnection; // the gate connection to retarget onto the leaf net
+    // A primary output is a sink of its own: it has no gate pin to hang a leaf
+    // on, so the leaf net simply becomes the output (OutIdx = its Model.Outputs
+    // index). Counting it as a load is what splits a net that is BOTH an output
+    // and feeds logic - without it the output padding later retargets the net's
+    // single driver and the downstream logic loses its input.
+    IsOutput: Boolean;
+    OutIdx: Integer;
   end;
 
   TSplitterDP = record
@@ -56,6 +63,27 @@ begin
   for NC in Net.Connections do
     if not NC.IsDriver then
       Inc(Result);
+end;
+
+function HasDriver(Net: TNet): Boolean;
+var
+  NC: TNetConnection;
+begin
+  Result := False;
+  for NC in Net.Connections do
+    if NC.IsDriver then
+      Exit(True);
+end;
+
+// Loads a splitter tree has to serve: gate pins plus the primary output, if any.
+// The output only counts when the net has a driver: an undriven primary output is
+// exempt from the driver check, and splitting it would turn it into an internal
+// net that has a load but no driver - a brand new connectivity error.
+function EffectiveLoads(Model: TBlifModel; Net: TNet): Integer;
+begin
+  Result := CountLoads(Net);
+  if (Model.Outputs.IndexOf(Net.Name) >= 0) and HasDriver(Net) then
+    Inc(Result);
 end;
 
 function FindGateConn(Gate: TGateInstance; const PinName, NetName: string): TPinConnection;
@@ -127,6 +155,16 @@ begin
   s := Loads.Count;
   if s = 1 then
   begin
+    if Loads[0].IsOutput then
+    begin
+      // This leaf is the primary output: the splitter output drives the leaf net
+      // directly (a primary output needs no load), so the output entry moves to
+      // the leaf net. The exporters and tools take output names from the netlist,
+      // so the generated <out>__spl_N name is consistent everywhere.
+      if (Loads[0].OutIdx >= 0) and (Loads[0].OutIdx < Model.Outputs.Count) then
+        Model.Outputs[Loads[0].OutIdx] := ParentNetName;
+      Exit;
+    end;
     Loads[0].Conn.NetName := ParentNetName;
     Net := Model.FindOrCreateNet(ParentNetName);
     NC.Gate := Loads[0].Gate;
@@ -272,7 +310,7 @@ begin
   MaxS := 0;
   for Net in Model.Nets.Values do
   begin
-    j := CountLoads(Net);
+    j := EffectiveLoads(Model, Net);
     if j > MaxS then
       MaxS := j;
   end;
@@ -284,7 +322,8 @@ begin
   NetsToFix := TList<string>.Create;
   try
     for Net in Model.Nets.Values do
-      if (CountLoads(Net) > 1) and (DP[CountLoads(Net)].Choice >= 0) then
+      if (EffectiveLoads(Model, Net) > 1) and
+         (DP[EffectiveLoads(Model, Net)].Choice >= 0) then
         NetsToFix.Add(Net.Name);
 
     NetCounter := 0;
@@ -302,8 +341,21 @@ begin
             Load.Gate := NC.Gate;
             Load.PinName := NC.PinName;
             Load.Conn := FindGateConn(Load.Gate, Load.PinName, NetName);
+            Load.IsOutput := False;
+            Load.OutIdx := -1;
             Loads.Add(Load);
           end;
+        // A primary output of this net is one more branch to serve.
+        j := Model.Outputs.IndexOf(NetName);
+        if (j >= 0) and HasDriver(Net) then
+        begin
+          Load.Gate := nil;
+          Load.PinName := '';
+          Load.Conn := nil;
+          Load.IsOutput := True;
+          Load.OutIdx := j;
+          Loads.Add(Load);
+        end;
 
         for j := Net.Connections.Count - 1 downto 0 do
           if not Net.Connections[j].IsDriver then
@@ -355,7 +407,7 @@ begin
   if not HasTwoWay then
     Exit;
 
-  MaxS := CountLoads(Net);
+  MaxS := EffectiveLoads(Model, Net);
   if MaxS < 2 then
     Exit; // single load: connect directly, no tree needed
 
@@ -371,8 +423,20 @@ begin
         Load.Gate := NC.Gate;
         Load.PinName := NC.PinName;
         Load.Conn := FindGateConn(Load.Gate, Load.PinName, Net.Name);
+        Load.IsOutput := False;
+        Load.OutIdx := -1;
         Loads.Add(Load);
       end;
+    j := Model.Outputs.IndexOf(Net.Name);
+    if (j >= 0) and HasDriver(Net) then
+    begin
+      Load.Gate := nil;
+      Load.PinName := '';
+      Load.Conn := nil;
+      Load.IsOutput := True;
+      Load.OutIdx := j;
+      Loads.Add(Load);
+    end;
 
     for j := Net.Connections.Count - 1 downto 0 do
       if not Net.Connections[j].IsDriver then

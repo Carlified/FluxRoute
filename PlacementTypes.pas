@@ -22,6 +22,9 @@ type
     NetName: string;
     Points: TArray<TPoint>;
     Layers: TArray<string>;
+    // Routing layers the two pins allow (bit k = route layer k); 0 = unknown,
+    // treated as "any layer" when the trace is ripped up and re-routed.
+    StartMask, GoalMask: UInt64;
   end;
 
   // One block of the floorplanning grid (for future maze routing). The _Fill

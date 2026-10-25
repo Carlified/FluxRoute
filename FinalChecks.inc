@@ -35,6 +35,12 @@ var
   Core, Len, BestLen, Limit: Double;
   LrUm, FreqGHz, DelayPsUm, PulseWUm, Band: Double;
   Failures, Warnings: Integer;
+  G2: TGateInstance;
+  Detail: TStringList;
+  SeenNotPowered: Integer;
+  IsLenBuf, IsValBuf: Boolean;
+  Names: TDictionary<string, Integer>;
+  Covered, NotCovered, Cnt: Integer;
 
   procedure Report(const AName, AState, ADetail: string);
   begin
@@ -209,9 +215,13 @@ begin
   end;
 
   // ---- placement completeness ----
-  // The placement model is the source the packer walks; identity comparison is
-  // valid because FPlacedComponents holds the same gate objects.
+  // A gate counts as placed when it has a position in the placement map, OR is
+  // in the placed-cell list. The map alone is authoritative for the cells
+  // BuildFloorplan skips (ClockLevel -1): validation buffers, length-mask buffers
+  // and the clock trunk buffers are placed through FGatePlacement only, so
+  // checking FPlacedComponents alone reported them as unplaced.
   Placed := TDictionary<TGateInstance, Boolean>.Create;
+  Detail := TStringList.Create;
   try
     for i := 0 to High(FPlacedComponents) do
       if FPlacedComponents[i].Gate <> nil then
@@ -219,18 +229,39 @@ begin
     Unplaced := 0;
     if FPlacementModel <> nil then
       for i := 0 to FPlacementModel.Gates.Count - 1 do
-        if not Placed.ContainsKey(FPlacementModel.Gates[i]) then
-          Inc(Unplaced);
+      begin
+        G2 := FPlacementModel.Gates[i];
+        if Placed.ContainsKey(G2) or FGatePlacement.ContainsKey(G2) then
+          Continue;
+        Inc(Unplaced);
+        if Detail.Count < 8 then
+        begin
+          IsLenBuf := False;
+          for k := 0 to High(FLengthBuffers) do
+            if FLengthBuffers[k].Gate = G2 then
+              IsLenBuf := True;
+          IsValBuf := False;
+          for k := 0 to High(FValidationBuffers) do
+            if FValidationBuffers[k].Gate = G2 then
+              IsValBuf := True;
+          Detail.Add(Format('%s clock level %d (no position; length buffer: %s, validation buffer: %s)',
+            [G2.CellName, G2.ClockLevel,
+             BoolToStr(IsLenBuf, True), BoolToStr(IsValBuf, True)]));
+        end;
+      end;
+    if Unplaced = 0 then
+      Report('placement', 'OK', 'every placement-model gate has a position')
+    else
+    begin
+      Report('placement', 'FAIL',
+        Format('%d gate(s) are in the netlist but not placed', [Unplaced]));
+      Inc(Failures);
+      for i := 0 to Detail.Count - 1 do
+        MemoRouting.Lines.Add('             unplaced: ' + Detail[i]);
+    end;
   finally
+    Detail.Free;
     Placed.Free;
-  end;
-  if Unplaced = 0 then
-    Report('placement', 'OK', 'every placement-model gate is placed')
-  else
-  begin
-    Report('placement', 'FAIL',
-      Format('%d gate(s) are in the netlist but not placed', [Unplaced]));
-    Inc(Failures);
   end;
 
   // ---- net connectivity, re-run on the validated netlist ----
@@ -386,20 +417,71 @@ begin
   end;
 
   // ---- bias: every powered cell was part of the allocation ----
+  // Compared by CELL NAME, not by gate identity: validation re-clones the
+  // netlist after the bias lines are routed, so identity comparison saw every
+  // cell as "not allotted". Every buffer insertion re-runs the whole chain
+  // (RunBiasExpansionAndRouting ends with RouteBiasLines), so the recorded set
+  // always describes the final netlist - buffers included.
   Powered := 0;
-  for i := 0 to Model.Gates.Count - 1 do
-    if (Model.Gates[i].Cell <> nil) and (Model.Gates[i].Cell.PowerPorts.Count > 0) then
-      Inc(Powered);
-  if (Powered = 0) or (FBiasGatesSeen = Powered) then
-    Report('bias', 'OK',
-      Format('%d of %d cell(s) with power pins allotted on the bias network',
-        [FBiasGatesSeen, Powered]))
-  else
-  begin
-    Report('bias', 'FAIL',
-      Format('%d cell(s) with power pins, but %d were allotted bias',
-        [Powered, FBiasGatesSeen]));
-    Inc(Failures);
+  Covered := 0;
+  NotCovered := 0;
+  SeenNotPowered := 0;
+  Detail := TStringList.Create;
+  Names := TDictionary<string, Integer>.Create;
+  try
+    if FBiasGateSet <> nil then
+      for G2 in FBiasGateSet.Keys do
+      begin
+        if (G2.Cell = nil) or (G2.Cell.PowerPorts.Count = 0) then
+          Inc(SeenNotPowered);
+        if G2.CellName <> '' then
+        begin
+          if Names.TryGetValue(G2.CellName, Cnt) then
+            Names[G2.CellName] := Cnt + 1
+          else
+            Names.Add(G2.CellName, 1);
+        end;
+      end;
+    if FPlacementModel <> nil then
+      for i := 0 to FPlacementModel.Gates.Count - 1 do
+      begin
+        G2 := FPlacementModel.Gates[i];
+        if (G2.Cell = nil) or (G2.Cell.PowerPorts.Count = 0) then
+          Continue;
+        Inc(Powered);
+        if (G2.CellName <> '') and Names.TryGetValue(G2.CellName, Cnt) and
+           (Cnt > 0) then
+        begin
+          Names[G2.CellName] := Cnt - 1;
+          Inc(Covered);
+        end
+        else
+        begin
+          Inc(NotCovered);
+          if Detail.Count < 8 then
+            Detail.Add(Format('%s (clock level %d) has no bias allocation',
+              [G2.CellName, G2.ClockLevel]));
+        end;
+      end;
+    if (Powered = 0) or (NotCovered = 0) then
+      Report('bias', 'OK',
+        Format('%d of %d cell(s) covered by the bias network',
+          [Covered, Powered]))
+    else
+    begin
+      Report('bias', 'FAIL',
+        Format('%d of %d cell(s) on the bias network, %d not covered',
+          [Covered, Powered, NotCovered]));
+      Inc(Failures);
+      for i := 0 to Detail.Count - 1 do
+        MemoRouting.Lines.Add('             bias: ' + Detail[i]);
+    end;
+    if SeenNotPowered > 0 then
+      MemoRouting.Lines.Add(Format('             bias note: %d allotted gate(s) have no power pins',
+        [SeenNotPowered]));
+  finally
+    Names.Free;
+    Detail.Free;
   end;
 
   // ---- overlaps ----
@@ -489,12 +571,16 @@ begin
     Inc(Failures);
   end;
 
-  if Warnings > 0 then
+  // Failures first: a warning must never mask them (this used to print
+  // "PASS with 1 warning" while two requirements had failed, which locked the
+  // export with no explanation).
+  if Failures > 0 then
+    MemoRouting.Lines.Add(Format('RESULT: FAIL (%d requirement(s), %d warning(s))',
+      [Failures, Warnings]))
+  else if Warnings > 0 then
     MemoRouting.Lines.Add(Format('RESULT: PASS with %d warning(s)', [Warnings]))
-  else if Failures = 0 then
-    MemoRouting.Lines.Add('RESULT: PASS')
   else
-    MemoRouting.Lines.Add(Format('RESULT: FAIL (%d requirement(s))', [Failures]));
+    MemoRouting.Lines.Add('RESULT: PASS');
 
   Result := Failures = 0;
 end;

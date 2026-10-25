@@ -39,10 +39,6 @@ def main():
     out_dir = os.path.join(HERE, cfg["outputDir"])
     csv_path = args.csv or os.path.join(out_dir, "die_tb.csv")
 
-    period = args.period
-    if not period:
-        design = load_json(os.path.join(out_dir, cfg["designConfig"]))
-        period = 1000.0 / design["freqGHz"]
     meta = {}
     meta_path = os.path.splitext(csv_path)[0] + ".meta.json"
     if os.path.exists(meta_path):
@@ -50,6 +46,13 @@ def main():
             meta = load_json(meta_path)
         except (OSError, ValueError, TypeError):
             meta = {}
+
+    period = args.period
+    if not period:
+        period = meta.get("periodPs")
+    if not period:
+        design = load_json(os.path.join(out_dir, cfg["designConfig"]))
+        period = 1000.0 / design["freqGHz"]
 
     slots = args.slots or int(meta.get("slots", cfg.get("slots", 8)))
     start = args.start

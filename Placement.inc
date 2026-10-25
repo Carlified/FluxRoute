@@ -52,17 +52,24 @@ end;
 procedure TForm1.OrderLayer(L: Integer; CrossOnly: Boolean);
 var
   Items, Order, CellBand, PlacedX, BandUsed: TArray<Integer>;
-  BaryX, BaryY, NbrX: TArray<Double>;
-  i, j, k, Idx, TmpIdx, BandStartIdx, BandEndIdx, BandIdx, X, RowY: Integer;
+  BaryX, NbrX: TArray<Double>;
+  i, j, k, Idx, TmpIdx, BandStartIdx, BandEndIdx, BandIdx, RowY: Integer;
   Pref, d, cand: Integer;
-  W, DL, NextLeft: Integer;
-  SumX, SumY, TmpX, Dist, BestDist: Double;
+  SumX, TmpX, Dist, BestDist: Double;
   Count, Wb, Hb: Integer;
   Conn: TPinConnection;
   Net: TNet;
   NC: TNetConnection;
   Pt, PadPt: TPoint;
   Changed: Boolean;
+  TotalW, RightEdge, DL: Integer;
+  GapW: TArray<Double>;
+  TgtY: TArray<Double>;  // continuous band target from the per-side Y means
+  UpSumY, DownSumY: Double;
+  UpCnt, DownCnt: Integer;
+  Lev: Integer;
+  CursorD, SumWt, Sl, PrevRightD, SpanD, SumBary: Double;
+
 begin
   // Collect this layer's placed component indices.
   SetLength(Items, 0);
@@ -74,15 +81,19 @@ begin
     end;
   if Length(Items) = 0 then
     Exit;
+  Lev := FPlanLevels[L];
+  SetLength(TgtY, Length(Items));
 
   // (X,Y) barycentres from placed neighbours (clock pins excluded).
   SetLength(BaryX, Length(Items));
-  SetLength(BaryY, Length(Items));
   for i := 0 to High(Items) do
   begin
     SumX := 0;
-    SumY := 0;
     Count := 0;
+    UpSumY := 0;
+    DownSumY := 0;
+    UpCnt := 0;
+    DownCnt := 0;
     if CrossOnly then
       SetLength(NbrX, 0);
     if FPlacedComponents[Items[i]].Gate <> nil then
@@ -98,13 +109,24 @@ begin
         // barycentre (anchors the layout so it cannot float freely).
         if GetPad(Conn.NetName, PadPt) then
         begin
+          // A primary input feeds this level from above; a primary output is fed
+          // from below. These set the dataflow side used for the band choice.
+          if FPlacementModel.Inputs.IndexOf(Conn.NetName) >= 0 then
+          begin
+            UpSumY := UpSumY + PadPt.Y + 0.5;
+            Inc(UpCnt);
+          end
+          else if FPlacementModel.Outputs.IndexOf(Conn.NetName) >= 0 then
+          begin
+            DownSumY := DownSumY + PadPt.Y + 0.5;
+            Inc(DownCnt);
+          end;
           if CrossOnly then
           begin
             SetLength(NbrX, Length(NbrX) + 1);
             NbrX[High(NbrX)] := PadPt.X + 0.5;
           end;
           SumX := SumX + (PadPt.X + 0.5);
-          SumY := SumY + (PadPt.Y + 0.5);
           Inc(Count);
         end;
         for NC in Net.Connections do
@@ -130,13 +152,23 @@ begin
             if Hb < 1 then
               Hb := 1;
           end;
+          // Which side of this level the neighbour sits on (dataflow direction).
+          if NC.Gate.ClockLevel < Lev then
+          begin
+            UpSumY := UpSumY + Pt.Y + Hb / 2;
+            Inc(UpCnt);
+          end
+          else if NC.Gate.ClockLevel > Lev then
+          begin
+            DownSumY := DownSumY + Pt.Y + Hb / 2;
+            Inc(DownCnt);
+          end;
           if CrossOnly then
           begin
             SetLength(NbrX, Length(NbrX) + 1);
             NbrX[High(NbrX)] := Pt.X + Wb / 2;
           end;
           SumX := SumX + (Pt.X + Wb / 2);
-          SumY := SumY + (Pt.Y + Hb / 2);
           Inc(Count);
         end;
       end;
@@ -161,16 +193,25 @@ begin
       end
       else
         BaryX[i] := SumX / Count;
-      BaryY[i] := SumY / Count;
     end
     else
     begin
       // No neighbours: keep the current centre so isolated cells stay put.
       BaryX[i] := FPlacedComponents[Items[i]].X +
         FPlacedComponents[Items[i]].W / 2;
-      BaryY[i] := FPlacedComponents[Items[i]].Y +
-        FPlacedComponents[Items[i]].H / 2;
     end;
+    // Continuous band target: the mean of each SIDE's Y centres, averaged. Per
+    // side, so a high in-degree cannot pull the cell like a plain neighbour mean
+    // does; still continuous, so mixed cells spread across the bands.
+    if (UpCnt > 0) and (DownCnt > 0) then
+      TgtY[i] := (UpSumY / UpCnt + DownSumY / DownCnt) / 2
+    else if UpCnt > 0 then
+      TgtY[i] := UpSumY / UpCnt
+    else if DownCnt > 0 then
+      TgtY[i] := DownSumY / DownCnt
+    else
+      TgtY[i] := FPlacedComponents[Items[i]].Y +
+        FPlacedComponents[Items[i]].H / 2;
   end;
 
   // Sort cell indices by X barycentre (stable insertion sort).
@@ -202,21 +243,30 @@ begin
   for i := 0 to High(Order) do
   begin
     Idx := Items[Order[i]];
-    // Preferred band: the row centre closest to the Y barycentre, so cells are
-    // free to migrate between rows in both phases (only the X-ordering key
-    // differs) - moving a cell toward its connections' rows shortens wires.
-    Pref := BandStartIdx;
+    // Preferred band: the band whose LOGIC row centre is nearest the cell's
+    // continuous dataflow target TgtY (mean of the per-side Y means). A cell that
+    // only receives from above therefore lands at the top of the level's range, a
+    // cell that only drives the row below at the bottom, and a mixed cell lands
+    // between the two. Exact ties (predecessor one band up, successor on this
+    // row) go to the EMPTIER band so the rows fill evenly.
+    Pref := -1;
     BestDist := MaxSingle;
     for BandIdx := BandStartIdx to BandEndIdx - 1 do
     begin
-      Dist := Abs((FPlanBandStarts[BandIdx] + FPlanRowHBlocks / 2) -
-        BaryY[Order[i]]);
-      if Dist < BestDist then
+      Dist := Abs((BandLogicRowY(BandIdx) + FPlanRowHBlocks / 2) -
+        TgtY[Order[i]]);
+      if Dist < BestDist - 1e-6 then
       begin
         BestDist := Dist;
         Pref := BandIdx;
-      end;
+      end
+      else if (Abs(Dist - BestDist) <= 1e-6) and (Pref >= BandStartIdx) and
+              (BandUsed[BandIdx - BandStartIdx] <
+               BandUsed[Pref - BandStartIdx]) then
+        Pref := BandIdx; // equidistant: take the one with less used width
     end;
+    if Pref < BandStartIdx then
+      Pref := BandStartIdx;
     // Nearest band (from Pref outward) that can still fit this cell.
     CellBand[i] := -1;
     for d := 0 to BandEndIdx - BandStartIdx - 1 do
@@ -245,47 +295,121 @@ begin
       FPlacedComponents[Idx].W + 1; // width + one-cell gap
   end;
 
-  // Spread each band's cells to their barycentre targets (order preserved) to
-  // shorten wires; a forward push + backward release resolves overlaps.
+  // Pack each band with barycentre-weighted gaps. The barycentre ORDERS the
+  // cells (classic barycentre placement); the slack in the band's allocation is
+  // then shared between the gaps in proportion to the barycentre spacing, plus an
+  // equal baseline. Connected cells therefore stay packed together, unrelated
+  // groups spread apart across the row, and the row spans its allocation so it
+  // can never ratchet toward one edge (the old bug).
+  SetLength(GapW, Length(Order));
   Changed := False;
   for BandIdx := BandStartIdx to BandEndIdx - 1 do
   begin
-    // Forward pass: place each cell at its target left, but not before the
-    // previous cell's right edge + gap.
-    X := FPlanXLeft;
+    TotalW := 0;
+    Count := 0;
     for i := 0 to High(Order) do
+      if CellBand[i] = BandIdx then
+      begin
+        Inc(TotalW, FPlacedComponents[Items[Order[i]]].W);
+        Inc(Count);
+      end;
+    if Count = 0 then
+      Continue;
+    // The row's usable length is the whole window between the bias trunk and the
+    // first bias column (before the clock trunk), not the blue allocation bar:
+    // that bar only shows how much of the row the initial allocation used.
+    RightEdge := FPlanXRight;
+    // Slack beyond the mandatory one-block gaps (0 when the allocation is full).
+    Sl := RightEdge - FPlanXLeft - (TotalW + Count - 1);
+    if Sl < 0 then
+      Sl := 0;
+    if Count = 1 then
     begin
-      if CellBand[i] <> BandIdx then
-        Continue;
-      Idx := Items[Order[i]];
-      W := FPlacedComponents[Idx].W;
-      DL := Round(BaryX[Order[i]] - W / 2);
-      if DL < FPlanXLeft then
-        DL := FPlanXLeft;
-      if DL > FPlanXRight - W then
-        DL := FPlanXRight - W;
-      if DL < X then
-        DL := X;
-      PlacedX[i] := DL;
-      X := DL + W + 1; // width + one-cell gap
+      for i := 0 to High(Order) do
+        if CellBand[i] = BandIdx then
+        begin
+          Idx := Items[Order[i]];
+          DL := Round(BaryX[Order[i]] - FPlacedComponents[Idx].W / 2);
+          if DL > RightEdge - FPlacedComponents[Idx].W then
+            DL := RightEdge - FPlacedComponents[Idx].W;
+          if DL < FPlanXLeft then
+            DL := FPlanXLeft;
+          PlacedX[i] := DL;
+        end;
+      Continue;
     end;
-    // Backward pass: clamp to the row's right edge and release any forward
-    // push where there is room to the left (prevents accumulation/drift).
-    NextLeft := FPlanXRight;
-    for i := High(Order) downto 0 do
+    // Gap weight = the free space the two barycentres imply between the cells,
+    // so connected cells stay packed and groups that are far apart in barycentre
+    // space spread out. No equal baseline: leftover slack must not be smeared
+    // evenly over every row, or every row ends up as wide as the window.
+    k := 0;
+    PrevRightD := 0;
+    SumBary := 0;
+    for i := 0 to High(Order) do
+      if CellBand[i] = BandIdx then
+      begin
+        Idx := Items[Order[i]];
+        SumBary := SumBary + BaryX[Order[i]];
+        if k > 0 then
+        begin
+          GapW[k - 1] := BaryX[Order[i]] -
+            FPlacedComponents[Idx].W / 2 - PrevRightD;
+          if GapW[k - 1] < 0 then
+            GapW[k - 1] := 0;
+        end;
+        PrevRightD := BaryX[Order[i]] + FPlacedComponents[Idx].W / 2;
+        Inc(k);
+      end;
+    SumWt := 0;
+    for k := 0 to Count - 2 do
+      SumWt := SumWt + GapW[k];
+    if SumWt <= 0 then
     begin
-      if CellBand[i] <> BandIdx then
-        Continue;
-      Idx := Items[Order[i]];
-      W := FPlacedComponents[Idx].W;
-      if PlacedX[i] + W > FPlanXRight then
-        PlacedX[i] := FPlanXRight - W;
-      if PlacedX[i] + W + 1 > NextLeft then
-        PlacedX[i] := NextLeft - W - 1;
-      if PlacedX[i] < FPlanXLeft then
-        PlacedX[i] := FPlanXLeft;
-      NextLeft := PlacedX[i];
+      // No spacing information (all targets coincide): minimum gaps only; the
+      // row keeps its free space as margin instead of stretching edge to edge.
+      SumWt := Count - 1;
+      Sl := 0;
+    end
+    else
+    begin
+      // Spread only as far as the barycentres ask. Normalising to the whole row
+      // pinned the first and last cell to the row edges; capping leaves the rest
+      // as margin, and the block is still centred on its barycentre below.
+      //
+      // TUNING KNOB (row spread): this line decides how much of the row's free
+      // space a row may use. Replace `SumWt` by
+      //   SumWt * 1.5  -> rows breathe more: wider gaps, uses more row length,
+      //                   less unused margin (good when routing is congested);
+      //   SumWt * 0.5  -> tighter clusters with wider margins at the row ends;
+      //   Sl (as-is)   -> OLD behaviour: stretch every row across its full
+      //                   length, which pins the end cells to the row edges.
+      // The remaining free space always stays as margin, split by centring the
+      // block on its barycentre mean.
+      if Sl > SumWt then
+        Sl := SumWt;
     end;
+    // Total span: cells + mandatory gaps + the slack each gap earned.
+    SpanD := TotalW + (Count - 1);
+    for k := 0 to Count - 2 do
+      SpanD := SpanD + Sl * GapW[k] / SumWt;
+    // Centre the block on the barycentre mean, clamped into the band.
+    CursorD := Round(SumBary / Count - SpanD / 2);
+    if CursorD > RightEdge - SpanD then
+      CursorD := RightEdge - SpanD;
+    if CursorD < FPlanXLeft then
+      CursorD := FPlanXLeft;
+    // Place; the cursor stays fractional so rounding cannot accumulate.
+    k := 0;
+    for i := 0 to High(Order) do
+      if CellBand[i] = BandIdx then
+      begin
+        Idx := Items[Order[i]];
+        PlacedX[i] := Round(CursorD);
+        CursorD := CursorD + FPlacedComponents[Idx].W;
+        if k < Count - 1 then
+          CursorD := CursorD + 1 + Sl * GapW[k] / SumWt;
+        Inc(k);
+      end;
   end;
 
   // Write the final positions.

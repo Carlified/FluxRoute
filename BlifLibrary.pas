@@ -249,7 +249,10 @@ begin
         Parts := Line.Split([' '], TStringSplitOptions.ExcludeEmpty);
         for j := 1 to Length(Parts) - 1 do
         begin
-          Result.Outputs.Add(Parts[j]);
+          // Dedupe: a net listed twice would otherwise become two primary
+          // outputs, and only the first entry would follow a splitter split.
+          if Result.Outputs.IndexOf(Parts[j]) < 0 then
+            Result.Outputs.Add(Parts[j]);
           Result.FindOrCreateNet(Parts[j]);
         end;
       end

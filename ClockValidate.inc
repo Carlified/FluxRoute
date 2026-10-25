@@ -261,6 +261,9 @@ begin
       begin
         DataPer := MinPeriodFromTiming(Model, ClockArr, DataArr);
         SpacingPer := MaxInputSpacingPs(Model);
+        FMinPeriodTimingPs := DataPer;
+        FMinPeriodSpacingPs := SpacingPer;
+        FMinPeriodWindowExtraPs := 0;
         FMinClockPeriodPs := DataPer;
         if SpacingPer > FMinClockPeriodPs then
           FMinClockPeriodPs := SpacingPer;
@@ -277,6 +280,7 @@ begin
           begin
             if Window.ExtraPeriodPs > 0 then
             begin
+              FMinPeriodWindowExtraPs := Window.ExtraPeriodPs;
               FMinClockPeriodPs := FMinClockPeriodPs + Window.ExtraPeriodPs;
               Window.StartPs := Window.EndPs; // the added period lowers it to meet
               MemoRouting.Lines.Add(Format(
@@ -392,4 +396,20 @@ begin
     ClkPos.Free;
     IndexMap.Free;
   end;
+end;
+
+// Which of the three period limits is binding, for the export page and the
+// metrics file. The input window counts as binding whenever it had to add
+// period at all - without it the period would be shorter.
+function TForm1.ClockLimiterName: string;
+begin
+  Result := 'none';
+  if FMinClockPeriodPs <= 0 then
+    Exit;
+  if FMinPeriodWindowExtraPs > 0 then
+    Result := 'input window'
+  else if FMinPeriodSpacingPs >= FMinPeriodTimingPs then
+    Result := 'input spacing'
+  else
+    Result := 'data path';
 end;

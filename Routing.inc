@@ -403,13 +403,13 @@ var
   Node: TPlacedClockNode;
   GatePos, DriverPos: TPoint;
   UseClkPad: Boolean;
-  PassRouted, PassFailed: Integer;
+  PassRouted, PassFailed, NoCommon, NoMetal: Integer;
 
   // Marks a routed path's cells as hard obstacles on the layers they use, so
   // later nets on those layers route around them (classic sequential maze).
   procedure BlockPath(Pth: TArray<TPoint>; PL: TArray<Integer>);
   var
-    ii: Integer;
+    ii, La, Lb, Lk: Integer;
   begin
     for ii := 0 to High(Pth) do
     begin
@@ -419,6 +419,24 @@ var
         Continue;
       if (PL[ii] >= 0) and (PL[ii] <= High(FRouteObstacles)) then
         FRouteObstacles[PL[ii]][Pt.Y * FRouteObstaclesW + Pt.X] := True;
+      // A via is two consecutive points at the same cell on different layers.
+      // Its shaft crosses every layer in between (FRouteLayers is in library
+      // stack order), so those blocks are obstructed as well.
+      if (ii > 0) and (ii - 1 <= High(PL)) and
+         (Pth[ii - 1].X = Pt.X) and (Pth[ii - 1].Y = Pt.Y) then
+      begin
+        La := PL[ii - 1];
+        Lb := PL[ii];
+        if La > Lb then
+        begin
+          Lk := La;
+          La := Lb;
+          Lb := Lk;
+        end;
+        for Lk := La to Lb do
+          if (Lk >= 0) and (Lk <= High(FRouteObstacles)) then
+            FRouteObstacles[Lk][Pt.Y * FRouteObstaclesW + Pt.X] := True;
+      end;
     end;
   end;
 
@@ -432,6 +450,8 @@ var
       Exit;
     Trace.NetName := AJob.NetName;
     Trace.Points := AJob.Path;
+    Trace.StartMask := AJob.StartMask;
+    Trace.GoalMask := AJob.GoalMask;
     SetLength(Trace.Layers, Length(AJob.PathLayers));
     for jj := 0 to High(AJob.PathLayers) do
       Trace.Layers[jj] := FRouteLayers[AJob.PathLayers[jj]];
@@ -468,25 +488,53 @@ var
     SJ.PathLayers := nil;
     SJ.StartValid := False;
     SJ.GoalValid := False;
+    SJ.StartMask := High(UInt64);
+    SJ.GoalMask := High(UInt64);
     SJ.Dist := High(Integer) div 2;
     if ADriver = nil then
     begin
       if GetPad(ANetName, SJ.Start) then
         SJ.StartValid := True;
     end
-    else if GatePinBlock(ADriver, ADriverPin, 0, SJ.Start) then
-      SJ.StartValid := True;
+    else
+    begin
+      SJ.StartMask := PortLayerMask(ADriver, ADriverPin);
+      if GatePinBlock(ADriver, ADriverPin, FirstMaskLayer(SJ.StartMask), SJ.Start) then
+        SJ.StartValid := True;
+    end;
     if ALoad = nil then
     begin
       if GetPad(ANetName, SJ.Goal) then
         SJ.GoalValid := True;
     end
-    else if GatePinBlock(ALoad, ALoadPin, 0, SJ.Goal) then
-      SJ.GoalValid := True;
+    else
+    begin
+      SJ.GoalMask := PortLayerMask(ALoad, ALoadPin);
+      if GatePinBlock(ALoad, ALoadPin, FirstMaskLayer(SJ.GoalMask), SJ.Goal) then
+        SJ.GoalValid := True;
+    end;
     if SJ.StartValid and SJ.GoalValid then
       SJ.Dist := Abs(SJ.Start.X - SJ.Goal.X) + Abs(SJ.Start.Y - SJ.Goal.Y);
     SetLength(Jobs, Length(Jobs) + 1);
     Jobs[High(Jobs)] := SJ;
+  end;
+
+  // Human-readable layer names for a pin's allowed-layer mask ('none' = the pin
+  // has shapes but none on a routing layer).
+  function MaskText(Mask: UInt64): string;
+  var
+    L2: Integer;
+  begin
+    Result := '';
+    for L2 := 0 to High(FRouteLayers) do
+      if ((Mask shr L2) and 1) <> 0 then
+      begin
+        if Result <> '' then
+          Result := Result + '/';
+        Result := Result + FRouteLayers[L2];
+      end;
+    if Result = '' then
+      Result := 'none';
   end;
 
 begin
@@ -676,6 +724,10 @@ begin
             Job.PathLayers := nil;
             Job.Start := DriverPos;
             Job.Goal := Pt;
+            Job.StartMask := High(UInt64); // clock pad / synthetic: any layer
+            if not UseClkPad then
+              Job.StartMask := PortLayerMask(Driver, DriverPin);
+            Job.GoalMask := PortLayerMask(NC.Gate, NC.PinName);
             Job.StartValid := True;
             Job.GoalValid := True;
             Job.Dist := Abs(Job.Start.X - Job.Goal.X) +
@@ -689,6 +741,45 @@ begin
         ClkRot.Free;
       end;
     end;
+
+    // Pins that declare no shared routing layer are still connectable (the wire
+    // arrives on a trunk layer and the pin via drops onto the pin's own metal),
+    // so this is informational: those nets will need a via at each pin.
+    NoCommon := 0;
+    for i := 0 to High(Jobs) do
+      if Jobs[i].StartValid and Jobs[i].GoalValid and
+         ((Jobs[i].StartMask and Jobs[i].GoalMask) = 0) then
+      begin
+        Inc(NoCommon);
+        if NoCommon <= 8 then
+          MemoRouting.Lines.Add(Format(
+            'Net %s: pins share no routing layer (driver on %s, load on %s) - ' +
+            'a pin via will be needed.',
+            [Jobs[i].NetName, MaskText(Jobs[i].StartMask),
+             MaskText(Jobs[i].GoalMask)]));
+      end;
+    if NoCommon > 0 then
+      MemoRouting.Lines.Add(Format(
+        '%d net(s) share no pin layer: they need a via along the route.',
+        [NoCommon]));
+    // A pin whose LEF shapes are all on non-routing layers has no metal to
+    // connect to at all, so those nets cannot be routed.
+    NoMetal := 0;
+    for i := 0 to High(Jobs) do
+      if Jobs[i].StartValid and Jobs[i].GoalValid and
+         ((Jobs[i].StartMask = 0) or (Jobs[i].GoalMask = 0)) then
+      begin
+        Inc(NoMetal);
+        if NoMetal <= 8 then
+          MemoRouting.Lines.Add(Format(
+            'Net %s: pin has no metal on a routing layer (driver %s, load %s).',
+            [Jobs[i].NetName, MaskText(Jobs[i].StartMask),
+             MaskText(Jobs[i].GoalMask)]));
+      end;
+    if NoMetal > 0 then
+      MemoRouting.Lines.Add(Format(
+        '%d net(s) cannot be routed: a pin has no routing-layer metal.',
+        [NoMetal]));
 
     // Shortest links first (stable insertion order for ties). A short wire is
     // easy to place first, leaving the longer ones the remaining space.
@@ -716,7 +807,8 @@ begin
         if Job.Routed then
           Continue;
         if Job.StartValid and Job.GoalValid and
-           LeeRoute(Job.Start, Job.Goal, L, Path, PathLayers) then
+           LeeRoute(Job.Start, Job.Goal, L, Job.StartMask, Job.GoalMask,
+             Path, PathLayers) then
         begin
           Job.Routed := True;
           Job.Path := Path;
@@ -747,7 +839,8 @@ begin
       if Job.Routed then
         Continue;
       if Job.StartValid and Job.GoalValid and
-         LeeRoute(Job.Start, Job.Goal, -1, Path, PathLayers) then
+         LeeRoute(Job.Start, Job.Goal, -1, Job.StartMask, Job.GoalMask,
+           Path, PathLayers) then
       begin
         Job.Routed := True;
         Job.Path := Path;
@@ -803,87 +896,60 @@ var
   W, H: Integer;
   i, j: Integer;
   P: TPlacedComponent;
-  BX0, BY0, BX1, BY1: Integer;
-  Swp: Integer;
   Sp: TSpineComponent;
   Node: TPlacedClockNode;
   MaskPt: TPoint;
   L, ci: Integer;
 
-  // Marks every pin shape of one gate, placed at (AX, AY) (grid cells, with
-  // optional 90 deg CCW rotation), on the routing layer it belongs to.
+  // Marks a pin's footprint on EVERY routing layer: pins are obstruction
+  // pillars, so nothing may route or via through a pin block on any layer. Only
+  // the goal port of the route being searched is exempt (see LeeRoute).
   procedure MarkGatePins(G: TGateInstance; AX, AY: Integer; Rotated: Boolean);
   var
-    k, x, y: Integer;
     Port2: TPort;
     Shape2: TPortShape;
-    CellH: Double;
+
+    procedure MarkShape(const AShape: TPortShape);
+    var
+      k, x, y, Lx0, Ly0, Lx1, Ly1, Tmp2: Integer;
+      CellH: Double;
+    begin
+      CellH := G.Cell.Height;
+      if CellH <= 0 then
+        CellH := Core;
+      if Rotated then
+      begin
+        Lx0 := Trunc((AX * Core + (CellH - AShape.y2)) / Core);
+        Ly0 := Trunc((AY * Core + AShape.x1) / Core);
+        Lx1 := Trunc((AX * Core + (CellH - AShape.y1)) / Core);
+        Ly1 := Trunc((AY * Core + AShape.x2) / Core);
+      end
+      else
+      begin
+        // Canvas Y runs down while LEF Y runs up: flip (CellH - y).
+        Lx0 := Trunc((AX * Core + AShape.x1) / Core);
+        Ly0 := Trunc((AY * Core + (CellH - AShape.y2)) / Core);
+        Lx1 := Trunc((AX * Core + AShape.x2) / Core);
+        Ly1 := Trunc((AY * Core + (CellH - AShape.y1)) / Core);
+      end;
+      if Lx1 < Lx0 then begin Tmp2 := Lx0; Lx0 := Lx1; Lx1 := Tmp2; end;
+      if Ly1 < Ly0 then begin Tmp2 := Ly0; Ly0 := Ly1; Ly1 := Tmp2; end;
+      for k := 0 to High(FRouteLayers) do
+        for x := Lx0 to Lx1 do
+          for y := Ly0 to Ly1 do
+            if (x >= 0) and (x < W) and (y >= 0) and (y < H) then
+              FRouteObstacles[k][y * W + x] := True;
+    end;
+
   begin
     if (G = nil) or (G.Cell = nil) then
       Exit;
-    for k := 0 to High(FRouteLayers) do
-    begin
-      for Port2 in G.Cell.Ports do
-        for Shape2 in Port2.Shapes do
-          if SameText(Shape2.Layer, FRouteLayers[k]) then
-          begin
-            if Rotated then
-            begin
-              CellH := G.Cell.Height;
-              if CellH <= 0 then CellH := Core;
-              BX0 := Trunc((AX * Core + (CellH - Shape2.y2)) / Core);
-              BY0 := Trunc((AY * Core + Shape2.x1) / Core);
-              BX1 := Trunc((AX * Core + (CellH - Shape2.y1)) / Core);
-              BY1 := Trunc((AY * Core + Shape2.x2) / Core);
-            end
-            else
-            begin
-              // Canvas Y runs down while LEF Y runs up: flip (CellH - y).
-              CellH := G.Cell.Height;
-              if CellH <= 0 then CellH := Core;
-              BX0 := Trunc((AX * Core + Shape2.x1) / Core);
-              BY0 := Trunc((AY * Core + (CellH - Shape2.y2)) / Core);
-              BX1 := Trunc((AX * Core + Shape2.x2) / Core);
-              BY1 := Trunc((AY * Core + (CellH - Shape2.y1)) / Core);
-            end;
-            if BX1 < BX0 then begin Swp := BX0; BX0 := BX1; BX1 := Swp; end;
-            if BY1 < BY0 then begin Swp := BY0; BY0 := BY1; BY1 := Swp; end;
-            for x := BX0 to BX1 do
-              for y := BY0 to BY1 do
-                if (x >= 0) and (x < W) and (y >= 0) and (y < H) then
-                  FRouteObstacles[k][y * W + x] := True;
-          end;
-      for Port2 in G.Cell.PowerPorts do
-        for Shape2 in Port2.Shapes do
-          if SameText(Shape2.Layer, FRouteLayers[k]) then
-          begin
-            if Rotated then
-            begin
-              CellH := G.Cell.Height;
-              if CellH <= 0 then CellH := Core;
-              BX0 := Trunc((AX * Core + (CellH - Shape2.y2)) / Core);
-              BY0 := Trunc((AY * Core + Shape2.x1) / Core);
-              BX1 := Trunc((AX * Core + (CellH - Shape2.y1)) / Core);
-              BY1 := Trunc((AY * Core + Shape2.x2) / Core);
-            end
-            else
-            begin
-              // Canvas Y runs down while LEF Y runs up: flip (CellH - y).
-              CellH := G.Cell.Height;
-              if CellH <= 0 then CellH := Core;
-              BX0 := Trunc((AX * Core + Shape2.x1) / Core);
-              BY0 := Trunc((AY * Core + (CellH - Shape2.y2)) / Core);
-              BX1 := Trunc((AX * Core + Shape2.x2) / Core);
-              BY1 := Trunc((AY * Core + (CellH - Shape2.y1)) / Core);
-            end;
-            if BX1 < BX0 then begin Swp := BX0; BX0 := BX1; BX1 := Swp; end;
-            if BY1 < BY0 then begin Swp := BY0; BY0 := BY1; BY1 := Swp; end;
-            for x := BX0 to BX1 do
-              for y := BY0 to BY1 do
-                if (x >= 0) and (x < W) and (y >= 0) and (y < H) then
-                  FRouteObstacles[k][y * W + x] := True;
-          end;
-    end;
+    for Port2 in G.Cell.Ports do
+      for Shape2 in Port2.Shapes do
+        MarkShape(Shape2);
+    for Port2 in G.Cell.PowerPorts do
+      for Shape2 in Port2.Shapes do
+        MarkShape(Shape2);
   end;
 
 begin
@@ -940,6 +1006,20 @@ begin
        (FLengthBuffers[i].Gate.Cell <> nil) and
        FGatePlacement.TryGetValue(FLengthBuffers[i].Gate, MaskPt) then
       MarkGatePins(FLengthBuffers[i].Gate, MaskPt.X, MaskPt.Y, False);
+  // Validation-inserted buffers are real placed cells: their pins obstruct too,
+  // otherwise a re-route after validation can pass straight through them.
+  for i := 0 to High(FValidationBuffers) do
+    if (FValidationBuffers[i].Gate <> nil) and
+       (FValidationBuffers[i].Gate.Cell <> nil) and
+       FGatePlacement.TryGetValue(FValidationBuffers[i].Gate, MaskPt) then
+      MarkGatePins(FValidationBuffers[i].Gate, MaskPt.X, MaskPt.Y, False);
+  // I/O anchor pads are pillars on the die edge: nothing crosses them on any
+  // layer (arriving on one is exempt, since it is a route's goal).
+  for i := 0 to High(FPads) do
+    for j := 0 to High(FRouteLayers) do
+      if (FPads[i].X >= 0) and (FPads[i].X < W) and
+         (FPads[i].Y >= 0) and (FPads[i].Y < H) then
+        FRouteObstacles[j][FPads[i].Y * W + FPads[i].X] := True;
 end;
 
 // Grows a band's TOP (Which=0) or MIDDLE (Which=1) bias row by ByRows cells to
@@ -1877,6 +1957,10 @@ begin
            (FLengthBuffers[a].Gate.Cell.PowerPorts.Count > 0) then
           GateSeen.AddOrSetValue(FLengthBuffers[a].Gate, True);
       FBiasGatesSeen := GateSeen.Count;
+      // Keep the gates themselves so the final audit can name any mismatch.
+      FBiasGateSet.Free;
+      FBiasGateSet := GateSeen;
+      GateSeen := nil;
     finally
       GateSeen.Free;
     end;
@@ -1934,6 +2018,20 @@ end;
 
 // Marks one trace's cells as obstacles on their layers (like RunRouting's
 // BlockPath, but reusable). Layers holds layer NAMES.
+// Index of a routing-layer name in FRouteLayers (the list that indexes
+// FRouteObstacles). Using the UI list (FRoutingLayers) here is wrong: it also
+// holds the bias layer and may be ordered differently, so a trace would block or
+// unblock a different layer - which silently cleared pin pillars on re-routes.
+function TForm1.RouteLayerIndex(const AName: string): Integer;
+var
+  k: Integer;
+begin
+  Result := -1;
+  for k := 0 to High(FRouteLayers) do
+    if SameText(FRouteLayers[k], AName) then
+      Exit(k);
+end;
+
 procedure TForm1.BlockTrace(ATraceIdx: Integer);
 var
   ii, L: Integer;
@@ -1947,7 +2045,7 @@ begin
       Continue;
     if ii <= High(FRouteTraces[ATraceIdx].Layers) then
     begin
-      L := FRoutingLayers.IndexOf(FRouteTraces[ATraceIdx].Layers[ii]);
+      L := RouteLayerIndex(FRouteTraces[ATraceIdx].Layers[ii]);
       if (L >= 0) and (L <= High(FRouteObstacles)) then
         FRouteObstacles[L][Pt.Y * FRouteObstaclesW + Pt.X] := True;
     end;
@@ -1958,7 +2056,7 @@ end;
 // freeing the space so a re-route can use it.
 procedure TForm1.UnblockTrace(ATraceIdx: Integer);
 var
-  ii, L: Integer;
+  ii, L, La, Lb, Lk: Integer;
   Pt: TPoint;
 begin
   for ii := 0 to High(FRouteTraces[ATraceIdx].Points) do
@@ -1967,11 +2065,27 @@ begin
     if (Pt.X < 0) or (Pt.X >= FRouteObstaclesW) or
        (Pt.Y < 0) or (Pt.Y >= FRouteObstaclesH) then
       Continue;
+    L := -1;
     if ii <= High(FRouteTraces[ATraceIdx].Layers) then
+      L := RouteLayerIndex(FRouteTraces[ATraceIdx].Layers[ii]);
+    if (L >= 0) and (L <= High(FRouteObstacles)) then
+      FRouteObstacles[L][Pt.Y * FRouteObstaclesW + Pt.X] := False;
+    // Mirror BlockPath: a via also obstructed the layers between its ends.
+    if (ii > 0) and (ii - 1 <= High(FRouteTraces[ATraceIdx].Layers)) and
+       (FRouteTraces[ATraceIdx].Points[ii - 1].X = Pt.X) and
+       (FRouteTraces[ATraceIdx].Points[ii - 1].Y = Pt.Y) then
     begin
-      L := FRoutingLayers.IndexOf(FRouteTraces[ATraceIdx].Layers[ii]);
-      if (L >= 0) and (L <= High(FRouteObstacles)) then
-        FRouteObstacles[L][Pt.Y * FRouteObstaclesW + Pt.X] := False;
+      La := RouteLayerIndex(FRouteTraces[ATraceIdx].Layers[ii - 1]);
+      Lb := L;
+      if La > Lb then
+      begin
+        Lk := La;
+        La := Lb;
+        Lb := Lk;
+      end;
+      for Lk := La to Lb do
+        if (Lk >= 0) and (Lk <= High(FRouteObstacles)) then
+          FRouteObstacles[Lk][Pt.Y * FRouteObstaclesW + Pt.X] := False;
     end;
   end;
 end;
@@ -1986,6 +2100,7 @@ var
   Path, BestPath: TArray<TPoint>;
   Layers, BestLayers: TArray<Integer>;
   FoundAny: Boolean;
+  SM, GM: UInt64;
 begin
   Result := False;
   if (ATraceIdx < 0) or (ATraceIdx > High(FRouteTraces)) then
@@ -2000,13 +2115,20 @@ begin
     Exit;
   Start := FRouteTraces[ATraceIdx].Points[0];
   Goal := FRouteTraces[ATraceIdx].Points[High(FRouteTraces[ATraceIdx].Points)];
+  // Same per-pin layer restriction the original route was made under.
+  SM := FRouteTraces[ATraceIdx].StartMask;
+  GM := FRouteTraces[ATraceIdx].GoalMask;
+  if SM = 0 then
+    SM := High(UInt64);
+  if GM = 0 then
+    GM := High(UInt64);
   UnblockTrace(ATraceIdx); // free the current wire's space for the search
   FoundAny := False;
   BestLen := MaxDouble;
   BestPath := nil;
   BestLayers := nil;
   for L := 0 to High(FRouteLayers) do
-    if LeeRoute(Start, Goal, L, Path, Layers) then
+    if LeeRoute(Start, Goal, L, SM, GM, Path, Layers) then
     begin
       FoundAny := True;
       Len := PathLengthUm(Path, Core);
@@ -2017,7 +2139,7 @@ begin
         BestLayers := Layers;
       end;
     end;
-  if LeeRoute(Start, Goal, -1, Path, Layers) then
+  if LeeRoute(Start, Goal, -1, SM, GM, Path, Layers) then
   begin
     FoundAny := True;
     Len := PathLengthUm(Path, Core);
@@ -3443,6 +3565,39 @@ end;
 
 // Grid block of a gate's pin on routing layer ALayer (gate origin from
 // FGatePlacement); falls back to the first shape, then the cell centre.
+// Routing layers a pin's LEF shapes allow (bit k = FRouteLayers[k]). A port
+// with no shapes at all is a synthetic cell (clock delay / trunk buffer), which
+// may connect on any layer; a port whose shapes are all on non-routing layers
+// yields 0, i.e. no wire can ever reach it.
+function TForm1.PortLayerMask(G: TGateInstance; const PinName: string): UInt64;
+var
+  Port: TPort;
+  Shape: TPortShape;
+  k: Integer;
+begin
+  Result := 0;
+  if (G = nil) or (G.Cell = nil) then
+    Exit(High(UInt64));
+  Port := G.Cell.FindPort(PinName);
+  if (Port = nil) or (Port.Shapes.Count = 0) then
+    Exit(High(UInt64));
+  for Shape in Port.Shapes do
+    for k := 0 to High(FRouteLayers) do
+      if SameText(Shape.Layer, FRouteLayers[k]) then
+        Result := Result or (UInt64(1) shl k);
+end;
+
+// Lowest allowed route-layer index (0 when the mask allows none).
+function TForm1.FirstMaskLayer(Mask: UInt64): Integer;
+var
+  k: Integer;
+begin
+  Result := 0;
+  for k := 0 to High(FRouteLayers) do
+    if ((Mask shr k) and 1) <> 0 then
+      Exit(k);
+end;
+
 function TForm1.GatePinBlock(G: TGateInstance; const PinName: string;
   ALayer: Integer; var P: TPoint): Boolean;
 var
@@ -3566,6 +3721,7 @@ end;
 // Windowed A* maze: straight costs 1, a turn adds TurnPenalty, a via ViaPenalty.
 // UseLayer >= 0 pins one layer (no vias); OutPath/OutLayers get the path and layers.
 function TForm1.LeeRoute(Start, Goal: TPoint; UseLayer: Integer;
+  StartMask, GoalMask: UInt64;
   var OutPath: TArray<TPoint>; var OutLayers: TArray<Integer>): Boolean;
 const
   DirDx: array[0..3] of Integer = (1, -1, 0, 0);
@@ -3710,6 +3866,12 @@ begin
     Exit;
   if UseLayer >= NumLayers then
     Exit;
+  // A single-layer pass can only connect pins that BOTH have metal on it: with
+  // no via allowed at a pin, there is nothing to land on otherwise.
+  if UseLayer >= 0 then
+    if (((StartMask shr UseLayer) and 1) = 0) or
+       (((GoalMask shr UseLayer) and 1) = 0) then
+      Exit;
   if (Start.X = Goal.X) and (Start.Y = Goal.Y) then
   begin
     SetLength(OutPath, 1);
@@ -3811,13 +3973,17 @@ begin
     HeapPush(S);
   end
   else
+    // The wire leaves the driver pin on one of the pin's own layers: pins are
+    // pillars, so no via may sit there. Everything else is reached by vias
+    // along the way.
     for L := 0 to NumLayers - 1 do
-    begin
-      S := StateId(Start.X - WinX0, Start.Y - WinY0, L, -1);
-      gScore[S] := 0;
-      Parent[S] := -1;
-      HeapPush(S);
-    end;
+      if ((StartMask shr L) and 1) <> 0 then
+      begin
+        S := StateId(Start.X - WinX0, Start.Y - WinY0, L, -1);
+        gScore[S] := 0;
+        Parent[S] := -1;
+        HeapPush(S);
+      end;
 
   while HeapCount > 0 do
   begin
@@ -3844,6 +4010,10 @@ begin
 
     if (CurX = Goal.X) and (CurY = Goal.Y) then
     begin
+      // The wire must arrive on a layer the pin actually has: no via is allowed
+      // on a pin pillar, so a foreign arrival would connect to nothing.
+      if ((GoalMask shr EffLayer) and 1) = 0 then
+        Continue;
       // The last straight ends at the goal (a port): if that final run lands in
       // the resonance danger zone, reject this arrival and keep searching.
       if InDangerZone(RunLen[S]) then
@@ -3916,14 +4086,15 @@ begin
     end;
 
     // Via transitions (multi-layer search only): switch layers on the spot.
-    // The heading is unchanged, so no turn penalty applies.
-    if UseLayer < 0 then
+    // The heading is unchanged, so no turn penalty applies. NOT on the goal
+    // cell: the pads/pins are obstruction pillars, so no via geometry may sit
+    // where the pin is. The wire has to arrive there on its own layer.
+    if (UseLayer < 0) and not ((CurX = Goal.X) and (CurY = Goal.Y)) then
       for L := 0 to NumLayers - 1 do
       begin
         if L = CurLayer then
           Continue;
-        if FRouteObstacles[L][CurY * W + CurX] and
-           not ((CurX = Goal.X) and (CurY = Goal.Y)) then
+        if FRouteObstacles[L][CurY * W + CurX] then
           Continue;
         // A via is a discontinuity: it ends the current straight run, so deny it
         // if that run lands in the resonance danger zone.

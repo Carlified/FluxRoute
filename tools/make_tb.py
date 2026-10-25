@@ -119,6 +119,7 @@ def main():
     ap.add_argument("--spec", help="JSON spec file {net: bits}")
     ap.add_argument("--out", help="output .cir (default: config.tbOut)")
     ap.add_argument("--time-step", type=float, help="override timeStepPs from config")
+    ap.add_argument("--period", type=float, help="override clock period in ps")
     ap.add_argument("--startup-periods", type=float,
                     help="override startupPeriods (skip this many clock edges)")
     ap.add_argument("--data-phase", type=float,
@@ -126,6 +127,10 @@ def main():
     ap.add_argument("--slots", type=int, help="override number of bit slots")
     ap.add_argument("--decode-start-periods", type=float,
                     help="override decodeStartPeriods")
+    ap.add_argument("--minimal-probes", action="store_true",
+                    help="print only output phase probes (no clock/input/readout voltages)")
+    ap.add_argument("--probe-nodes", action="store_true",
+                    help="print output node voltages instead of phase probes")
     args = ap.parse_args()
 
     cfg = load_json(args.config)
@@ -152,7 +157,7 @@ def main():
     rsfq = cfg["rsfqLib"]
 
     # clock period (ps)
-    period = cfg.get("clockPeriodPs", 0.0)
+    period = args.period or cfg.get("clockPeriodPs", 0.0)
     if not period or period <= 0:
         freq = design.get("freqGHz", 0.0)
         if not freq or freq <= 0:
@@ -245,11 +250,16 @@ def main():
     L.append(f"* output watch {watch:g} ps, decode window {decode_start:g} ps "
              f"(max depth {max_depth:g}, periods {levels:g}, travel {travel:g} ps)")
     L.append(f".tran {fmt(dt)}p {fmt(stop)}p 0")
-    probe = ["p(B3.XSCLK)", "v(clk_i)", "i(I_clk)"]
-    probe += [f"i(I_{n})" for n in inputs]
-    probe += [f"v({n}_i)" for n in inputs]
-    probe += [f"p(B1.XR{n})" for n in design.get("outputs", [])]
-    probe += [f"v(r{n})" for n in design.get("outputs", [])]
+    if args.probe_nodes:
+        probe = [f"v({n}_o)" for n in design.get("outputs", [])]
+    elif args.minimal_probes:
+        probe = [f"p(B1.XR{n})" for n in design.get("outputs", [])]
+    else:
+        probe = ["p(B3.XSCLK)", "v(clk_i)", "i(I_clk)"]
+        probe += [f"i(I_{n})" for n in inputs]
+        probe += [f"v({n}_i)" for n in inputs]
+        probe += [f"p(B1.XR{n})" for n in design.get("outputs", [])]
+        probe += [f"v(r{n})" for n in design.get("outputs", [])]
     L.append(".print " + " ".join(probe))
     L.append(".end")
 

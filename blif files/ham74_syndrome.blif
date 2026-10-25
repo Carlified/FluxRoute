@@ -1,0 +1,25 @@
+# Hamming(7,4) syndrome checker (10 gates)
+# Inputs: r1-r7 (received codeword, bit positions 1..7)
+# Outputs: s1 s2 s3 (syndrome, s = s3 s2 s1 names the error position
+#          when a single bit is flipped), err (1 if any syndrome bit set)
+# Parity checks: s1 = r1^r3^r5^r7, s2 = r2^r3^r6^r7, s3 = r4^r5^r6^r7
+
+.model ham74_syndrome
+.inputs r1 r2 r3 r4 r5 r6 r7
+.outputs s1 s2 s3 err
+
+.gate THmitll_XORT a=r1 b=r3 q=x1
+.gate THmitll_XORT a=r5 b=r7 q=x2
+.gate THmitll_XORT a=x1 b=x2 q=s1
+
+.gate THmitll_XORT a=r2 b=r3 q=y1
+.gate THmitll_XORT a=r6 b=r7 q=w
+.gate THmitll_XORT a=y1 b=w q=s2
+
+.gate THmitll_XORT a=r4 b=r5 q=z1
+.gate THmitll_XORT a=z1 b=w q=s3
+
+.gate THmitll_OR2T a=s1 b=s2 q=e1
+.gate THmitll_OR2T a=e1 b=s3 q=err
+
+.end

@@ -1,0 +1,55 @@
+# 4-bit TMR voter with disagreement flag (35 gates)
+# Inputs: a0-a3, b0-b3, c0-c3 (three redundant copies of a 4-bit word)
+# Outputs: v0-v3 (bitwise majority), dis (1 if any copy disagrees)
+# Per bit: majority = ab | ac | bc; disagree = (a^b) | (b^c)
+
+.model tmr_voter4
+.inputs a0 a1 a2 a3 b0 b1 b2 b3 c0 c1 c2 c3
+.outputs v0 v1 v2 v3 dis
+
+# Bit 0
+.gate THmitll_AND2T a=a0 b=b0 q=ab0
+.gate THmitll_AND2T a=a0 b=c0 q=ac0
+.gate THmitll_AND2T a=b0 b=c0 q=bc0
+.gate THmitll_OR2T a=ab0 b=ac0 q=t0
+.gate THmitll_OR2T a=t0 b=bc0 q=v0
+.gate THmitll_XORT a=a0 b=b0 q=xab0
+.gate THmitll_XORT a=b0 b=c0 q=xbc0
+.gate THmitll_OR2T a=xab0 b=xbc0 q=d0
+
+# Bit 1
+.gate THmitll_AND2T a=a1 b=b1 q=ab1
+.gate THmitll_AND2T a=a1 b=c1 q=ac1
+.gate THmitll_AND2T a=b1 b=c1 q=bc1
+.gate THmitll_OR2T a=ab1 b=ac1 q=t1
+.gate THmitll_OR2T a=t1 b=bc1 q=v1
+.gate THmitll_XORT a=a1 b=b1 q=xab1
+.gate THmitll_XORT a=b1 b=c1 q=xbc1
+.gate THmitll_OR2T a=xab1 b=xbc1 q=d1
+
+# Bit 2
+.gate THmitll_AND2T a=a2 b=b2 q=ab2
+.gate THmitll_AND2T a=a2 b=c2 q=ac2
+.gate THmitll_AND2T a=b2 b=c2 q=bc2
+.gate THmitll_OR2T a=ab2 b=ac2 q=t2
+.gate THmitll_OR2T a=t2 b=bc2 q=v2
+.gate THmitll_XORT a=a2 b=b2 q=xab2
+.gate THmitll_XORT a=b2 b=c2 q=xbc2
+.gate THmitll_OR2T a=xab2 b=xbc2 q=d2
+
+# Bit 3
+.gate THmitll_AND2T a=a3 b=b3 q=ab3
+.gate THmitll_AND2T a=a3 b=c3 q=ac3
+.gate THmitll_AND2T a=b3 b=c3 q=bc3
+.gate THmitll_OR2T a=ab3 b=ac3 q=t3
+.gate THmitll_OR2T a=t3 b=bc3 q=v3
+.gate THmitll_XORT a=a3 b=b3 q=xab3
+.gate THmitll_XORT a=b3 b=c3 q=xbc3
+.gate THmitll_OR2T a=xab3 b=xbc3 q=d3
+
+# Global disagreement OR-reduction
+.gate THmitll_OR2T a=d0 b=d1 q=u1
+.gate THmitll_OR2T a=d2 b=d3 q=u2
+.gate THmitll_OR2T a=u1 b=u2 q=dis
+
+.end

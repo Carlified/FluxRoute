@@ -59,6 +59,9 @@ type
     LoadPin: string;
     Dist: Integer;  // Manhattan pin distance (ordering)
     Start, Goal: TPoint; // terminal grid blocks (resolved once)
+    // Routing layers each pin may connect on (bit k = FRouteLayers[k]).
+    // High(UInt64) marks a pad or a shapeless synthetic cell: any layer.
+    StartMask, GoalMask: UInt64;
     StartValid, GoalValid: Boolean;
     Routed: Boolean;
     Path: TArray<TPoint>;
@@ -282,6 +285,10 @@ procedure ButtonOptimizeClick(Sender: TObject);
     FValidationBuffers: TArray<TValidationBuffer>; // clock trunk buffers (validation)
     FLengthBuffers: TArray<TLengthBufferPlacement>; // length mask (validation)
     FMinClockPeriodPs: Double;                      // timing-derived min clock period
+  // The three limits behind it (ps), kept for the export and the logs:
+  FMinPeriodTimingPs: Double;                     // data path + setup
+  FMinPeriodSpacingPs: Double;                    // cell input-spacing requirement
+  FMinPeriodWindowExtraPs: Double;                // extra period the input window needed
   FInputWindowFound: Boolean;                     // first-batch launch window valid
   FInputWindowStartPs: Double;                    // earliest launch at the min period (+1 initial period)
   FInputWindowEndPs: Double;                      // latest launch (period independent) (+1 initial period)
@@ -297,6 +304,7 @@ procedure ButtonOptimizeClick(Sender: TObject);
   FBiasExpansionFailed: Boolean;                  // bias lines do not fit the die
   FRouteFailedLinks: Integer;                     // links the router could not route
   FBiasGatesSeen: Integer;                        // powered cells allotted bias
+  FBiasGateSet: TDictionary<TGateInstance, Boolean>; // the gates themselves (audit)
   FClockLevelSkew: TArray<Double>;                // per clock level, max-min arrival
   FRouteRuntimeMs: Int64;                         // wall-clock of the routing stage
     FSwitchingTab: Boolean;
@@ -480,6 +488,9 @@ procedure AppendScanTally(const D: TExportDesign;
     function TraceLengthUm(const ATr: TRoutedTrace; Core: Double): Double;
     function IsBiasTrace(const ATr: TRoutedTrace): Boolean;
     function PathLengthUm(const Pts: TArray<TPoint>; Core: Double): Double;
+    // Index of a routing-layer NAME in the router's own layer list
+    // (FRouteLayers, which is what indexes FRouteObstacles) - not the UI list.
+    function RouteLayerIndex(const AName: string): Integer;
     procedure BlockTrace(ATraceIdx: Integer);
     procedure UnblockTrace(ATraceIdx: Integer);
     function RerouteTrace(ATraceIdx: Integer): Boolean;
@@ -495,6 +506,9 @@ procedure AppendScanTally(const D: TExportDesign;
     function InsertBufferForTrace(ATraceIdx: Integer): Boolean;
     procedure DrawRoutedTraces(Canvas: TCanvas);
     procedure DrawResonancePulses(Canvas: TCanvas; Core, ScaleCap: Double);
+    // Routing layers a pin's LEF shapes allow (bit k = FRouteLayers[k]).
+    function PortLayerMask(G: TGateInstance; const PinName: string): UInt64;
+    function FirstMaskLayer(Mask: UInt64): Integer;
     function GatePinBlock(G: TGateInstance; const PinName: string;
       ALayer: Integer; var P: TPoint): Boolean;
     function GatePinBlockAt(G: TGateInstance; const PinName: string;
@@ -502,11 +516,14 @@ procedure AppendScanTally(const D: TExportDesign;
     procedure BuildRoutingObstacles;
     // Windowed A* maze: UseLayer >= 0 pins one layer (no vias), < 0 allows all
     // layers via vias; turns cost more than straight; path/layers fill OutPath/OutLayers.
+    // StartMask/GoalMask restrict the layers the two pins can be reached on.
     function LeeRoute(Start, Goal: TPoint; UseLayer: Integer;
+      StartMask, GoalMask: UInt64;
       var OutPath: TArray<TPoint>; var OutLayers: TArray<Integer>): Boolean;
     procedure OrderLayer(L: Integer; CrossOnly: Boolean);
     procedure ResolvePlacementOverlaps;
     procedure OptimizePlacement;
+    function ClockLimiterName: string;
     // Rebuilds the geometry (bands, bias rows/lanes, die) and puts the optimized
     // placement back. OldModel is the model the current placement was built
     // from, when FPlacementModel has already been swapped for a clone.
@@ -582,7 +599,12 @@ begin
   FPlanDieWExtra := 0; // run-time growth never survives a reset
   FRouteFailedLinks := 0;
   FBiasGatesSeen := 0;
+  FreeAndNil(FBiasGateSet); // borrowed gate pointers die with the models
   FClockLevelSkew := nil;
+  FMinClockPeriodPs := 0; // and the three limits behind it
+  FMinPeriodTimingPs := 0;
+  FMinPeriodSpacingPs := 0;
+  FMinPeriodWindowExtraPs := 0;
   FRouteRuntimeMs := 0;
   ScrapValidationModel; // validation never survives a workspace reset
   FPlacementModel := nil;
@@ -822,9 +844,11 @@ begin
   RemoveClockValidationBuffers;
   if FOwnedPlacementModel = nil then
     Exit;
-  // The clone's gates are referenced by FValidationBuffers, so those records go
-  // with it (they are meaningless once the model is gone).
+  // The clone's gates are referenced by FValidationBuffers and the bias audit
+  // set, so those go with it (they are meaningless once the model is gone).
   FValidationBuffers := nil;
+  FreeAndNil(FBiasGateSet);
+  FBiasGatesSeen := 0;
   // Restore the pristine base: validation results never travel backwards.
   FPlacementModel := FPipelineModel;
   if FPlacementModel = nil then
@@ -1813,12 +1837,19 @@ begin
     // Bias lines: always routable programmatically, run after the main circuit
     // routing so the floorplan is settled. Each partition group becomes one track.
     RouteBiasLines;
+    // Report the route time even when the route failed: the number is what the
+    // user compares between runs.
+    MemoRouting.Lines.Add(Format('Routing time: %.2f s.',
+      [SW.Elapsed.TotalSeconds]));
     // Routing and validation are one action now: validate immediately when the
     // route completed cleanly (RunRouting only advances the stage on success).
     if FFlowStage >= fsRouted then
       RunRoutingValidation;
     // The reported route time covers the whole action, validation included.
     FRouteRuntimeMs := SW.ElapsedMilliseconds;
+    // Total from the start of the action (not just the validation slice).
+    MemoRouting.Lines.Add(Format('Total time (routing + validation): %.2f s.',
+      [SW.Elapsed.TotalSeconds]));
     MemoRouting.Lines.Add(
       'Bias lines routed from the partition groups.');
     // Validation-inserted buffers (ClockLevel -1, so BuildFloorplan skips them)
@@ -2075,9 +2106,15 @@ begin
   if FMinClockPeriodPs > 0 then
     MaxGHz := 1000.0 / FMinClockPeriodPs; // ps period -> GHz
   if MaxGHz > 0 then
+  begin
     Lines.Add(Format('Clocking: max %.2f GHz (%.1f ps period), ' +
       'target %.2f GHz, %d pipeline level(s).',
-      [MaxGHz, FMinClockPeriodPs, TargetGHz, Levels]))
+      [MaxGHz, FMinClockPeriodPs, TargetGHz, Levels]));
+    Lines.Add(Format('  Period limits: data path %.1f ps, input spacing %.1f ps, ' +
+      'input window +%.1f ps -> limited by %s.',
+      [FMinPeriodTimingPs, FMinPeriodSpacingPs, FMinPeriodWindowExtraPs,
+       ClockLimiterName]));
+  end
   else
     Lines.Add(Format('Clocking: max unknown (validation not run), ' +
       'target %.2f GHz, %d pipeline level(s).',
