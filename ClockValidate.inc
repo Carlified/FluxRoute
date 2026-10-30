@@ -376,6 +376,11 @@ begin
           'CLOCK VALIDATION FAILED: could not insert a buffer on %s (cell %s, ' +
           'level %d, clock %.1f ps, data %.1f ps).',
           [V.TrunkNet, V.CellName, V.Level, V.ClkArrPs, V.DataArrPs]));
+        if FBiasExpansionFailed then
+          MemoRouting.Lines.Add(
+            '  The bias expansion failed: raise the die height (or widen the ' +
+            'die / lower the bias current) on the Placement page, expand the ' +
+            'bias lines again, then re-run routing.');
         Result := False;
         Exit;
       end;

@@ -19,7 +19,7 @@ interface
 
 uses
   System.SysUtils, System.Generics.Collections,
-  BlifLibrary, LefLibrary, VerilogTiming, PipelineConfig;
+  BlifLibrary, LefLibrary, VerilogTiming, PipelineConfig, UNetNaming;
 
 type
   TClockViolation = record
@@ -438,8 +438,13 @@ begin
   NetArr := TDictionary<string, Double>.Create;
   try
     Keys := AModel.Nets.Keys.ToArray;
+    // The clock is a primary input too, but it is not input DATA: seeding it
+    // makes the walk treat the clock tree as a data path, so every clocked cell
+    // gets an "input arrival" equal to its clock arrival and the input window
+    // collapses to period - setup. Skip the clock net here.
     for i := 0 to High(Keys) do
-      if AModel.Inputs.IndexOf(Keys[i]) >= 0 then
+      if (AModel.Inputs.IndexOf(Keys[i]) >= 0) and
+         (not UNetNaming.IsClockNetName(Keys[i])) then
         NetArr.AddOrSetValue(Keys[i], 0);
 
     Guard := 0;
@@ -452,6 +457,10 @@ begin
           for NC in Net.Connections do
           begin
             if NC.IsDriver then
+              Continue;
+            // A net can reach a clock tree even when it is not itself named like
+            // one (an aliased/derived clock). Clock pins are never input data.
+            if IsClockPinName(NC.PinName) then
               Continue;
             A := Base + LinkPs(NC.Gate, NC.PinName);
             if CellHasClock(NC.Gate.Cell) then
