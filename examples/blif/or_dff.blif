@@ -1,0 +1,15 @@
+# Dead-simple test circuit: OR gate followed by a DFF
+# Inputs: a, b
+# Output: out (registered a OR b)
+#
+# The DFFT keeps the circuit to a single routable layer per stage.
+# Clock pins are omitted here and added in postprocessing.
+
+.model or_dff
+.inputs a b
+.outputs out
+
+.gate THmitll_OR2T a=a b=b q=or_out
+.gate THmitll_DFFT a=or_out q=out
+
+.end

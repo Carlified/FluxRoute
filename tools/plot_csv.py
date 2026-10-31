@@ -30,7 +30,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def load_config(path=None):
-    with open(path or os.path.join(HERE, "config.json"), "r", encoding="utf-8") as f:
+    path = path or os.path.join(HERE, "config.json")
+    if not os.path.exists(path):
+        raise SystemExit(
+            f"config not found: {path}\n"
+            "Copy tools/config.example.json to tools/config.json and fill in the "
+            "paths for your machine (JoSIM, RSFQ library, output folder).")
+    with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 

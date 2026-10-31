@@ -55,9 +55,21 @@ __recovery/
 *.~*
 *.bak
 
-# Python bytecode
+# Python bytecode and virtual environments
 __pycache__/
 *.pyc
+.venv/
+venv/
+
+# Per-machine tool config (copy tools/config.example.json to tools/config.json)
+tools/config.json
+
+# Release packaging
+dist/
+*.zip
+
+# Logs
+*.log
 
 # OS noise
 Thumbs.db

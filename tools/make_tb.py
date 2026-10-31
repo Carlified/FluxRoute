@@ -31,6 +31,11 @@ PTLRX = "mitll_PTLRX-SFQDC/THmitll_PTLRX-SFQDC_v3p0_extracted.cir"
 
 
 def load_json(path):
+    if not os.path.exists(path):
+        raise SystemExit(
+            f"config not found: {path}\n"
+            "Copy tools/config.example.json to tools/config.json and fill in the "
+            "paths for your machine (JoSIM, RSFQ library, output folder).")
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 

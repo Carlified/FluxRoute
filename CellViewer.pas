@@ -129,13 +129,18 @@ end;
 
 function FindScriptPath: string;
 var
-  Dir: string;
+  Dir, ToolsDir: string;
   i: Integer;
 begin
   Result := '';
 
+  // The script lives in tools/; accept it next to the app too so a deployed
+  // folder (script copied beside the executable) keeps working.
   // running from the IDE usually means the working directory is the project
   Dir := IncludeTrailingPathDelimiter(GetCurrentDir);
+  ToolsDir := Dir + 'tools' + PathDelim;
+  if FileExists(ToolsDir + 'gds_to_json.py') then
+    Exit(ToolsDir + 'gds_to_json.py');
   if FileExists(Dir + 'gds_to_json.py') then
     Exit(Dir + 'gds_to_json.py');
 
@@ -143,6 +148,9 @@ begin
   Dir := ExtractFilePath(GetModuleName(HInstance));
   for i := 0 to 6 do
   begin
+    ToolsDir := Dir + 'tools' + PathDelim;
+    if FileExists(ToolsDir + 'gds_to_json.py') then
+      Exit(ToolsDir + 'gds_to_json.py');
     if FileExists(Dir + 'gds_to_json.py') then
       Exit(Dir + 'gds_to_json.py');
     Dir := ExtractFilePath(ExcludeTrailingPathDelimiter(Dir));

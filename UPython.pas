@@ -1,4 +1,4 @@
-﻿unit UPython;
+unit UPython;
 
 // Locates a Python 3 interpreter and runs scripts (used by the cell viewer's GDS
 // parsing and the export's GDS writer). Both depend on `gdstk` being installed.
@@ -89,18 +89,26 @@ end;
 
 function LocateScript(const AScriptName: string): string;
 var
-  Dir: string;
+  Dir, ToolsDir: string;
   i: Integer;
 begin
   Result := '';
+  // The scripts live in tools/; accept one next to the app too so a deployed
+  // folder (scripts copied beside the executable) keeps working.
   // running from the IDE usually means the working directory is the project
   Dir := IncludeTrailingPathDelimiter(GetCurrentDir);
+  ToolsDir := Dir + 'tools' + PathDelim;
+  if FileExists(ToolsDir + AScriptName) then
+    Exit(ToolsDir + AScriptName);
   if FileExists(Dir + AScriptName) then
     Exit(Dir + AScriptName);
   // otherwise walk up from the exe (Win32\Debug -> Win32 -> project root, ...)
   Dir := ExtractFilePath(GetModuleName(HInstance));
   for i := 0 to 6 do
   begin
+    ToolsDir := Dir + 'tools' + PathDelim;
+    if FileExists(ToolsDir + AScriptName) then
+      Exit(ToolsDir + AScriptName);
     if FileExists(Dir + AScriptName) then
       Exit(Dir + AScriptName);
     Dir := ExtractFilePath(ExcludeTrailingPathDelimiter(Dir));
