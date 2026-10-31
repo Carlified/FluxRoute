@@ -379,6 +379,16 @@ procedure ButtonOptimizeClick(Sender: TObject);
     // over the logic/clock rows, visible to routing/bias but never merged into
     // FPlacedComponents/FSpine/the clock subtree.
     procedure ReapplyLengthBufferMask;
+    // Shared clearance test for the buffer mask layer: true when a W x H buffer
+    // at (X, Y) touches any placed cell, clock node, trunk cell or length buffer.
+    // One clear block is required on each side, the same gap the row packer uses.
+    function BufferSlotBlocked(X, Y, W, H: Integer;
+      SkipGate: TGateInstance = nil): Boolean;
+    // Nearest free buffer slot: outward from (WantBand, WantRowType, WantX), same
+    // band's other row next, then the nearest bands. W/H are the buffer's own
+    // footprint (one buffer cell type, so it is a fixed calculation per run).
+    function FindBufferSlot(WantBand, WantRowType, WantX, W, H: Integer;
+      out ABand, ARowType, AX, AY: Integer): Boolean;
     procedure RemoveLengthBuffers;
     function IsLengthMaskGate(G: TGateInstance): Boolean;
     procedure CheckValidationBufferOwnership;
@@ -387,6 +397,10 @@ procedure ButtonOptimizeClick(Sender: TObject);
     procedure LoadLibraryFromFile(const Path: string; AShowErrors: Boolean = True);
     procedure SetCellFolderPath(const Path: string; AShowErrors: Boolean = True);
     procedure LoadNetlistFromFile(const Path: string; AShowErrors: Boolean = True);
+    // Dumps the model the tool is working on into the netlist memo: the parsed
+    // view (inputs/outputs, gates with levels and pin=net, nets with drivers and
+    // loads) plus the parse/connectivity/level errors.
+    procedure RenderNetlist(Model: TBlifModel; Errors: TStrings);
     procedure ApplyProjectSettings;
     procedure OpenProjectFile(const Path: string);
     procedure SaveProjectFileAs;
@@ -397,6 +411,9 @@ procedure ButtonOptimizeClick(Sender: TObject);
     procedure ValidateFloorplanLayout;
     procedure FormatPlacementFields;
     procedure AddPlacementMsg(const Text: string; Color: TAlphaColor; IsError: Boolean);
+    // True only with a usable LEF and the cell folder: every later page needs
+    // both, so the library page must be completed before the flow continues.
+    function LibraryReady: Boolean;
     procedure UpdateUI;
     function IsSplitterCandidate(const Cell: TCell; out NumOutputs: Integer): Boolean;
     function CellDelayPs(const Cell: TCell): Double;
@@ -435,6 +452,10 @@ procedure ButtonOptimizeClick(Sender: TObject);
     procedure UpdateManhattanDiagnostic;
     function GetPad(const ANetName: string; var P: TPoint): Boolean;
     function PadSlotX(k, N, Right: Integer): Single;
+    // Right edge (exclusive) of the output pad row: the clock pad is fixed in
+    // the middle of the clock trunk on the same row, so the outputs stop short
+    // of it instead of being spread across its space.
+    function OutputPadRight: Integer;
     function NearestPadSlot(DragX: Single; N, Right: Integer): Integer;
     function PreviewPadOrder(const Ord: TArray<Integer>;
       DragIdx, Slot: Integer): TArray<Integer>;
@@ -636,6 +657,7 @@ end;
 procedure TForm1.LoadLibraryFromFile(const Path: string; AShowErrors: Boolean);
 var
   Lib: TLibrary;
+  Problem: string;
   i: Integer;
 begin
   if not TFile.Exists(Path) then
@@ -658,6 +680,21 @@ begin
       UpdateUI;
       Exit;
     end;
+  end;
+
+  // A file can parse and still be useless (no cells, no routing layer, no
+  // ports). Refuse it here: the library page stays locked and the flow cannot
+  // continue into a failure that only shows up pages later.
+  Problem := LefLibraryProblem(Lib);
+  if Problem <> '' then
+  begin
+    Lib.Free;
+    if AShowErrors then
+      ShowMessage('LEF library cannot be used:' + sLineBreak + sLineBreak +
+        Problem + sLineBreak + sLineBreak +
+        'Fix the LEF file and load it again.');
+    UpdateUI;
+    Exit;
   end;
 
   FLib := Lib;
@@ -711,6 +748,7 @@ end;
 procedure TForm1.LoadNetlistFromFile(const Path: string; AShowErrors: Boolean);
 var
   Errors: TStringList;
+  Problem: string;
 begin
   if FLib = nil then
     Exit;
@@ -751,10 +789,105 @@ begin
 
     ComputeClockLevels(FModel, Errors);
 
+    // Show exactly what the parser produced, errors included.
+    RenderNetlist(FModel, Errors);
+
+    // An empty model is not a circuit: refuse it here, say why, and leave the
+    // flow locked instead of letting later pages fail one by one.
+    Problem := BlifModelProblem(FModel);
+    if Problem <> '' then
+    begin
+      memoNetlist.Lines.Add('');
+      memoNetlist.Lines.Add('NETLIST REJECTED: ' + Problem);
+      if AShowErrors then
+        ShowMessage('BLIF netlist cannot be used:' + sLineBreak + sLineBreak +
+          Problem + sLineBreak + sLineBreak +
+          'The netlist page shows what the parser read.');
+      if FPlacementModel = FModel then
+        FPlacementModel := nil;
+      FModel.Free;
+      FModel := nil;
+      FFlowStage := fsVirgin;
+      FreePipelineRows;
+      FreePipelineModel;
+      FreeClockModel;
+      UpdateUI;
+      Exit;
+    end;
   finally
     Errors.Free;
   end;
   UpdateUI;
+end;
+
+// Dumps the model into the netlist memo. On the pipeline page the DFF-inserted
+// model is shown, because that is what the pipeline view is built from.
+procedure TForm1.RenderNetlist(Model: TBlifModel; Errors: TStrings);
+var
+  Dump: TStringList;
+  DumpModel: TBlifModel;
+  i: Integer;
+  Gate: TGateInstance;
+  Conn: TPinConnection;
+  Net: TNet;
+  NC: TNetConnection;
+  NetName, Line: string;
+begin
+  if Model = nil then
+    Exit;
+  DumpModel := Model;
+  if (TabControl1.TabIndex = TabPipeline) and (FPipelineModel <> nil) and
+     (FPipelineModel <> Model) then
+    DumpModel := FPipelineModel;
+  Dump := TStringList.Create;
+  try
+    Dump.Add('Model: ' + DumpModel.Name);
+    Dump.Add('');
+    Dump.Add('Primary inputs: ' + DumpModel.Inputs.CommaText);
+    Dump.Add('Primary outputs: ' + DumpModel.Outputs.CommaText);
+    Dump.Add('');
+    Dump.Add(Format('Gates (%d):', [DumpModel.Gates.Count]));
+    for i := 0 to DumpModel.Gates.Count - 1 do
+    begin
+      Gate := DumpModel.Gates[i];
+      Line := Format('  %3d. %-14s [L%d]', [i + 1, Gate.CellName, Gate.ClockLevel]);
+      for Conn in Gate.Connections do
+        Line := Line + Format('  %s=%s', [Conn.PinName, Conn.NetName]);
+      Dump.Add(Line);
+    end;
+    Dump.Add('');
+    Dump.Add(Format('Nets (%d):', [DumpModel.Nets.Count]));
+    for NetName in DumpModel.Nets.Keys do
+    begin
+      Net := DumpModel.Nets[NetName];
+      Line := '  ' + NetName + ':';
+      for NC in Net.Connections do
+        if NC.Gate = nil then
+          Line := Line + '  (pad)'
+        else if NC.IsDriver then
+          Line := Line + Format('  drive=%s.%s', [NC.Gate.CellName, NC.PinName])
+        else
+          Line := Line + Format('  load=%s.%s', [NC.Gate.CellName, NC.PinName]);
+      Dump.Add(Line);
+    end;
+    Dump.Add('');
+    if (Errors <> nil) and (Errors.Count > 0) then
+    begin
+      Dump.Add(Format('ERRORS (%d):', [Errors.Count]));
+      for i := 0 to Errors.Count - 1 do
+        Dump.Add('  ' + Errors[i]);
+    end
+    else
+      Dump.Add('No errors.');
+    memoNetlist.Lines.Assign(Dump);
+  finally
+    Dump.Free;
+  end;
+end;
+
+function TForm1.LibraryReady: Boolean;
+begin
+  Result := (FLib <> nil) and (FCellFolder <> '');
 end;
 
 procedure TForm1.UpdateUI;
@@ -765,7 +898,7 @@ var
   Cell: TCell;
   NumOutputs: Integer;
 begin
-  LibReady := (FLib <> nil) and (FCellFolder <> '');
+  LibReady := LibraryReady;
   btnLoadLibrary.Enabled := (FLib <> nil);
   btnLoadBlif.Enabled := (FLib <> nil);
   lstCells.Enabled := LibReady;
@@ -1441,7 +1574,7 @@ begin
     else
     begin
       N := Length(FPadOrderOutput);
-      Slot := NearestPadSlot(FPadDragX, N, FPlanXRight + FPlanLane0W + FPlanTrunkW);
+      Slot := NearestPadSlot(FPadDragX, N, OutputPadRight);
       FPadOrderOutput := PreviewPadOrder(FPadOrderOutput, FPadDragIdx, Slot);
     end;
     ReapplyPadOrder;
@@ -1594,6 +1727,33 @@ begin
   // re-fires this handler; the Floorplan branch below does the rebuild.
   if FSwitchingTab then
     Exit;
+  // Nothing past the library page is reachable until that page is complete: a
+  // LEF that failed to load (or loaded unusable) leaves FLib nil, and every
+  // later page would only fail. Bounce back to the library page instead.
+  if (TabControl1.TabIndex > TabLibrary) and (not LibraryReady) then
+  begin
+    FSwitchingTab := True;
+    try
+      TabControl1.TabIndex := TabLibrary;
+    finally
+      FSwitchingTab := False;
+    end;
+    UpdateUI;
+    Exit;
+  end;
+  // ... and the netlist page must produce a usable model before the pipeline and
+  // later pages are reachable (an empty BLIF leaves FModel nil).
+  if (TabControl1.TabIndex > TabNetlist) and (FModel = nil) then
+  begin
+    FSwitchingTab := True;
+    try
+      TabControl1.TabIndex := TabNetlist;
+    finally
+      FSwitchingTab := False;
+    end;
+    UpdateUI;
+    Exit;
+  end;
   // The Routing tab is only reachable after the placement has been optimised
   // AND the bias lines expanded, with no placement or floorplan errors. Reject
   // the switch and bounce back to the Floorplan tab otherwise.
@@ -1678,6 +1838,8 @@ begin
     UpdateModeLabel;
     UpdateLimitLabels;
     RepaintPipelinePage;
+    // The netlist memo follows the model the page works on (DFF-inserted).
+    RenderNetlist(FModel, nil);
   end;
   if TabControl1.TabIndex = TabClock then
   begin

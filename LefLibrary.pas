@@ -104,6 +104,12 @@ type
 // !!Caller owns the result and must Free it.
 function LoadLefLibrary(const FileName: string): TLibrary;
 
+// Why a parsed LEF library cannot be used, or '' when it is usable. Parsing is
+// silent (unrecognised lines are skipped), so a syntactically valid file can
+// still describe no cells or no routing metal; the caller must keep the flow
+// locked in that case instead of failing much later.
+function LefLibraryProblem(const ALib: TLibrary): string;
+
 const
   // Linked-source extensions for a cell: timing (.v), layout (.gds),
   // schematic (.cir). New formats get added here.
@@ -525,6 +531,29 @@ begin
   finally
     Lines.Free;
   end;
+end;
+
+function LefLibraryProblem(const ALib: TLibrary): string;
+var
+  i, Routed, Ported: Integer;
+begin
+  Result := '';
+  if ALib = nil then
+    Exit('no library is loaded.');
+  if ALib.Cells.Count = 0 then
+    Exit('the LEF defines no cells (MACRO blocks).');
+  Routed := 0;
+  for i := 0 to ALib.Layers.Count - 1 do
+    if ALib.Layers[i].LayerType = ltRouting then
+      Inc(Routed);
+  if Routed = 0 then
+    Exit('the LEF defines no routing layer (TYPE ROUTING).');
+  Ported := 0;
+  for i := 0 to ALib.Cells.Count - 1 do
+    if ALib.Cells[i].Ports.Count > 0 then
+      Inc(Ported);
+  if Ported = 0 then
+    Exit('no cell in the LEF has a port (PIN).');
 end;
 
 end.

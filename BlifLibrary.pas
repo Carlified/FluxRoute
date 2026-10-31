@@ -71,6 +71,12 @@ type
 // free it; caller should check Errors.Count before trusting the result.
 function ParseBlif(const FileName: string; Lib: TLibrary; Errors: TStrings): TBlifModel;
 
+// Why a parsed netlist cannot be used, or '' when it can. A BLIF can parse into
+// an empty or output-less model (every .gate rejected, no .outputs at all, ...);
+// the caller must keep the flow locked in that case instead of continuing into
+// pages that can only fail.
+function BlifModelProblem(const AModel: TBlifModel): string;
+
 // Walks the already-built net list and reports connectivity problems:
 //  - any net with more than one driver (a short, regardless of I/O status)
 //  - any internal net (not a primary input/output) with no driver, or no loader
@@ -378,6 +384,17 @@ begin
         Errors.Add(Format('Net "%s" is a primary input but no gate uses it', [NetName]));
     end;
   end;
+end;
+
+function BlifModelProblem(const AModel: TBlifModel): string;
+begin
+  Result := '';
+  if AModel = nil then
+    Exit('no netlist is loaded.');
+  if AModel.Gates.Count = 0 then
+    Exit('the netlist contains no gates (no .gate lines, or every one was rejected).');
+  if AModel.Outputs.Count = 0 then
+    Exit('the netlist declares no primary outputs (.outputs).');
 end;
 
 end.

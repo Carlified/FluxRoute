@@ -2230,11 +2230,147 @@ begin
   Result := Best;
 end;
 
+// True when a W x H buffer at (X, Y) would touch a placed cell, a clock-tree
+// interior node, a trunk cell or another length buffer. One clear block is
+// required on each side (X - 1 .. X + W), which is the gap the row packer and
+// the clock-row spreader already leave between cells, so a slot flush against a
+// cell is rejected instead of accepted. SkipGate excludes the buffer being
+// placed from its own test. Pads sit outside the rows and are not tested.
+function TForm1.BufferSlotBlocked(X, Y, W, H: Integer;
+  SkipGate: TGateInstance = nil): Boolean;
+var
+  i, L, ci: Integer;
+  MPt: TPoint;
+begin
+  Result := True;
+  if (W < 1) or (H < 1) then
+    Exit;
+  for i := 0 to High(FPlacedComponents) do
+    if (FPlacedComponents[i].Gate <> SkipGate) and
+       UGeometry.RectOverlap(X - 1, Y, W + 2, H, FPlacedComponents[i].X,
+         FPlacedComponents[i].Y, FPlacedComponents[i].W,
+         FPlacedComponents[i].H) then
+      Exit;
+  for L := 0 to High(FClockSubtree) do
+    for ci := 0 to High(FClockSubtree[L]) do
+      if (not FClockSubtree[L][ci].IsLeaf) and
+         (FClockSubtree[L][ci].Gate <> SkipGate) and
+         UGeometry.RectOverlap(X - 1, Y, W + 2, H, FClockSubtree[L][ci].X,
+           FClockSubtree[L][ci].Y, FClockSubtree[L][ci].W,
+           FClockSubtree[L][ci].H) then
+        Exit;
+  for i := 0 to High(FSpine) do
+    if (FSpine[i].Gate <> SkipGate) and
+       UGeometry.RectOverlap(X - 1, Y, W + 2, H, FSpine[i].X, FSpine[i].Y,
+         FSpine[i].W, FSpine[i].H) then
+      Exit;
+  for i := 0 to High(FLengthBuffers) do
+    if (FLengthBuffers[i].Gate <> nil) and
+       (FLengthBuffers[i].Gate <> SkipGate) and
+       FGatePlacement.TryGetValue(FLengthBuffers[i].Gate, MPt) and
+       UGeometry.RectOverlap(X - 1, Y, W + 2, H, MPt.X, MPt.Y,
+         FLengthBuffers[i].W, FLengthBuffers[i].H) then
+      Exit;
+  Result := False;
+end;
+
+// Nearest free slot for a buffer of footprint W x H: the wanted X first, then
+// alternately right/left along the same row, then the band's other row, then the
+// nearest bands. Returns False when no row of any band can hold it.
+function TForm1.FindBufferSlot(WantBand, WantRowType, WantX, W, H: Integer;
+  out ABand, ARowType, AX, AY: Integer): Boolean;
+var
+  NumBands, band, X, Y: Integer;
+  Step, Dir: Integer;
+
+  function RowFits(ABand, ARow: Integer; out FX, FY: Integer): Boolean;
+  var
+    RowY, StartX, K, Off: Integer;
+  begin
+    Result := False;
+    if ARow = 1 then
+      RowY := BandClockRowY(ABand)
+    else
+      RowY := BandLogicRowY(ABand);
+    FY := RowY + ((FPlanRowHBlocks - H) div 2);
+    StartX := WantX;
+    if StartX > FPlanXRight - W then
+      StartX := FPlanXRight - W;
+    if StartX < FPlanXLeft then
+      StartX := FPlanXLeft;
+    for K := 0 to FPlanXRight - FPlanXLeft do
+    begin
+      if K = 0 then
+        Off := 0
+      else if Odd(K) then
+        Off := (K + 1) div 2
+      else
+        Off := -(K div 2);
+      FX := StartX + Off;
+      if (FX < FPlanXLeft) or (FX > FPlanXRight - W) then
+        Continue;
+      if not BufferSlotBlocked(FX, FY, W, H) then
+        Exit(True);
+    end;
+  end;
+
+begin
+  Result := False;
+  ABand := -1;
+  ARowType := -1;
+  AX := -1;
+  AY := -1;
+  NumBands := Length(FPlanBandStarts);
+  if (NumBands = 0) or (W < 1) or (H < 1) or (H > FPlanRowHBlocks) or
+     (W > FPlanXRight - FPlanXLeft) then
+    Exit;
+  if WantBand < 0 then
+    WantBand := 0;
+  if WantBand > NumBands - 1 then
+    WantBand := NumBands - 1;
+  if (WantRowType <> 0) and (WantRowType <> 1) then
+    WantRowType := 1;
+  for Step := 0 to NumBands - 1 do
+    for Dir := 0 to 1 do
+    begin
+      if Step = 0 then
+      begin
+        if Dir <> 0 then
+          Continue;
+        band := WantBand;
+      end
+      else if Dir = 0 then
+        band := WantBand - Step
+      else
+        band := WantBand + Step;
+      if (band < 0) or (band > NumBands - 1) then
+        Continue;
+      // The wanted row type first, then the band's other row.
+      if RowFits(band, WantRowType, X, Y) then
+      begin
+        ABand := band;
+        ARowType := WantRowType;
+        AX := X;
+        AY := Y;
+        Exit(True);
+      end;
+      if RowFits(band, 1 - WantRowType, X, Y) then
+      begin
+        ABand := band;
+        ARowType := 1 - WantRowType;
+        AX := X;
+        AY := Y;
+        Exit(True);
+      end;
+    end;
+end;
+
 // Re-applies each validation buffer's slot after a floorplan rebuild: signal
 // buffers rejoin FPlacedComponents, clock buffers move within FClockSubtree.
 procedure TForm1.ReapplyValidationBuffers;
 var
   i, i2, W, H, Y, X: Integer;
+  NB, NR, NX, NY: Integer;
   VB: TValidationBuffer;
   P: TPlacedComponent;
   L, ci: Integer;
@@ -2287,6 +2423,25 @@ begin
       if X < FPlanXLeft then
         X := FPlanXLeft;
     end;
+    // The stored slot is advisory: bias expansion can grow a lane and narrow the
+    // rows after it was chosen. If it is no longer clear (one-block gap), move
+    // the buffer to the nearest free slot and keep that new slot from now on.
+    if ((VB.RowType = 0) or (VB.RowType = 1)) and
+       BufferSlotBlocked(X, Y, W, H, VB.Gate) then
+      if FindBufferSlot(VB.Band, VB.RowType, X, W, H, NB, NR, NX, NY) then
+      begin
+        MemoRouting.Lines.Add(Format(
+          '  buffer %s moved to band %d row %d x %d y %d (its slot was occupied).',
+          [VB.Gate.CellName, NB, NR, NX, NY]));
+        X := NX;
+        Y := NY;
+        VB.Band := NB;
+        VB.RowType := NR;
+      end
+      else
+        MemoRouting.Lines.Add(Format(
+          '  buffer %s has no clear slot; left at band %d row %d x %d y %d.',
+          [VB.Gate.CellName, VB.Band, VB.RowType, X, Y]));
     VB.X := X;
     VB.Y := Y;
     FValidationBuffers[i] := VB;
@@ -2389,7 +2544,7 @@ end;
 
 procedure TForm1.ReapplyLengthBufferMask;
 var
-  i, X, Y: Integer;
+  i, X, Y, RowType, NB, NR, NX, NY: Integer;
 begin
   if Length(FPlanBandStarts) = 0 then
     Exit;
@@ -2403,10 +2558,39 @@ begin
     if X < FPlanXLeft then
       X := FPlanXLeft;
     if FLengthBuffers[i].OnClockRow then
-      Y := BandClockRowY(FLengthBuffers[i].Band)
+    begin
+      RowType := 1;
+      Y := BandClockRowY(FLengthBuffers[i].Band);
+    end
     else
+    begin
+      RowType := 0;
       Y := BandLogicRowY(FLengthBuffers[i].Band);
+    end;
     Y := Y + ((FPlanRowHBlocks - FLengthBuffers[i].H) div 2);
+    // The band/offset pair is only a hint after a rebuild: bias expansion can
+    // grow a lane and narrow the rows, and the buffer mask layer is not part of
+    // the rows' own packing. Re-test the stored slot with the same one-block
+    // clearance the packer uses, and relocate (persisting the new slot) if the
+    // layout moved under it.
+    if BufferSlotBlocked(X, Y, FLengthBuffers[i].W, FLengthBuffers[i].H,
+      FLengthBuffers[i].Gate) then
+      if FindBufferSlot(FLengthBuffers[i].Band, RowType, X,
+        FLengthBuffers[i].W, FLengthBuffers[i].H, NB, NR, NX, NY) then
+      begin
+        MemoRouting.Lines.Add(Format(
+          '  length buffer %s moved to band %d row %d x %d y %d (its slot was occupied).',
+          [FLengthBuffers[i].Gate.CellName, NB, NR, NX, NY]));
+        X := NX;
+        Y := NY;
+        FLengthBuffers[i].Band := NB;
+        FLengthBuffers[i].OnClockRow := NR = 1;
+        FLengthBuffers[i].XOffset := X - FPlanXLeft;
+      end
+      else
+        MemoRouting.Lines.Add(Format(
+          '  length buffer %s has no clear slot; left at band %d x %d y %d.',
+          [FLengthBuffers[i].Gate.CellName, FLengthBuffers[i].Band, X, Y]));
     FGatePlacement.AddOrSetValue(FLengthBuffers[i].Gate, TPoint.Create(X, Y));
   end;
 end;
@@ -2578,7 +2762,11 @@ begin
   ButtonExpandBiasClick(nil);
   if FBiasExpansionFailed then
   begin
-    MemoRouting.Lines.Add('[bias] routing skipped: the bias lines do not fit the die.');
+    // The detailed reason (which band/trunk/lane ran out of room) is already in
+    // the memo from ReportBiasError; make the consequence and the way out clear.
+    MemoRouting.Lines.Add('[bias] routing skipped: the bias lines do not fit the ' +
+      'die. Raise the die height or width (or lower the bias current) on the ' +
+      'Placement page, expand the bias lines again, then re-run routing.');
     Exit;
   end;
   // ButtonExpandBiasClick only rebuilds the floorplan when the bias rows need
@@ -2630,6 +2818,7 @@ var
   VB: TValidationBuffer;
   InPort, OutPort: TPort;
   InNetName, OutNetName: string;
+  BiasFailed: Boolean;
 
   // Keep the gate-side pin connection in step with the net-side move: the
   // split below creates new TNetConnections, but the gate's own TPinConnection
@@ -2800,6 +2989,9 @@ begin
       Exit;
     end;
 
+    // If the expansion itself failed, every other slot will fail the same way
+    // (the rows cannot grow), so report once and let the caller stop.
+    BiasFailed := FBiasExpansionFailed;
     // The circuit no longer routes with the buffer there: revert the netlist.
     if APadLoad then
       Repoint(Driver, DriverPin, NewNetName, NetName)
@@ -2813,7 +3005,13 @@ begin
       SetLength(FLengthBuffers, Length(FLengthBuffers) - 1)
     else
       SetLength(FValidationBuffers, Length(FValidationBuffers) - 1);
-    RunBiasExpansionAndRouting; // restore the clean derived state
+    if BiasFailed then
+      // Nothing to restore to: the expansion failed, so re-running it would only
+      // fail again. The caller reports and stops; the failure flag stays latched
+      // so the next routing click explains what to fix.
+      MemoRouting.Lines.Add('  bias expansion failed; the buffer cannot be placed.')
+    else
+      RunBiasExpansionAndRouting; // restore the clean derived state
   finally
     OrigConn.Free;
   end;
@@ -2852,14 +3050,11 @@ var
   C, TmpC: TCand;
   a, b: Integer;
   Key: string;
-  Overlap: Boolean;
 
-  // Evaluates slot (X, Y) for the current (Band, RowType): rejects overlap with a
-  // placed cell or endpoint pin (routed wires ignored - all is re-routed), else records it.
+  // Evaluates slot (X, Y) for the current (Band, RowType): rejects a slot that
+  // touches a placed cell, clock node, trunk cell or length buffer (routed wires
+  // are ignored - all is re-routed), else records it.
   procedure Consider(X, Y: Integer);
-  var
-    i2, L, ci, k: Integer;
-    MPt: TPoint;
   begin
     Bx := X + W div 2;
     By := Y + H div 2;
@@ -2886,46 +3081,9 @@ var
     Key := Format('%d:%d:%d:%d', [Band, RowType, X, Y]);
     if FValidationBlocked.IndexOf(Key) >= 0 then
       Exit;
-    Overlap := False;
-    for i2 := 0 to High(FPlacedComponents) do
-      if UGeometry.RectOverlap(X, Y, W, H, FPlacedComponents[i2].X,
-        FPlacedComponents[i2].Y, FPlacedComponents[i2].W,
-        FPlacedComponents[i2].H) then
-      begin
-        Overlap := True;
-        Break;
-      end;
-    if not Overlap then
-      for L := 0 to High(FClockSubtree) do
-        for ci := 0 to High(FClockSubtree[L]) do
-          if (not FClockSubtree[L][ci].IsLeaf) and
-             UGeometry.RectOverlap(X, Y, W, H, FClockSubtree[L][ci].X,
-               FClockSubtree[L][ci].Y, FClockSubtree[L][ci].W,
-               FClockSubtree[L][ci].H) then
-          begin
-            Overlap := True;
-            Break;
-          end;
-    if not Overlap then
-      for k := 0 to High(FSpine) do
-        if UGeometry.RectOverlap(X, Y, W, H, FSpine[k].X, FSpine[k].Y,
-          FSpine[k].W, FSpine[k].H) then
-        begin
-          Overlap := True;
-          Break;
-        end;
-    // Also avoid slots already taken by another length mask buffer.
-    if not Overlap then
-      for k := 0 to High(FLengthBuffers) do
-        if (FLengthBuffers[k].Gate <> nil) and
-           FGatePlacement.TryGetValue(FLengthBuffers[k].Gate, MPt) and
-           UGeometry.RectOverlap(X, Y, W, H, MPt.X, MPt.Y,
-             FLengthBuffers[k].W, FLengthBuffers[k].H) then
-        begin
-          Overlap := True;
-          Break;
-        end;
-    if Overlap then
+    // Cells, clock nodes, trunk cells and other length buffers, with the usual
+    // one-block clearance - a slot flush against a cell is not a slot.
+    if BufferSlotBlocked(X, Y, W, H) then
       Exit;
     SetLength(Cands, Length(Cands) + 1);
     Cands[High(Cands)].Band := Band;
@@ -3088,6 +3246,15 @@ begin
     end;
   end;
 
+  // A latched bias failure makes every slot unusable; do not walk thousands of
+  // them (each attempt re-expands the layout and looks like a freeze).
+  if FBiasExpansionFailed then
+  begin
+    MemoRouting.Lines.Add(Format(
+      '  %s: bias expansion has failed, no buffer can be placed.', [NetName]));
+    Exit;
+  end;
+
   // Buffer footprint in grid cells.
   W := Round(BufCell.Width / Core);
   if W < 1 then
@@ -3152,6 +3319,8 @@ begin
       Exit;
     end;
     FValidationBlocked.Add(Format('%d:%d:%d:%d', [C.Band, C.RowType, C.X, C.Y]));
+    if FBiasExpansionFailed then
+      Break; // layout-wide failure: more slots cannot help
   end;
   MemoRouting.Lines.Add(Format(
     '  every buffer slot for %s made the circuit unroutable.', [NetName]));
@@ -3271,6 +3440,22 @@ begin
 
       if not InsertBufferForTrace(BestIdx) then
       begin
+        if FBiasExpansionFailed then
+        begin
+          MemoRouting.Lines.Add(
+            'VALIDATION STOPPED: the bias lines do not fit the die, so the ' +
+            'length-fixing buffer could not be placed.');
+          MemoRouting.Lines.Add(
+            '  Fix: raise the die height (or widen the die / lower the bias ' +
+            'current) on the Placement page, expand the bias lines again, then ' +
+            're-run routing.');
+          // Not validated: drop back to the routed stage so Export stays locked.
+          if FFlowStage > fsRouted then FFlowStage := fsRouted;
+          UpdateUI;
+          RepaintRoutingPage;
+          Application.ProcessMessages;
+          Exit;
+        end;
         MemoRouting.Lines.Add(Format(
           'VALIDATION FAILED: no usable buffer location on %s.',
           [FRouteTraces[BestIdx].NetName]));
@@ -3730,6 +3915,9 @@ const
   MinMargin = 16;  // minimum window margin in blocks
   MaxMargin = 128; // maximum window margin in blocks
   MarginDiv = 3;   // margin = max(MinMargin, dist div MarginDiv)
+  // Resonance pruning: a straight run that lands within half a pulse width of a
+  // multiple of the resonant length is refused, so the path carries on straight.
+  ResonanceGuardEnabled = True;
 var
   W, H, NumLayers, MaxLayer, TotalStates: Integer;
   WinX0, WinY0, WinX1, WinY1, WinW, WinH: Integer;
@@ -3898,7 +4086,8 @@ begin
   FreqGHz := FDesignConfig.FreqGHz;
   Delay := FDesignConfig.PtlDelayPsPerUm;
   PulseWUm := FDesignConfig.PulseWidthUm;
-  ResonanceOn := (CoreUm > 0) and (FreqGHz > 0) and (Delay > 0) and (PulseWUm > 0);
+  ResonanceOn := ResonanceGuardEnabled and (CoreUm > 0) and (FreqGHz > 0) and
+    (Delay > 0) and (PulseWUm > 0);
   if ResonanceOn then
   begin
     LrUm := UPhysics.ResonantLengthUm(FreqGHz, Delay);

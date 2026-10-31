@@ -41,10 +41,40 @@ var
   IsLenBuf, IsValBuf: Boolean;
   Names: TDictionary<string, Integer>;
   Covered, NotCovered, Cnt: Integer;
+  Dx, Dy, PrevDx, PrevDy, RunLen: Integer;
+  BestRun: Double;
+  LrDetail: TStringList;
 
   procedure Report(const AName, AState, ADetail: string);
   begin
     MemoRouting.Lines.Add(Format('  %-14s %-5s %s', [AName, AState, ADetail]));
+  end;
+
+  // Resonance applies to a straight PTL run: a bend, a via or a pad breaks the
+  // standing wave. RunBlocks is one contiguous same-direction run, in blocks.
+  procedure CheckRun(RunBlocks: Integer; const ANet: string);
+  var
+    RunUm: Double;
+    n: Integer;
+  begin
+    if (RunBlocks <= 0) or (LrUm <= 0) or (Band <= 0) then
+      Exit;
+    RunUm := RunBlocks * Core;
+    if RunUm > BestRun then
+      BestRun := RunUm;
+    if RunUm / LrUm > 1.0e7 then
+      Exit; // absurd configuration (Lr far below a block): nothing sensible to flag
+    n := Round(RunUm / LrUm);
+    if n < 1 then
+      Exit; // shorter than the first harmonic
+    if Abs(RunUm - n * LrUm) <= Band then
+    begin
+      Inc(LrBad);
+      if LrDetail.Count < 8 then
+        LrDetail.Add(Format(
+          '%s: %.2f um straight run (harmonic %d, Lr %.2f um, band +/-%.2f)',
+          [ANet, RunUm, n, LrUm, Band]));
+    end;
   end;
 
   // Marks a placed cell's grid footprint, counting blocks that were already
@@ -368,39 +398,64 @@ begin
   if PulseWUm > 0 then
     Band := PulseWUm / 2;
   BestLen := 0;
-  for i := 0 to High(FRouteTraces) do
-  begin
-    if IsBiasTrace(FRouteTraces[i]) then
-      Continue;
-    if Length(FRouteTraces[i].Layers) <= 1 then
-      Continue;
-    Len := TraceLengthUm(FRouteTraces[i], Core);
-    Inc(LenCount);
-    if Len > BestLen then
-      BestLen := Len;
-    if (Limit > 0) and (Len > Limit + 1e-6) then
-      Inc(OverLen);
-    if (LrUm > 0) and (Band > 0) then
+  BestRun := 0;
+  LrDetail := TStringList.Create;
+  try
+    for i := 0 to High(FRouteTraces) do
     begin
-      j := 1;
-      while (j * LrUm) <= Len + Band do
+      if IsBiasTrace(FRouteTraces[i]) then
+        Continue;
+      if Length(FRouteTraces[i].Layers) <= 1 then
+        Continue;
+      Len := TraceLengthUm(FRouteTraces[i], Core);
+      Inc(LenCount);
+      if Len > BestLen then
+        BestLen := Len;
+      if (Limit > 0) and (Len > Limit + 1e-6) then
+        Inc(OverLen);
+      // Resonance: walk the trace and measure every straight run on its own.
+      // A repeated point is a via; a change of step direction is a bend; both
+      // end the current run. The end-to-end length is NOT the resonant length.
+      RunLen := 0;
+      PrevDx := 0;
+      PrevDy := 0;
+      for j := 1 to High(FRouteTraces[i].Points) do
       begin
-        if Abs(Len - j * LrUm) <= Band then
+        Dx := FRouteTraces[i].Points[j].X - FRouteTraces[i].Points[j - 1].X;
+        Dy := FRouteTraces[i].Points[j].Y - FRouteTraces[i].Points[j - 1].Y;
+        if (Dx = 0) and (Dy = 0) then
         begin
-          Inc(LrBad);
-          Break;
+          CheckRun(RunLen, FRouteTraces[i].NetName); // via ends the run
+          RunLen := 0;
+          PrevDx := 0;
+          PrevDy := 0;
+          Continue;
         end;
-        Inc(j);
+        if (Dx <> PrevDx) or (Dy <> PrevDy) then
+        begin
+          CheckRun(RunLen, FRouteTraces[i].NetName); // bend ends the run
+          RunLen := 0;
+        end;
+        Inc(RunLen, Abs(Dx) + Abs(Dy));
+        PrevDx := Dx;
+        PrevDy := Dy;
       end;
+      CheckRun(RunLen, FRouteTraces[i].NetName);
     end;
+  finally
+    LrDetail.Free;
   end;
 
   if LrBad = 0 then
-    Report('resonance', 'OK', 'no PTL run sits in a resonant band')
+    Report('resonance', 'OK', Format(
+      'no straight PTL run sits in a resonant band (longest run %.2f um)', [BestRun]))
   else
   begin
-    Report('resonance', 'FAIL', Format('%d PTL run(s) in a resonant band', [LrBad]));
+    Report('resonance', 'FAIL', Format(
+      '%d straight PTL run(s) in a resonant band', [LrBad]));
     Inc(Failures);
+    for i := 0 to LrDetail.Count - 1 do
+      MemoRouting.Lines.Add('             resonance: ' + LrDetail[i]);
   end;
 
   if Limit <= 0 then

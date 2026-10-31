@@ -1304,6 +1304,19 @@ begin
   Result := FPlanXLeft + (k + 0.5) * (Right - FPlanXLeft - 1) / Max(1, N);
 end;
 
+// Right edge (exclusive) for the output pad row. The clock pad sits in the
+// middle of the clock trunk on the same bottom row, and it never moves, so the
+// outputs are kept to the left of the trunk column instead of being spread
+// across the clock pad's space. Without a clock pad (the clock is not a primary
+// input) the outputs may use the whole row.
+function TForm1.OutputPadRight: Integer;
+begin
+  if FClockPadIdx >= 0 then
+    Result := FPlanXRight + FPlanLane0W
+  else
+    Result := FPlanXRight + FPlanLane0W + FPlanTrunkW;
+end;
+
 // The slot (0..N-1) whose X is closest to DragX within [FPlanXLeft, Right).
 function TForm1.NearestPadSlot(DragX: Single; N, Right: Integer): Integer;
 var
@@ -1370,7 +1383,7 @@ begin
     Idx := FPadOrderOutput[k];
     if (Idx >= 0) and (Idx < Length(FPads)) then
     begin
-      X := Round(PadSlotX(k, M, FPlanXRight + FPlanLane0W + FPlanTrunkW));
+      X := Round(PadSlotX(k, M, OutputPadRight));
       FPads[Idx].X := X;
       FPadMap.AddOrSetValue(FPads[Idx].NetName, TPoint.Create(X, FPads[Idx].Y));
     end;
@@ -1403,7 +1416,7 @@ begin
   else
   begin
     N := Length(FPadOrderOutput);
-    Right := FPlanXRight + FPlanLane0W + FPlanTrunkW;
+    Right := OutputPadRight;
     Slot := NearestPadSlot(FPadDragX, N, Right);
     Order := PreviewPadOrder(FPadOrderOutput, FPadDragIdx, Slot);
     for k := 0 to High(Order) do

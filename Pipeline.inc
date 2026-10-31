@@ -904,10 +904,14 @@ begin
       try
         if FSliderPos = 0 then
         begin
-          // Compact mode at the far-left slider position.
+          // Compact mode at the far-left slider position. The merge runs again
+          // after padding: the padding flip-flops sit at the ends of the
+          // splitter trees and fold back into one shared flip-flop per splitter,
+          // then cascade up the tree.
           InsertCompactFlipFlops(PM, FLib, FFlipFlopNames[0]);
           ComputeClockLevels(PM, Dummy);
           PadOutputFFs(PM, FLib, FFlipFlopNames[0]);
+          MergeCompactSplitters(PM, FLib, FFlipFlopNames[0]);
           ComputeClockLevels(PM, Dummy);
         end
         else
@@ -937,6 +941,7 @@ begin
               InsertCompactFlipFlops(Cmp, FLib, FFlipFlopNames[0]);
               ComputeClockLevels(Cmp, CDummy);
               PadOutputFFs(Cmp, FLib, FFlipFlopNames[0]);
+              MergeCompactSplitters(Cmp, FLib, FFlipFlopNames[0]);
               ComputeClockLevels(Cmp, CDummy);
             finally
               CDummy.Free;

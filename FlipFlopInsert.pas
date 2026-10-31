@@ -23,13 +23,18 @@ uses
 //   clock level above its predecessor (LA+1 .. LA+N).
 //
 //   Phase 2 (iterative merge, controlled by ADoMerge): while a splitter has
-//   every output net leading into exactly one inserted flip-flop at the
-//   splitter's level + 1, collapse those flip-flops into a single one placed
+//   every output net leading into exactly one flip-flop of the chosen cell at
+//   the splitter's level + 1, collapse those flip-flops into a single one placed
 //   before the splitter and raise the splitter's clock level by one. Repeats
 //   until no splitter qualifies, which pushes the shared chains up to just
-//   before the splitting networks.
+//   before the splitting networks. The splitter inherits the consumed
+//   flip-flop's output net and its own net is deleted.
 //
 //   Phase 3: remove the nets left floating (empty) by the merge.
+//
+//   The merge is also exposed as MergeCompactSplitters and must be run once more
+//   after PadOutputFFs: padding adds flip-flops at the ends of the splitter
+//   trees, which then fold back down into one shared flip-flop per splitter.
 //
 //   Pass ADoMerge = False to skip Phase 2, keeping the raw per-input chains.
 //
@@ -37,6 +42,13 @@ uses
 // should re-run ComputeClockLevels afterwards to refresh all levels.
 function InsertCompactFlipFlops(Model: TBlifModel; Lib: TLibrary;
   const FFCellName: string; ADoMerge: Boolean = True): Integer;
+
+// Folds flip-flops back down a splitter tree (compact mode); see the
+// implementation. Run it again after PadOutputFFs so the padding flip-flops at
+// the ends of the tree fold in and the merge cascades up the tree.
+function MergeCompactSplitters(Model: TBlifModel; Lib: TLibrary;
+  const FFCellName: string;
+  InsertedFFs: TDictionary<TGateInstance, Boolean> = nil): Integer;
 
 // After internal FF insertion, pad all primary outputs to the same clock level.
 // Finds the maximum clock level among output drivers and inserts FF chains on
@@ -205,23 +217,26 @@ begin
   end;
 end;
 
-function InsertCompactFlipFlops(Model: TBlifModel; Lib: TLibrary;
-  const FFCellName: string; ADoMerge: Boolean = True): Integer;
+// Merges flip-flops back down a splitter tree: when every branch of a splitter
+// ends in exactly one flip-flop at the splitter's level + 1, one shared flip-flop
+// on the splitter's input replaces them and the splitter moves up a level, which
+// makes the splitter feeding it mergeable in turn. The branch test is the
+// flip-flop CELL, not who inserted it, so the flip-flops that output padding adds
+// at the ends of the tree fold in as well - run this again after PadOutputFFs.
+// InsertedFFs, when given, is kept in step (consumed and shared flip-flops).
+// Returns the number of merged splitters.
+function MergeCompactSplitters(Model: TBlifModel; Lib: TLibrary;
+  const FFCellName: string;
+  InsertedFFs: TDictionary<TGateInstance, Boolean> = nil): Integer;
 var
   FFCell: TCell;
   ClockPin, DataPin, OutputPin: string;
   ClockNetName: string;
-  InsertedFFs: TDictionary<TGateInstance, Boolean>;
-  Count, i, j, jj, N, LA, Expected, NetCounter: Integer;
-  B, Gate, S, FF_br: TGateInstance;
-  Conn: TPinConnection;
-  Net, PrevNet, NewNet, OutNet, OutNet2, Nin, Nin2: TNet;
-  NC: TNetConnection;
-  ChildName: string;
+  NetCounter, FFLevel, i: Integer;
   Merged: Boolean;
-  FFLevel: Integer;
-  EmptyNets: TList<string>;
-  LoadPin: string;
+  S, Gate, FF_br: TGateInstance;
+  OutNet, OutNet2, Nin, Nin2: TNet;
+  ChildName: string;
 
   function CanMerge(S: TGateInstance): Boolean;
   var
@@ -241,7 +256,9 @@ var
           if not NC2.IsDriver then
           begin
             Inc(LoadCount);
-            if not InsertedFFs.ContainsKey(NC2.Gate) then
+            // Any flip-flop of the chosen cell counts: Phase 1's, output
+            // padding's, or one left by an earlier pass.
+            if NC2.Gate.Cell <> FFCell then
               Exit(False);
             if NC2.Gate.ClockLevel <> S.ClockLevel + 1 then
               Exit(False);
@@ -256,6 +273,7 @@ var
   var
     Conn, CC: TPinConnection;
     NC: TNetConnection;
+    OldNetName: string;
     jj: Integer;
   begin
     FFLevel := S.ClockLevel + 1;
@@ -288,34 +306,42 @@ var
         if OutNet2 = nil then
           Continue;
 
-        // Move OutNet2's loads onto OutNet (drop the consumed flip-flop),
-        // deleting each entry as it goes so OutNet2 keeps no stale records.
+        // The splitter takes the flip-flop's output net as its own output. That
+        // net already carries the downstream loads (or is the primary output),
+        // so nothing has to be stitched over to it. The splitter's own output
+        // net only ever held this splitter and the consumed flip-flop, so it is
+        // deleted instead of being left behind as an empty, driverless net.
+        Conn.NetName := OutNet2.Name;
         for jj := OutNet2.Connections.Count - 1 downto 0 do
-          if not OutNet2.Connections[jj].IsDriver then
-          begin
-            LoadPin := OutNet2.Connections[jj].PinName;
-            for CC in OutNet2.Connections[jj].Gate.Connections do
-              if SameText(CC.NetName, OutNet2.Name) then
-                CC.NetName := OutNet.Name;
-            NC.Gate := OutNet2.Connections[jj].Gate;
-            NC.PinName := LoadPin;
-            NC.IsDriver := False;
-            OutNet.Connections.Add(NC);
+          if OutNet2.Connections[jj].Gate = FF_br then
             OutNet2.Connections.Delete(jj);
-          end;
-        // What remains on OutNet2 is just the consumed flip-flop's own driver
-        // entry; drop it too so Phase 3 can reclaim the now-floating net.
-        OutNet2.Connections.Clear;
-
-        // Drop the consumed flip-flop's own entries, then remove it.
+        NC.Gate := S;
+        NC.PinName := Conn.PinName;
+        NC.IsDriver := True;
+        OutNet2.Connections.Add(NC);
+        // Empty the splitter's own net: only its driver entry and the consumed
+        // flip-flop's data load were on it.
         for jj := OutNet.Connections.Count - 1 downto 0 do
-          if OutNet.Connections[jj].Gate = FF_br then
+          if (OutNet.Connections[jj].Gate = S) or
+             (OutNet.Connections[jj].Gate = FF_br) then
             OutNet.Connections.Delete(jj);
+
+        // Drop the consumed flip-flop's clock entry, then the gate itself.
         for jj := Model.Nets[ClockNetName].Connections.Count - 1 downto 0 do
           if Model.Nets[ClockNetName].Connections[jj].Gate = FF_br then
             Model.Nets[ClockNetName].Connections.Delete(jj);
-        InsertedFFs.Remove(FF_br);
+        if InsertedFFs <> nil then
+          InsertedFFs.Remove(FF_br);
         Model.Gates.Remove(FF_br);
+
+        // The splitter's old output net is unreferenced from here on. (If it
+        // were a primary I/O net - which the splitter pass rules out - leave it
+        // to the empty-net pass so its Outputs/Inputs entry is dropped too.)
+        OldNetName := OutNet.Name;
+        if (OutNet.Connections.Count = 0) and
+           (Model.Inputs.IndexOf(OldNetName) < 0) and
+           (Model.Outputs.IndexOf(OldNetName) < 0) then
+          Model.Nets.Remove(OldNetName);
       end;
 
     // Create the shared flip-flop on S's input net.
@@ -330,7 +356,8 @@ var
     Gate := CreateFF(FFCell, FFCellName, DataPin, OutputPin, ClockPin,
       ClockNetName, Nin.Name, ChildName, FFLevel);
     Model.Gates.Add(Gate);
-    InsertedFFs.Add(Gate, True);
+    if InsertedFFs <> nil then
+      InsertedFFs.Add(Gate, True);
 
     for jj := Nin.Connections.Count - 1 downto 0 do
       if Nin.Connections[jj].Gate = S then
@@ -363,6 +390,53 @@ var
 
     S.ClockLevel := FFLevel;
   end;
+
+begin
+  Result := 0;
+  if (Model = nil) or (Lib = nil) or (FFCellName = '') then
+    Exit;
+  FFCell := Lib.FindCell(FFCellName);
+  if FFCell = nil then
+    Exit;
+  if not IsFlipFlopCandidate(FFCell, ClockPin, DataPin, OutputPin) then
+    Exit;
+  if (ClockPin = '') or (DataPin = '') or (OutputPin = '') then
+    Exit;
+  ClockNetName := ClockNetFor(Model);
+  if ClockNetName = '' then
+    Exit;
+  NetCounter := 0;
+  repeat
+    Merged := False;
+    i := 0;
+    while (i < Model.Gates.Count) and (not Merged) do
+    begin
+      S := Model.Gates[i];
+      if IsSplitterCell(S.Cell) and (S.ClockLevel >= 0) and CanMerge(S) then
+      begin
+        DoMerge(S);
+        Inc(Result);
+        Merged := True;
+      end;
+      Inc(i);
+    end;
+  until not Merged;
+end;
+
+function InsertCompactFlipFlops(Model: TBlifModel; Lib: TLibrary;
+  const FFCellName: string; ADoMerge: Boolean = True): Integer;
+var
+  FFCell: TCell;
+  ClockPin, DataPin, OutputPin: string;
+  ClockNetName: string;
+  InsertedFFs: TDictionary<TGateInstance, Boolean>;
+  Count, i, j, jj, N, LA, Expected, NetCounter: Integer;
+  B, Gate: TGateInstance;
+  Conn: TPinConnection;
+  Net, PrevNet, NewNet: TNet;
+  NC: TNetConnection;
+  ChildName: string;
+  EmptyNets: TList<string>;
 
 begin
   Result := 0;
@@ -476,22 +550,7 @@ begin
 
     // ---- Phase 2: iterative merge across splitters ----
     if ADoMerge then
-    begin
-      repeat
-        Merged := False;
-        i := 0;
-        while (i < Model.Gates.Count) and (not Merged) do
-        begin
-          S := Model.Gates[i];
-          if IsSplitterCell(S.Cell) and (S.ClockLevel >= 0) and CanMerge(S) then
-          begin
-            DoMerge(S);
-            Merged := True;
-          end;
-          Inc(i);
-        end;
-      until not Merged;
-    end;
+      MergeCompactSplitters(Model, Lib, FFCellName, InsertedFFs);
 
     // ---- Phase 3: drop floating (empty) nets ----
     EmptyNets := TList<string>.Create;
@@ -819,7 +878,6 @@ var
   S, FF_br: TGateInstance;
   OutNet, OutNet2, Nin, Nin2: TNet;
   FFLevel: Integer;
-  LoadPin: string;
   PathMemo: TDictionary<string, Double>;
   SplitterDelay, MaxPath, FfOutPath: Double;
   FfOutNet: TNet;
@@ -971,6 +1029,7 @@ var
   var
     Conn, CC: TPinConnection;
     NC3: TNetConnection;
+    OldNetName: string;
     jj: Integer;
   begin
     FFLevel := S.ClockLevel + 1;
@@ -1006,30 +1065,34 @@ var
         if OutNet2 = nil then
           Continue;
 
+        // The splitter takes the flip-flop's output net as its own output (see
+        // the compact merge): the loads stay where they are, the splitter's own
+        // output net is deleted, and no net is left dangling.
+        Conn.NetName := OutNet2.Name;
         for jj := OutNet2.Connections.Count - 1 downto 0 do
-          if not OutNet2.Connections[jj].IsDriver then
-          begin
-            LoadPin := OutNet2.Connections[jj].PinName;
-            for CC in OutNet2.Connections[jj].Gate.Connections do
-              if SameText(CC.NetName, OutNet2.Name) then
-                CC.NetName := OutNet.Name;
-            NC3.Gate := OutNet2.Connections[jj].Gate;
-            NC3.PinName := LoadPin;
-            NC3.IsDriver := False;
-            OutNet.Connections.Add(NC3);
+          if OutNet2.Connections[jj].Gate = FF_br then
             OutNet2.Connections.Delete(jj);
-          end;
-        OutNet2.Connections.Clear;
-
+        NC3.Gate := S;
+        NC3.PinName := Conn.PinName;
+        NC3.IsDriver := True;
+        OutNet2.Connections.Add(NC3);
         for jj := OutNet.Connections.Count - 1 downto 0 do
-          if OutNet.Connections[jj].Gate = FF_br then
+          if (OutNet.Connections[jj].Gate = S) or
+             (OutNet.Connections[jj].Gate = FF_br) then
             OutNet.Connections.Delete(jj);
+
         if Model.Nets.ContainsKey(ClockNetName) then
           for jj := Model.Nets[ClockNetName].Connections.Count - 1 downto 0 do
             if Model.Nets[ClockNetName].Connections[jj].Gate = FF_br then
               Model.Nets[ClockNetName].Connections.Delete(jj);
         InsertedFFs.Remove(FF_br);
         Model.Gates.Remove(FF_br);
+
+        OldNetName := OutNet.Name;
+        if (OutNet.Connections.Count = 0) and
+           (Model.Inputs.IndexOf(OldNetName) < 0) and
+           (Model.Outputs.IndexOf(OldNetName) < 0) then
+          Model.Nets.Remove(OldNetName);
       end;
 
     Inc(NetCounter);
