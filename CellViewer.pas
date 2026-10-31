@@ -285,7 +285,7 @@ begin
 
   Script := FindScriptPath;
   if Script = '' then
-    Exit('gds_to_json.py was not found next to the application.');
+    Exit('gds_to_json.py was not found (looked next to the application and in tools/).');
 
   JsonPath := TPath.Combine(TPath.GetTempPath,
     'pnr_cell_' + IntToStr(TThread.GetTickCount) + '.json');

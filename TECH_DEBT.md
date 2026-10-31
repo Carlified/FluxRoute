@@ -1,4 +1,4 @@
-﻿# PnRGUI — Open items & operational notes
+# PnRGUI — Open items & operational notes
 
 Living register, kept lean. Completed refactor history lives in git; this file only
 tracks what still matters for future work.
@@ -92,10 +92,10 @@ oCir (voltage-source lines) and TRACK structuralOnly (optional LEF,
 - Note: user hand-builds GDS block files first; .cir/.lef per block can lag -
   preflight reports which kinds still need them, and PTL/VIA require them to pass.- Phase 4 (GDS) slice 1 ✅: UPython.pas (shared python runner, extracted from
   CellViewer; qualified UPython. calls - the viewer keeps its copy for now),
-  write_die_gds.py (gdstk) + ExportGDS.pas (recipe JSON). The Export button,
+  tools/write_die_gds.py (gdstk) + ExportGDS.pas (recipe JSON). The Export button,
   with .gds ticked, writes a placement recipe (runs as AREFs, bends rot-0, vias,
   splits, placed cells, die boundary on layer 0) into the temp dir and runs
-  write_die_gds.py to <out-dir>/<stem>.gds. Known deferrals: per-bend rotation
+  tools/write_die_gds.py to <out-dir>/<stem>.gds. Known deferrals: per-bend rotation
   (authoring convention "+X->+Y" documented), full TRACK ground-tile tiling +
   if_unused fills. Verify: build; validate; Export tab -> Recheck -> tick .gds
   -> Export; open die.gds in KLayout.
