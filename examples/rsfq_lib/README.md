@@ -71,8 +71,10 @@ ships one, the timing-extraction PDF — only the duplicate models are gone.
 
 ## Licence
 
-The cell library is not part of FluxRoute and is not covered by FluxRoute's MIT
-licence: [`sunmagnetics/RSFQlib`](https://github.com/sunmagnetics/RSFQlib) is
-distributed under **GPL-3.0**. `library_fixed.lef` is a modified version of
-`lef_6_metals.lef` from that project and is included here under those terms,
-with the cell names and geometry from that project.
+The cell library is not part of FluxRoute: [`sunmagnetics/RSFQlib`](https://github.com/sunmagnetics/RSFQlib)
+is distributed under **GPL-3.0**. `library_fixed.lef` is a modified version of
+`lef_6_metals.lef` from that project and is included here under those terms, with
+the cell names and geometry from that project.
+
+FluxRoute itself is licensed under GPL-3.0 as well, so the two are compatible;
+there is no mixed-licence folder to worry about.

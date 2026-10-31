@@ -135,11 +135,17 @@ the real `config.json` is gitignored.
 
 ## Licence
 
-[MIT](LICENSE).
+FluxRoute is free software: you can redistribute it and/or modify it under the
+terms of the **GNU General Public License, version 3** ([LICENSE](LICENSE)).
+There is no warranty, to the extent permitted by law.
 
-`examples/rsfq_lib/library_fixed.lef` is a modified copy of a file from
-[`sunmagnetics/RSFQlib`](https://github.com/sunmagnetics/RSFQlib) and is covered
-by that project's GPL-3.0 licence, not by MIT.
+The Corresponding Source is this repository. If you distribute a binary, convey
+the source for that same version: the "Source code" archives GitHub generates
+for a tagged release are exactly that, so do not remove them from a release.
 
-JoSIM, gdstk, RAD Studio and the rest of the RSFQ cell libraries are external
-projects with their own licences.
+`examples/rsfq_lib/library_fixed.lef` comes from
+[`sunmagnetics/RSFQlib`](https://github.com/sunmagnetics/RSFQlib), which is
+GPL-3.0 as well, so it sits under the same licence as the rest of the project.
+
+JoSIM, gdstk, RAD Studio and the other RSFQ cell libraries are external projects
+under their own licences.
