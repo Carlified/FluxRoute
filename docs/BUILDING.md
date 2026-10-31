@@ -84,6 +84,18 @@ OSX64\Release\PnRGUI.app         (Intel)
 That `.app` is the permanent binary. It is a directory bundle — copy it whole
 (`scp -r`, AirDrop, or zip it first; see §6).
 
+**If Build only produced `PnRGUI` + `PnRGUI.info.plist`** (the bundle itself is
+normally created by *Deploy*), lay the bundle out locally - no PAServer, no Mac:
+
+```bat
+python packaging\make-macos-app.py OSXARM64\Release --icon path\to\PnRGUI.icns
+```
+
+That creates `OSXARM64\Release\PnRGUI.app` with the executable, the generated
+`Info.plist` (UTF-8 BOM stripped) and, when given, the icon. A Debug bundle from
+an earlier run already holds the icon at
+`PnRGUI.app/Contents/Resources/PnRGUI.icns`; the icon is optional.
+
 ### 3.3 First launch on the Mac
 
 A bundle produced this way is unsigned, so macOS quarantines it after a
