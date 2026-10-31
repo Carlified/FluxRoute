@@ -24,7 +24,11 @@ EXEC_DIR = os.path.join("Contents", "MacOS")
 def add_tree(zf, src, arc_root):
     """Adds src under arc_root, storing Unix modes the way macOS expects."""
     for dirpath, dirnames, filenames in os.walk(src):
-        dirnames[:] = sorted(d for d in dirnames if d != "__pycache__")
+        # __pycache__ is build noise; _CodeSignature is dropped because the
+        # package strips files from the bundle (see below), which would leave the
+        # signature invalid. Ship it plainly unsigned.
+        dirnames[:] = sorted(d for d in dirnames
+                             if d not in ("__pycache__", "_CodeSignature"))
         rel = os.path.relpath(dirpath, src)
         arc_dir = arc_root if rel == "." else os.path.join(arc_root, rel)
         if rel != ".":
