@@ -1,0 +1,828 @@
+VERSION 5.8 ;
+
+BUSBITCHARS "[]" ;
+
+DIVIDERCHAR "/" ;
+
+UNITS
+	DATABASE MICRONS 1000 ;
+END UNITS
+
+MANUFACTURINGGRID 0.01 ;
+
+CLEARANCEMEASURE EUCLIDEAN ;
+
+USEMINSPACING OBS ON ;
+
+# Cells are 70 um tall, widths are multiples of 10 um
+SITE CoreSite
+	CLASS CORE ;
+	SYMMETRY X Y ;
+	SIZE 10 BY 70 ;
+END CoreSite
+
+# ---------------------------------------------------------------------------
+# Stack (bottom to top), per library configuration:
+#   M0 ground | M1 route | M2 ground | M3 route | M4 ground
+#   M5, M6 cells/wires (not router-accessible) | M7 ground
+# Only routable layers are M1 and M3; the only via is M1<->M3 through an
+# isolated M2 island (stacked I1 + I2) sitting in a hole in the M2 ground plane.
+# Routing grid: 1 track per 10 um -> pitch 10, offset 5 (pin centres are at
+# 5 mod 10 in x and y, so they land on tracks; the 1.25 um ground-stitch stubs
+# at the 10 um block corners stay >1.5 um clear of any wire on these tracks).
+# ---------------------------------------------------------------------------
+
+LAYER M0
+	TYPE MASTERSLICE ;
+END M0
+
+LAYER M1
+	TYPE ROUTING ;
+	DIRECTION HORIZONTAL ;
+	PITCH 10.0 ;
+	OFFSET 5.0 ;
+	WIDTH 4.4 ;
+	MINWIDTH 0.5 ;
+	MAXWIDTH 20.0 ;
+	SPACING 0.5 ;
+END M1
+
+LAYER via1
+	TYPE CUT ;
+	WIDTH 1.2 ;
+	SPACING 0.7 ;
+END via1
+
+LAYER M2
+	TYPE MASTERSLICE ;
+END M2
+
+LAYER via2
+	TYPE CUT ;
+	WIDTH 1.2 ;
+	SPACING 0.7 ;
+END via2
+
+LAYER M3
+	TYPE ROUTING ;
+	DIRECTION VERTICAL ;
+	PITCH 10.0 ;
+	OFFSET 5.0 ;
+	WIDTH 4.4 ;
+	MINWIDTH 0.35 ;
+	MAXWIDTH 20.0 ;
+	SPACING 0.5 ;
+END M3
+
+LAYER M4
+	TYPE MASTERSLICE ;
+END M4
+
+LAYER M5
+	TYPE MASTERSLICE ;
+END M5
+
+LAYER M6
+	TYPE MASTERSLICE ;
+END M6
+
+LAYER M7
+	TYPE MASTERSLICE ;
+END M7
+
+# M1 -> M3 through the M2 ground plane, matching the pin stacks in the cell GDS:
+# 4.4 um pads on M1/M2/M3 (the M2 pad is an island in a hole in the ground plane),
+# two 1.2 um I1 cuts on one diagonal and two 1.2 um I2 cuts on the other.
+# The clearance hole in M2 around the island cannot be expressed in LEF.
+VIA VIA13 DEFAULT
+	LAYER M1 ;
+		RECT -2.2 -2.2 2.2 2.2 ;
+	LAYER via1 ;
+		RECT -1.7 -1.7 -0.5 -0.5 ;
+		RECT 0.5 0.5 1.7 1.7 ;
+	LAYER M2 ;
+		RECT -2.2 -2.2 2.2 2.2 ;
+	LAYER via2 ;
+		RECT -1.7 0.5 -0.5 1.7 ;
+		RECT 0.5 -1.7 1.7 -0.5 ;
+	LAYER M3 ;
+		RECT -2.2 -2.2 2.2 2.2 ;
+END VIA13
+
+MACRO PAD
+	CLASS PAD ;
+	ORIGIN 0.0 0.0 ;
+	SIZE 100.0 BY 120.0 ;
+	SYMMETRY X Y ;
+	PIN a
+	DIRECTION INOUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M1 ;
+				RECT 27.0 12.5 73.0 107.5 ;
+			LAYER M7 ;
+				RECT 27.0 12.5 73.0 107.5 ;
+		END
+	END a
+END PAD
+
+MACRO THmitll_ALWAYS0T_ASYNC
+	CLASS CORE ;
+	ORIGIN 0.0 0.0 ;
+	SIZE 10.0 BY 70.0 ;
+	SYMMETRY X Y ;
+	SITE CoreSite ;
+	PIN q
+	DIRECTION OUTPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 2.8 2.8 7.2 7.2 ;
+			LAYER M1 ;
+				RECT 2.8 2.8 7.2 7.2 ;
+		END
+	END q
+	PIN a
+	DIRECTION INPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 2.8 32.8 7.2 37.2 ;
+			LAYER M1 ;
+				RECT 2.8 32.8 7.2 37.2 ;
+		END
+	END a
+END THmitll_ALWAYS0T_ASYNC
+
+MACRO THmitll_ALWAYS0T_ASYNC_NOA
+	CLASS CORE ;
+	ORIGIN 0.0 0.0 ;
+	SIZE 10.0 BY 70.0 ;
+	SYMMETRY X Y ;
+	SITE CoreSite ;
+	PIN q
+	DIRECTION OUTPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 2.8 2.8 7.2 7.2 ;
+			LAYER M1 ;
+				RECT 2.8 2.8 7.2 7.2 ;
+		END
+	END q
+END THmitll_ALWAYS0T_ASYNC_NOA
+
+MACRO THmitll_ALWAYS0T_SYNC
+	CLASS CORE ;
+	ORIGIN 0.0 0.0 ;
+	SIZE 10.0 BY 70.0 ;
+	SYMMETRY X Y ;
+	SITE CoreSite ;
+	PIN q
+	DIRECTION OUTPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 2.8 2.8 7.2 7.2 ;
+			LAYER M1 ;
+				RECT 2.8 2.8 7.2 7.2 ;
+		END
+	END q
+	PIN clk
+	DIRECTION INPUT ;
+	USE CLOCK ;
+		PORT
+			LAYER M3 ;
+				RECT 2.8 32.8 7.2 37.2 ;
+			LAYER M1 ;
+				RECT 2.8 32.8 7.2 37.2 ;
+		END
+	END clk
+	PIN a
+	DIRECTION INPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 2.8 52.8 7.2 57.2 ;
+			LAYER M1 ;
+				RECT 2.8 52.8 7.2 57.2 ;
+		END
+	END a
+END THmitll_ALWAYS0T_SYNC
+
+MACRO THmitll_ALWAYS0T_SYNC_NOA
+	CLASS CORE ;
+	ORIGIN 0.0 0.0 ;
+	SIZE 10.0 BY 70.0 ;
+	SYMMETRY X Y ;
+	SITE CoreSite ;
+	PIN q
+	DIRECTION OUTPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 2.8 2.8 7.2 7.2 ;
+			LAYER M1 ;
+				RECT 2.8 2.8 7.2 7.2 ;
+		END
+	END q
+	PIN clk
+	DIRECTION INPUT ;
+	USE CLOCK ;
+		PORT
+			LAYER M3 ;
+				RECT 2.8 32.8 7.2 37.2 ;
+			LAYER M1 ;
+				RECT 2.8 32.8 7.2 37.2 ;
+		END
+	END clk
+END THmitll_ALWAYS0T_SYNC_NOA
+
+MACRO THmitll_AND2T
+	CLASS CORE ;
+	ORIGIN 0.0 0.0 ;
+	SIZE 50.0 BY 70.0 ;
+	SYMMETRY X Y ;
+	SITE CoreSite ;
+	PIN a
+	DIRECTION INPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 12.8 62.8 17.2 67.2 ;
+			LAYER M1 ;
+				RECT 12.8 62.8 17.2 67.2 ;
+		END
+	END a
+	PIN clk
+	DIRECTION INPUT ;
+	USE CLOCK ;
+		PORT
+			LAYER M3 ;
+				RECT 2.8 2.8 7.2 7.2 ;
+			LAYER M1 ;
+				RECT 2.8 2.8 7.2 7.2 ;
+		END
+	END clk
+	PIN q
+	DIRECTION OUTPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 42.8 22.8 47.2 27.2 ;
+			LAYER M1 ;
+				RECT 42.8 22.8 47.2 27.2 ;
+		END
+	END q
+	PIN b
+	DIRECTION INPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 42.8 12.8 47.2 17.2 ;
+			LAYER M1 ;
+				RECT 42.8 12.8 47.2 17.2 ;
+		END
+	END b
+	PIN VDD
+	DIRECTION INOUT ;
+	USE POWER ;
+		# bottom edge, 50uA
+		PORT
+			LAYER M5 ;
+				RECT 14 0 16 3 ;
+		END
+		# top edge, 50uA
+		PORT
+			LAYER M5 ;
+				RECT 4 67 6 70 ;
+		END
+		# top edge, 50uA
+		PORT
+			LAYER M5 ;
+				RECT 44 64 46 70 ;
+		END
+	END VDD
+END THmitll_AND2T
+
+MACRO THmitll_BUFFT
+	CLASS CORE ;
+	ORIGIN 0.0 0.0 ;
+	SIZE 20.0 BY 70.0 ;
+	SYMMETRY X Y ;
+	SITE CoreSite ;
+	PIN q
+	DIRECTION OUTPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 12.8 2.8 17.2 7.2 ;
+			LAYER M1 ;
+				RECT 12.8 2.8 17.2 7.2 ;
+		END
+	END q
+	PIN a
+	DIRECTION INPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 12.8 42.8 17.2 47.2 ;
+			LAYER M1 ;
+				RECT 12.8 42.8 17.2 47.2 ;
+		END
+	END a
+	PIN VDD
+	DIRECTION INOUT ;
+	USE POWER ;
+		# bottom edge, 50uA
+		PORT
+			LAYER M5 ;
+				RECT 4 0 6 6 ;
+		END
+		# top edge, 50uA
+		PORT
+			LAYER M5 ;
+				RECT 4 64 6 70 ;
+		END
+	END VDD
+END THmitll_BUFFT
+
+MACRO THmitll_DCSFQ-PTLTX
+	CLASS CORE ;
+	ORIGIN 0.0 0.0 ;
+	SIZE 20.0 BY 70.0 ;
+	SYMMETRY X Y ;
+	SITE CoreSite ;
+	PIN q
+	DIRECTION OUTPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 2.8 2.8 7.2 7.2 ;
+			LAYER M1 ;
+				RECT 2.8 2.8 7.2 7.2 ;
+		END
+	END q
+	PIN VDD
+	DIRECTION INOUT ;
+	USE POWER ;
+		# bottom edge, 50uA
+		PORT
+			LAYER M5 ;
+				RECT 14 0 16 5.85 ;
+		END
+		# top edge, 50uA
+		PORT
+			LAYER M5 ;
+				RECT 4 64.15 6 70 ;
+		END
+	END VDD
+END THmitll_DCSFQ-PTLTX
+
+MACRO THmitll_DFFT
+	CLASS CORE ;
+	ORIGIN 0.0 0.0 ;
+	SIZE 30.0 BY 70.0 ;
+	SYMMETRY X Y ;
+	SITE CoreSite ;
+	PIN a
+	DIRECTION INPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 2.8 2.8 7.2 7.2 ;
+			LAYER M1 ;
+				RECT 2.8 2.8 7.2 7.2 ;
+		END
+	END a
+	PIN clk
+	DIRECTION INPUT ;
+	USE CLOCK ;
+		PORT
+			LAYER M3 ;
+				RECT 22.8 2.8 27.2 7.2 ;
+			LAYER M1 ;
+				RECT 22.8 2.8 27.2 7.2 ;
+		END
+	END clk
+	PIN q
+	DIRECTION OUTPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 22.8 62.8 27.2 67.2 ;
+			LAYER M1 ;
+				RECT 22.8 62.8 27.2 67.2 ;
+		END
+	END q
+	PIN VDD
+	DIRECTION INOUT ;
+	USE POWER ;
+		# bottom edge, 50uA
+		PORT
+			LAYER M5 ;
+				RECT 14 0 16 6 ;
+		END
+		# top edge, 50uA
+		PORT
+			LAYER M5 ;
+				RECT 4 66 6 70 ;
+		END
+	END VDD
+END THmitll_DFFT
+
+MACRO THmitll_JTLT
+	CLASS CORE ;
+	ORIGIN 0.0 0.0 ;
+	SIZE 20.0 BY 70.0 ;
+	SYMMETRY X Y ;
+	SITE CoreSite ;
+	PIN q
+	DIRECTION OUTPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 12.8 2.8 17.2 7.2 ;
+			LAYER M1 ;
+				RECT 12.8 2.8 17.2 7.2 ;
+		END
+	END q
+	PIN a
+	DIRECTION INPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 12.8 32.8 17.2 37.2 ;
+			LAYER M1 ;
+				RECT 12.8 32.8 17.2 37.2 ;
+		END
+	END a
+	PIN VDD
+	DIRECTION INOUT ;
+	USE POWER ;
+		# top edge, 50uA
+		PORT
+			LAYER M5 ;
+				RECT 4 64.15 6 70 ;
+		END
+		# bottom edge, 50uA
+		PORT
+			LAYER M5 ;
+				RECT 4 0 6 5.85 ;
+		END
+	END VDD
+END THmitll_JTLT
+
+MACRO THmitll_MERGET
+	CLASS CORE ;
+	ORIGIN 0.0 0.0 ;
+	SIZE 50.0 BY 70.0 ;
+	SYMMETRY X Y ;
+	SITE CoreSite ;
+	PIN q
+	DIRECTION OUTPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 42.8 32.8 47.2 37.2 ;
+			LAYER M1 ;
+				RECT 42.8 32.8 47.2 37.2 ;
+		END
+	END q
+	PIN b
+	DIRECTION INPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 42.8 62.8 47.2 67.2 ;
+			LAYER M1 ;
+				RECT 42.8 62.8 47.2 67.2 ;
+		END
+	END b
+	PIN a
+	DIRECTION INPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 12.8 2.8 17.2 7.2 ;
+			LAYER M1 ;
+				RECT 12.8 2.8 17.2 7.2 ;
+		END
+	END a
+	PIN VDD
+	DIRECTION INOUT ;
+	USE POWER ;
+		# top edge, 50uA
+		PORT
+			LAYER M5 ;
+				RECT 14 64 16 70 ;
+		END
+		# bottom edge, 50uA
+		PORT
+			LAYER M5 ;
+				RECT 4 0 6 6 ;
+		END
+		# bottom edge, 50uA
+		PORT
+			LAYER M5 ;
+				RECT 34 0 36 6 ;
+		END
+	END VDD
+END THmitll_MERGET
+
+MACRO THmitll_NDROT
+	CLASS CORE ;
+	ORIGIN 0.0 0.0 ;
+	SIZE 50.0 BY 70.0 ;
+	SYMMETRY X Y ;
+	SITE CoreSite ;
+	PIN b
+	DIRECTION INPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 42.8 62.8 47.2 67.2 ;
+			LAYER M1 ;
+				RECT 42.8 62.8 47.2 67.2 ;
+		END
+	END b
+	PIN a
+	DIRECTION INPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 2.8 62.8 7.2 67.2 ;
+			LAYER M1 ;
+				RECT 2.8 62.8 7.2 67.2 ;
+		END
+	END a
+	PIN clk
+	DIRECTION INPUT ;
+	USE CLOCK ;
+		PORT
+			LAYER M3 ;
+				RECT 2.8 22.8 7.2 27.2 ;
+			LAYER M1 ;
+				RECT 2.8 22.8 7.2 27.2 ;
+		END
+	END clk
+	PIN q
+	DIRECTION OUTPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 32.8 2.8 37.2 7.2 ;
+			LAYER M1 ;
+				RECT 32.8 2.8 37.2 7.2 ;
+		END
+	END q
+	PIN VDD
+	DIRECTION INOUT ;
+	USE POWER ;
+		# top edge, 50uA
+		PORT
+			LAYER M5 ;
+				RECT 24 64 26 70 ;
+		END
+		# bottom edge, 50uA
+		PORT
+			LAYER M5 ;
+				RECT 4 0 6 4 ;
+		END
+		# bottom edge, 50uA
+		PORT
+			LAYER M5 ;
+				RECT 44 0 46 4 ;
+		END
+	END VDD
+END THmitll_NDROT
+
+MACRO THmitll_NOTT
+	CLASS CORE ;
+	ORIGIN 0.0 0.0 ;
+	SIZE 40.0 BY 70.0 ;
+	SYMMETRY X Y ;
+	SITE CoreSite ;
+	PIN a
+	DIRECTION INPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 2.8 62.8 7.2 67.2 ;
+			LAYER M1 ;
+				RECT 2.8 62.8 7.2 67.2 ;
+		END
+	END a
+	PIN clk
+	DIRECTION INPUT ;
+	USE CLOCK ;
+		PORT
+			LAYER M3 ;
+				RECT 32.8 62.8 37.2 67.2 ;
+			LAYER M1 ;
+				RECT 32.8 62.8 37.2 67.2 ;
+		END
+	END clk
+	PIN q
+	DIRECTION OUTPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 32.8 2.8 37.2 7.2 ;
+			LAYER M1 ;
+				RECT 32.8 2.8 37.2 7.2 ;
+		END
+	END q
+	PIN VDD
+	DIRECTION INOUT ;
+	USE POWER ;
+		# top edge, 50uA
+		PORT
+			LAYER M5 ;
+				RECT 14 64 16 70 ;
+		END
+		# bottom edge, 50uA
+		PORT
+			LAYER M5 ;
+				RECT 4 0 6 6 ;
+		END
+	END VDD
+END THmitll_NOTT
+
+MACRO THmitll_OR2T
+	CLASS CORE ;
+	ORIGIN 0.0 0.0 ;
+	SIZE 40.0 BY 70.0 ;
+	SYMMETRY X Y ;
+	SITE CoreSite ;
+	PIN b
+	DIRECTION INPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 2.8 2.8 7.2 7.2 ;
+			LAYER M1 ;
+				RECT 2.8 2.8 7.2 7.2 ;
+		END
+	END b
+	PIN q
+	DIRECTION OUTPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 32.8 2.8 37.2 7.2 ;
+			LAYER M1 ;
+				RECT 32.8 2.8 37.2 7.2 ;
+		END
+	END q
+	PIN clk
+	DIRECTION INPUT ;
+	USE CLOCK ;
+		PORT
+			LAYER M3 ;
+				RECT 32.8 62.8 37.2 67.2 ;
+			LAYER M1 ;
+				RECT 32.8 62.8 37.2 67.2 ;
+		END
+	END clk
+	PIN a
+	DIRECTION INPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 2.8 62.8 7.2 67.2 ;
+			LAYER M1 ;
+				RECT 2.8 62.8 7.2 67.2 ;
+		END
+	END a
+	PIN VDD
+	DIRECTION INOUT ;
+	USE POWER ;
+		# top edge, 50uA
+		PORT
+			LAYER M5 ;
+				RECT 24 67.15 26 70 ;
+		END
+		# bottom edge, 50uA
+		PORT
+			LAYER M5 ;
+				RECT 24 0 26 2.85 ;
+		END
+	END VDD
+END THmitll_OR2T
+
+MACRO THmitll_SPLITT
+	CLASS CORE ;
+	ORIGIN 0.0 0.0 ;
+	SIZE 30.0 BY 70.0 ;
+	SYMMETRY X Y ;
+	SITE CoreSite ;
+	PIN q1
+	DIRECTION OUTPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 22.8 12.8 27.2 17.2 ;
+			LAYER M1 ;
+				RECT 22.8 12.8 27.2 17.2 ;
+		END
+	END q1
+	PIN q0
+	DIRECTION OUTPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 22.8 22.8 27.2 27.2 ;
+			LAYER M1 ;
+				RECT 22.8 22.8 27.2 27.2 ;
+		END
+	END q0
+	PIN a
+	DIRECTION INPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 2.8 62.8 7.2 67.2 ;
+			LAYER M1 ;
+				RECT 2.8 62.8 7.2 67.2 ;
+		END
+	END a
+	PIN VDD
+	DIRECTION INOUT ;
+	USE POWER ;
+		# top edge, 50uA
+		PORT
+			LAYER M5 ;
+				RECT 14 64.15 16 70 ;
+		END
+		# bottom edge, 50uA
+		PORT
+			LAYER M5 ;
+				RECT 24 0 26 4.55 ;
+		END
+	END VDD
+END THmitll_SPLITT
+
+MACRO THmitll_XORT
+	CLASS CORE ;
+	ORIGIN 0.0 0.0 ;
+	SIZE 50.0 BY 70.0 ;
+	SYMMETRY X Y ;
+	SITE CoreSite ;
+	PIN clk
+	DIRECTION INPUT ;
+	USE CLOCK ;
+		PORT
+			LAYER M3 ;
+				RECT 2.8 2.8 7.2 7.2 ;
+			LAYER M1 ;
+				RECT 2.8 2.8 7.2 7.2 ;
+		END
+	END clk
+	PIN a
+	DIRECTION INPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 2.8 62.8 7.2 67.2 ;
+			LAYER M1 ;
+				RECT 2.8 62.8 7.2 67.2 ;
+		END
+	END a
+	PIN b
+	DIRECTION INPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 42.8 62.8 47.2 67.2 ;
+			LAYER M1 ;
+				RECT 42.8 62.8 47.2 67.2 ;
+		END
+	END b
+	PIN q
+	DIRECTION OUTPUT ;
+	USE SIGNAL ;
+		PORT
+			LAYER M3 ;
+				RECT 32.8 2.8 37.2 7.2 ;
+			LAYER M1 ;
+				RECT 32.8 2.8 37.2 7.2 ;
+		END
+	END q
+	PIN VDD
+	DIRECTION INOUT ;
+	USE POWER ;
+		# top edge, 50uA
+		PORT
+			LAYER M5 ;
+				RECT 24 64 26 70 ;
+		END
+		# bottom edge, 50uA
+		PORT
+			LAYER M5 ;
+				RECT 24 0 26 5 ;
+		END
+	END VDD
+END THmitll_XORT
+
+END LIBRARY

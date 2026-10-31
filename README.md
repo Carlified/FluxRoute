@@ -56,7 +56,7 @@ choose **Open** the first time, or run
 | | |
 |---|---|
 | GUI | RAD Studio / Delphi (FireMonkey). Windows 10/11; macOS via cross-compilation — see [docs/BUILDING.md](docs/BUILDING.md) |
-| Python | 3.9+ for the helper tools (`gdstk` for GDS, `matplotlib`/`numpy` for plotting) |
+| Python | 3.9+ for the helper scripts, with `gdstk` for the in-app cell viewer and GDS export ([`tools/requirements.txt`](tools/requirements.txt)) |
 | Simulator | [JoSIM](https://github.com/JoSIM-Tools/JoSIM) for testbench simulation (optional) |
 | Design data | A LEF cell library and the matching cell sources (`.v`, `.gds`, `.cir`) — not included |
 
@@ -74,7 +74,10 @@ packages, are in **[docs/BUILDING.md](docs/BUILDING.md)**. Short version:
 ## Quick start
 
 1. **Library page** — load your LEF file, then select the folder holding the
-   cell sources. Both are required before the flow continues.
+   cell sources. Both are required before the flow continues. With the MIT-LL
+   library use [`examples/rsfq_lib/library_fixed.lef`](examples/rsfq_lib/library_fixed.lef);
+   [that folder's guide](examples/rsfq_lib/README.md) lists the files to prune
+   from a stock RSFQlib checkout.
 2. **Components page** — choose the splitter cell(s), the flip-flop and the
    buffer cells.
 3. **Netlist page** — load a BLIF (try [`examples/blif/rca4.blif`](examples/blif/rca4.blif)
@@ -104,7 +107,7 @@ packages, are in **[docs/BUILDING.md](docs/BUILDING.md)**. Short version:
 | `tools/` | Python helpers (testbench, bit checks, plots, GDS writer/reader) |
 | `examples/blif/` | Example netlists |
 | `docs/` | Build and release documentation |
-| `TECH_DEBT.md` | Developer notes and refactoring register |
+| `examples/rsfq_lib/` | Sample LEF (`library_fixed.lef`) and the RSFQlib pruning guide |
 
 ## Helper tools
 
@@ -120,7 +123,6 @@ the real `config.json` is gitignored.
 | `tools/plot_csv.py` | Plot a JoSIM CSV |
 | `tools/gds_to_json.py` | Convert a GDS to JSON for the in-app cell viewer |
 | `tools/write_die_gds.py` | Write the die GDS from the app's placement recipe |
-| `tools/splitter_dp_tests.py` | Compare the splitter DP against brute force |
 
 ## Known limitations
 
@@ -128,10 +130,16 @@ the real `config.json` is gitignored.
 - The macOS bundle is produced by cross-compilation and is unsigned; macOS will
   quarantine it on download (see [docs/BUILDING.md](docs/BUILDING.md) for the
   codesign/notarise path).
-- GDS and testbench export need Python with `gdstk` installed; the GUI itself
-  does not.
+- The cell viewer and GDS export need Python with `gdstk`; the rest of the
+  GUI runs without Python.
 
 ## Licence
 
-[MIT](LICENSE). JoSIM, gdstk, RAD Studio and the RSFQ cell libraries are
-external projects with their own licences.
+[MIT](LICENSE).
+
+`examples/rsfq_lib/library_fixed.lef` is a modified copy of a file from
+[`sunmagnetics/RSFQlib`](https://github.com/sunmagnetics/RSFQlib) and is covered
+by that project's GPL-3.0 licence, not by MIT.
+
+JoSIM, gdstk, RAD Studio and the rest of the RSFQ cell libraries are external
+projects with their own licences.

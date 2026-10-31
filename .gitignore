@@ -64,6 +64,9 @@ venv/
 # Per-machine tool config (copy tools/config.example.json to tools/config.json)
 tools/config.json
 
+# Private developer notes
+TECH_DEBT.md
+
 # Release packaging
 dist/
 *.zip
