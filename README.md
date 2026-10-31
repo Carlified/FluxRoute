@@ -144,8 +144,7 @@ the source for that same version: the "Source code" archives GitHub generates
 for a tagged release are exactly that, so do not remove them from a release.
 
 `examples/rsfq_lib/library_fixed.lef` comes from
-[`sunmagnetics/RSFQlib`](https://github.com/sunmagnetics/RSFQlib), which is
-GPL-3.0 as well, so it sits under the same licence as the rest of the project.
+[`sunmagnetics/RSFQlib`](https://github.com/sunmagnetics/RSFQlib) (GPL-3.0).
 
 JoSIM, gdstk, RAD Studio and the other RSFQ cell libraries are external projects
 under their own licences.
