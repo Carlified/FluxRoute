@@ -172,13 +172,20 @@ pwsh packaging/package-win.ps1 -Version 1.0.0
 # -> dist/FluxRoute-1.0.0-win64.zip
 ```
 
-**macOS** (`packaging/package-macos.sh`, run it on the Mac or on a machine that
-can run `ditto`):
+**macOS** ? two equivalent routes:
 
 ```sh
+# on macOS (uses ditto, preserves the bundle)
 sh packaging/package-macos.sh OSXARM64/Release/PnRGUI.app 1.0.0
 # -> dist/FluxRoute-1.0.0-macos-arm64.zip
+
+# on Windows (no ditto): stores the bundle entry by entry with the right modes
+python packaging/package-macos.py "C:\path\to\PnRGUI.app" 1.0.0 arm64
 ```
+
+Package a **Release** build: a Debug deployment copies the `{$I}` sources into
+`PnRGUI.app/Contents/Resources/StartUp/` (the packagers strip them, but the
+Release binary is also smaller and faster).
 
 Both bundles contain the binary, `README.md`, `LICENSE` and the `tools/` folder,
 so the optional export helpers work out of the box.

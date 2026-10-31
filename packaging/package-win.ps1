@@ -29,9 +29,11 @@ foreach ($item in @("tools", "README.md", "LICENSE")) {
   if (-not (Test-Path -LiteralPath $src)) { throw "missing: $src" }
   Copy-Item -LiteralPath $src -Destination $stage -Recurse
 }
-# The example config is the template; never ship a machine's real config.
+# Never ship a machine's real config or Python caches.
 $realCfg = Join-Path $stage "tools\config.json"
 if (Test-Path -LiteralPath $realCfg) { Remove-Item -LiteralPath $realCfg -Force }
+Get-ChildItem -LiteralPath (Join-Path $stage "tools") -Directory -Filter "__pycache__" -Recurse -ErrorAction SilentlyContinue |
+  Remove-Item -Recurse -Force
 
 $zip = Join-Path $dist "$name.zip"
 if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }

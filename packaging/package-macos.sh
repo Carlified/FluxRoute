@@ -28,6 +28,9 @@ cp -R "$APP" "$STAGE/"
 cp -R "$ROOT/tools" "$STAGE/"
 cp "$ROOT/README.md" "$ROOT/LICENSE" "$STAGE/"
 rm -f "$STAGE/tools/config.json"
+# Debug deployments copy the {$I} sources into the bundle; never ship them.
+find "$STAGE/PnRGUI.app" -name '*.inc' -delete 2>/dev/null || true
+find "$STAGE/tools" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 
 ZIP="$DIST/$NAME.zip"
 rm -f "$ZIP"
