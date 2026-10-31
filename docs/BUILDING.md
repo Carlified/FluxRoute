@@ -134,6 +134,23 @@ spctl -a -vvv PnRGUI.app          # should say "accepted, Notarized Developer ID
 
 ---
 
+### 3.6 Troubleshooting
+
+- **`CreateInfoPlistFile` fails with `DirectoryNotFoundException` for
+  `OSXARM64\Release\PnRGUI.info.plist`** ? the Release output folder does not
+  exist yet (Debug was built first) and the task does not create it. Create it
+  once and rebuild:
+
+  ```bat
+  mkdir OSXARM64\Release
+  ```
+
+  The same applies to `Win64\Release` after a clean.
+- **"macOS SDK not found"** ? the platform is installed but no SDK is configured;
+  add one in the SDK Manager (?3.1).
+- **Build succeeds but the app will not start on the Mac** ? see ?3.3
+  (quarantine/signature), and check the Mac's `Console.app` for a crash report.
+
 ## 4. Command-line builds (optional)
 
 From the RAD Studio command prompt:
