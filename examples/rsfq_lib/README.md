@@ -10,12 +10,23 @@ remove.
 
 `library_fixed.lef` describes the same 16 cells as the stock
 `lef_files/lef_6_metals.lef` — the `PAD`, the four `ALWAYS0` variants and the
-eleven PTL-enabled `*T` cells — with the fixes the flow needs:
+eleven PTL-enabled `*T` cells — and differs in the three things the flow needs:
 
-- **`VDD` power pins** (`USE POWER`) on the eleven biased cells, so the bias
-  network has something to connect to. The stock LEF defines no power pins at
-  all, so bias expansion cannot work with it.
-- the `M0`..`M7` metal and via-cut stack in the form the LEF reader expects.
+- **Two routing layers, one via.** Only `M1` (horizontal) and `M3` (vertical) are
+  `TYPE ROUTING`; `M0`, `M2`, `M4` and `M7` are ground planes and `M5`/`M6` are
+  cell metal. The only via is `M1` to `M3`, the stacked `via1`+`via2` pair that
+  passes through an isolated island in the `M2` plane. The stock files declare
+  every metal from `M1` to `M6` as routing with five via types, so the router
+  would happily use layers the cell blocks never wire on.
+- **`VDD` power pins** (`USE POWER`, on `M5` at the top and bottom edges) on the
+  eleven biased cells; the `PAD` and the four `ALWAYS0` cells draw no bias. The
+  stock LEF defines no power pins at all, so bias expansion has nothing to
+  connect.
+- **Bias metadata in a non-standard comment.** Each `VDD` port carries
+  `# top edge, 50uA` or `# bottom edge, 50uA` inside the pin block. While a pin
+  is open the parser reads such a comment as that port's edge and its current
+  limit (`uA`, `mA` or `A`), which is what the bias rows are sized from. LEF has
+  no field for a port current, hence the extension.
 
 Load it on the Library page. The stock `lef_*_metals.lef` files in the RSFQlib
 repository are not used by this flow.

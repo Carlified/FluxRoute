@@ -15,11 +15,17 @@ LEF + BLIF -> splitters -> pipeline (DFF) -> clock tree -> placement/floorplan
           -> bias expansion -> routing -> validation -> GDS / CIR / testbench
 ```
 
+**Scope:** combinational, PTL-only designs with a single clock. The tool inserts
+the flip-flop pipeline itself; stateful (sequential) macros, multiple clock
+domains and cyclic netlists are outside its scope, and one flip-flop type is used
+per run.
+
 ## Features
 
-- **Parsing** — LEF cell library (layers, MACRO/PIN geometry, power ports) and
-  BLIF netlists, with connectivity, pin and clock-level diagnostics shown on the
-  netlist page exactly as parsed.
+- **Parsing** — LEF cell library (layers, MACRO/PIN geometry, power ports and
+  bias-current metadata), Verilog cell timing (delay, setup/hold, input spacing)
+  and BLIF netlists, with connectivity, pin and clock-level diagnostics shown on
+  the netlist page exactly as parsed.
 - **Splitter insertion** — fans high-fanout nets out through splitter trees,
   using a DP that minimises added delay for the selected splitter cell(s).
 - **Pipelining** — two modes on one slider: **compact** (minimum flip-flops, with
@@ -132,6 +138,10 @@ the real `config.json` is gitignored.
   codesign/notarise path).
 - The cell viewer and GDS export need Python with `gdstk`; the rest of the
   GUI runs without Python.
+- The router has no rip-up step and there is no LVS; layouts are checked with
+  external DRC/LVS tools.
+- Timing uses a fixed per-cell delay: one worst-case number per cell, with no
+  dependence on load or interconnect.
 
 ## Licence
 
