@@ -31,7 +31,7 @@ keep exactly one of each:
 |---|---|---|
 | `<cell>_v3p0.v` | `<cell>_v3p0_selfcontained.v` | a second `.v` for the same cell |
 | `<cell>_v3p0_extracted.cir` | `<cell>_v3p0_base.cir`, `<cell>_v3p0_idx.cir` | three `.cir` files for the same cell; the extracted netlist is the one the export uses |
-| | `<cell>_v3p0_testbench.cir` | per-cell testbench `.cir`; move the ones you want into a shared `testbenches/` folder |
+| | `<cell>_v3p0_testbench.cir` | per-cell testbench `.cir`; not needed by the flow |
 
 In a stock v3.0 checkout that is **120 files**: 35 `_base.cir`, 35 `_idx.cir`,
 27 `_testbench.cir` and 23 `_selfcontained.v`.
@@ -41,14 +41,10 @@ In a stock v3.0 checkout that is **120 files**: 35 `_base.cir`, 35 `_idx.cir`,
 ```powershell
 $lib = "C:\path\to\RSFQlib"     # the folder containing mitll_AND2T, mitll_DFFT, ...
 
-# keep the per-cell testbenches in one place (optional, but tidy)
-New-Item -ItemType Directory -Force "$lib\testbenches" | Out-Null
-Get-ChildItem $lib -Recurse -File -Filter '*_testbench.cir' |
-  Move-Item -Destination "$lib\testbenches"
-
-# drop the duplicate models; remove -WhatIf once the list looks right
+# drop the duplicate models and the per-cell testbenches;
+# remove -WhatIf once the list looks right
 Get-ChildItem $lib -Recurse -File |
-  Where-Object { $_.Name -match '_(base|idx)\.cir$|_selfcontained\.v$' } |
+  Where-Object { $_.Name -match '_(base|idx|testbench)\.cir$|_selfcontained\.v$' } |
   Remove-Item -WhatIf
 ```
 
@@ -56,10 +52,8 @@ Get-ChildItem $lib -Recurse -File |
 
 ```sh
 cd /path/to/RSFQlib
-mkdir -p testbenches
-find . -mindepth 2 -name '*_testbench.cir' -exec mv {} testbenches/ \;
 find . -type f \( -name '*_base.cir' -o -name '*_idx.cir' \
-  -o -name '*_selfcontained.v' \) -delete
+  -o -name '*_testbench.cir' -o -name '*_selfcontained.v' \) -delete
 ```
 
 Also delete the leftover `__pycache__` folders and the scratch
