@@ -509,7 +509,6 @@ begin
           if (Xn <> X) and (Yn = Y) then // N1 horizontal
           begin
             P1X := Xn;
-            P1Y := Yn;
             CellXY(N2, Xn, Yn);
             if (Xn = X) and (Yn <> Y) then
             begin
@@ -530,7 +529,6 @@ begin
           end
           else if (Xn = X) and (Yn <> Y) then // N1 vertical
           begin
-            P1X := Xn;
             P1Y := Yn;
             CellXY(N2, Xn, Yn);
             if (Xn <> X) and (Yn = Y) then

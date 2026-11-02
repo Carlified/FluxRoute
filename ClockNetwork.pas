@@ -612,6 +612,10 @@ begin
 
   Delays := TDictionary<string, Double>.Create;
   SplitterDelays := TDictionary<string, Double>.Create;
+  // Combined delay table (splitters + buffers) so tree-distance walks can
+  // traverse buffer chains inserted during balancing. Created up here with the
+  // others so the finally always has a valid object to free.
+  TreeDly := TDictionary<string, Double>.Create;
   Info := TClockNetworkInfo.Create;
   Info.SourceNet := ClockNetName;
   try
@@ -621,9 +625,6 @@ begin
       SplitterDelays.AddOrSetValue(SplitterTypes[i].CellName,
         SplitterTypes[i].DelayPs);
 
-    // Combined delay table (splitters + buffers) so tree-distance walks
-    // can traverse buffer chains inserted during balancing.
-    TreeDly := TDictionary<string, Double>.Create;
     for BufferT := 0 to Length(SplitterTypes) - 1 do
       TreeDly.AddOrSetValue(SplitterTypes[BufferT].CellName,
         SplitterTypes[BufferT].DelayPs);

@@ -3,7 +3,7 @@
         <ProjectGuid>{7428C859-5FFF-4998-ABB9-2D4B9803F0FE}</ProjectGuid>
         <MainSource>BlifParser.dpr</MainSource>
         <Base>True</Base>
-        <Config Condition="'$(Config)'==''">Debug</Config>
+        <Config Condition="'$(Config)'==''">Release</Config>
         <ProjectName Condition="'$(ProjectName)'==''">BlifParser</ProjectName>
         <TargetedPlatforms>135169</TargetedPlatforms>
         <AppType>Console</AppType>

@@ -165,9 +165,12 @@ spctl -a -vvv PnRGUI.app          # should say "accepted, Notarized Developer ID
   project no longer lists them and ships no deployment entries for them. If an
   older checkout or a re-saved project brings them back, open
   **Project > Deployment** and delete those rows.
-- **The icon/version disappears after a build** - the IDE occasionally
-  truncates `PnRGUI.res` to 32 bytes when it rewrites the project. Restore it
-  with `git checkout -- PnRGUI.res` and rebuild.
+- **`PnRGUI.res` shrinks to 32 bytes after a build** - expected. The IDE
+  regenerates the project resource from the project options on save, and this
+  project keeps its icon and version info there (`Icon_MainIcon`,
+  `Icns_MainIcns`, `VerInfo_Keys`), which the linker embeds directly. The empty
+  `.res` is what is committed, so a build leaves the tree clean; do not restore
+  an older copy over it.
 - **"macOS SDK not found"** ? the platform is installed but no SDK is configured;
   add one in the SDK Manager (?3.1).
 - **Build succeeds but the app will not start on the Mac** ? see ?3.3

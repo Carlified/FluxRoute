@@ -379,7 +379,6 @@ end;
 // one at a time (no vias), then a via pass; each wire blocks its layer as it routes.
 procedure TForm1.RunRouting;
 var
-  Core: Double;
   Path: TArray<TPoint>;
   PathLayers: TArray<Integer>;
   NC: TNetConnection;
@@ -552,7 +551,6 @@ begin
     MemoRouting.Lines.Add('Core block size is invalid.');
     Exit;
   end;
-  Core := FDesignConfig.CoreUm;
   if FLib = nil then
   begin
     MemoRouting.Lines.Add('No library loaded.');
@@ -582,7 +580,6 @@ begin
 
     SetLength(FRouteTraces, 0);
     SetLength(FBiasCells, 0);
-    Failed := 0;
     SetLength(Jobs, 0);
 
     // Collect signal nets (non-clock pins, placed gates only).
