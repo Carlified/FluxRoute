@@ -44,7 +44,9 @@ def main():
     ap.add_argument("--slots", type=int, help="number of windows (default: from the meta)")
     ap.add_argument("--start", type=float,
                     help="first window start in ps (default: decodeWindowStartPs from the meta)")
-    ap.add_argument("--expect", help="expected bits (printed for comparison)")
+    ap.add_argument("--expect",
+                    help="expected bits, per output as name=bits (comma-separated); "
+                         "a bare string is compared against every column")
     args = ap.parse_args()
 
     csv_path = resolve_csv(args)
@@ -89,9 +91,17 @@ def main():
             raise SystemExit(f"no column matches '{sub}'")
         return hits[0]
 
-    print(f"{os.path.basename(csv_path)}: period {period:g} ps, {slots} slots, window start {start:g} ps")
+    expect = {}
     if args.expect:
-        print(f"expected : {args.expect}")
+        for tok in args.expect.split(","):
+            if "=" in tok:
+                name, bits = tok.split("=", 1)
+                expect[name.strip().lower()] = bits.strip()
+        if not expect:
+            expect["*"] = args.expect.strip()
+        print("expected : " + ", ".join(f"{k}={v}" for k, v in expect.items()))
+
+    print(f"{os.path.basename(csv_path)}: period {period:g} ps, {slots} slots, window start {start:g} ps")
 
     for sub in args.cols.split(","):
         ci = col_index(sub.strip())
@@ -109,8 +119,14 @@ def main():
             bits.append("1" if slips >= 0.5 else "0")
         got = "".join(bits)
         tag = ""
-        if args.expect:
-            exp = args.expect.strip()
+        exp = None
+        for key, val in expect.items():
+            if key != "*" and key in name.lower():
+                exp = val
+                break
+        if exp is None:
+            exp = expect.get("*")
+        if exp is not None:
             tag = "  OK" if got[:len(exp)] == exp else "  MISMATCH"
         print(f"{name:22s}: {got}{tag}")
 

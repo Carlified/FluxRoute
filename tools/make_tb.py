@@ -22,6 +22,7 @@ from tools/config.json and --decode turns the output phase traces into bits.
 
 import argparse
 import json
+import math
 import os
 import subprocess
 import sys
@@ -46,13 +47,13 @@ def pwl(bits, period_ps, offset_ps, amp_ua, width_ps):
     """Piecewise-linear input current: one pulse per '1', every clock period."""
     if not bits:
         return "0"
-    segs = []
+    segs = ["0 0"]
     for k, c in enumerate(bits):
         if c != "1":
             continue
         t = offset_ps + k * period_ps
-        segs.append(f"{fmt(t)}p {fmt(amp_ua)}u {fmt(t + width_ps)}p 0")
-    if not segs:
+        segs.append(f"{fmt(t)}p 0 {fmt(t + width_ps)}p {fmt(amp_ua)}u {fmt(t + 2 * width_ps)}p 0")
+    if len(segs) == 1:
         return "0"
     return "PWL(" + " ".join(segs) + ")"
 
@@ -138,6 +139,8 @@ def main():
                     help="print only the output phase probes (no clock/input/readout voltages)")
     ap.add_argument("--output-nodes", action="store_true",
                     help="print output node voltages instead of phase probes")
+    ap.add_argument("--io-nodes", action="store_true",
+                    help="print only the I/O port nodes (clock input, data inputs, outputs)")
     ap.add_argument("--run", action="store_true", help="simulate the deck with josimCli")
     ap.add_argument("--decode", action="store_true",
                     help="with --run, decode the output phases into bits (checkbits.py)")
@@ -233,10 +236,17 @@ def main():
     levels = max(0.0, max_depth - 1.0)
     travel = float(design.get("minOutputTravelPs", 0.0)) if design.get("outputTravelFound") else 0.0
     watch = clk_off + levels * period + travel
-    # The watch formula already includes the final level trigger for the
-    # current cell library. decodeStartPeriods is an escape hatch for a die
-    # whose first usable output window is one edge earlier/later.
-    decode_start = watch + float(cfg.get("decodeStartPeriods", 0.0)) * period
+    # The watch formula is an earliest bound relative to the first clock edge.
+    # A clocked cell only latches data on an edge *after* the data has been
+    # launched, so every whole period of data lag the first usable output window
+    # moves one edge later. That offset is automatic; --decode-start-periods
+    # overrides it for a die that behaves differently.
+    auto_shift = 0.0
+    if data_off > clk_off:
+        auto_shift = math.ceil((data_off - clk_off) / period - 1e-9)
+    shift_override = args.decode_start_periods is not None
+    shift = float(args.decode_start_periods) if shift_override else auto_shift
+    decode_start = watch + shift * period
     margin = float(cfg.get("outputMarginPs", period))
     stop = max(decode_start + (slots - 1) * period + margin,
                data_off + (slots - 1) * period + levels * period + travel + margin)
@@ -251,6 +261,8 @@ def main():
             f"of {safe_rows} (set josimMaxRows/timeStepPs in config.json)")
     print(f"output watch/start: {watch:g} ps (max depth {max_depth:g}, "
           f"{'data leads' if data_rel <= 0 else 'data lags'} -> {levels:g} periods, travel {travel:g} ps)")
+    print(f"decode shift: {shift:g} period(s) "
+          f"({'override' if shift_override else 'auto: first capture edge after the data'})")
     print(f"decode window start: {decode_start:g} ps")
     print(f"run length: {stop:g} ps, step {dt:g} ps -> {rows:.0f} points (safe <= {safe_rows})")
     L.append(f"* output watch {watch:g} ps, decode window {decode_start:g} ps "
@@ -262,7 +274,11 @@ def main():
     clk_probe = str(cfg.get("probeClockJunction", "B3"))
     out_probe = str(cfg.get("probeOutputJunction", "B1"))
     outputs = design.get("outputs", [])
-    if args.output_nodes:
+    if args.io_nodes:
+        probe = [f"v({design['clock']}_i)"]
+        probe += [f"v({n}_i)" for n in inputs]
+        probe += [f"v({n}_o)" for n in outputs]
+    elif args.output_nodes:
         probe = [f"v({n}_o)" for n in outputs]
     elif args.phases_only:
         probe = [f"p({out_probe}.XR{n})" for n in outputs]
@@ -291,6 +307,8 @@ def main():
         "outputPeriods": levels,
         "minOutputTravelPs": travel,
         "outputWatchStartPs": watch,
+        "decodeShiftPeriods": shift,
+        "decodeShiftAuto": not shift_override,
         "decodeWindowStartPs": decode_start,
         "slots": slots,
         "stopPs": stop,
