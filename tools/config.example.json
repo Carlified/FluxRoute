@@ -1,18 +1,9 @@
 {
-  "_comment": "Template for the RSFQ test-bench tools. Copy this file to config.json (same folder) and fill in the paths for your machine. Design-derived values (clock frequency, PTL delay, core pitch, die size, I/O nets) are exported by the app to <design>.tb.json next to <design>.cir; anything set here overrides or supplements them. Run the tools from this directory (or pass --config).",
-
-  "outputDir": "../Win64/Debug/output/my_design",
-  "cir": "my_design.cir",
-  "designConfig": "my_design.tb.json",
-  "tbOut": "my_design_tb.cir",
-  "tbSpec": "tb_spec.json",
-
+  "_comment": "Helper config for the RSFQ test-bench tools. Design-derived values (clock frequency, PTL delay, core pitch, die size, I/O nets) are exported by the app to <stem>.tb.json next to <stem>.cir; point the tools at that folder with --dir. Nothing here is tied to a particular design.",
   "josimCli": "",
   "rsfqLib": "",
-
-  "_comment2": "Stimulus knobs. clockPeriodPs <= 0 means derive it from freqGHz in the design config (period = 1000/freqGHz). useInputWindow uses the exporter's inputWindowTarget* bounds; startupPeriods skips extra clock edges. settlePs is the earliest absolute launch time; the earlier of clock/data starts there. inputWindowMode is start|center|end|positive (end avoids the too-early edge of the derived window). dataPhasePs is only the fallback when inputWindowFound is false. pipelineLevels is the max clock depth; outputWatchStart = clockSend + (pipelineLevels-1)*period + minOutputTravelPs. decodeWindowStartPs equals outputWatchStartPs by default; decodeStartPeriods shifts it by whole clock periods. pipelineLatencySlots is the older fallback. timeStepPs/josimMaxRows keep JoSIM's time-point memory in check (measured: 80k points OK, 100k crashed on an 8 GB box).",
+  "_comment2": "Stimulus knobs. clockPeriodPs <= 0 means derive it from freqGHz in the design config (period = 1000/freqGHz). useInputWindow uses the exporter's inputWindowTarget* bounds; startupPeriods skips extra clock edges. settlePs is the earliest absolute launch time; the earlier of clock/data starts there. inputWindowMode is start|center|end|positive (end avoids the too-early edge of the derived window). dataPhasePs is only the fallback when inputWindowFound is false. pipelineLevels is the fallback max clock depth (the exporter writes it into <stem>.tb.json). outputWatchStart = clockSend + (pipelineLevels-1)*period + minOutputTravelPs (the travel figure already includes the final level trigger); decodeStartPeriods shifts the decode window by whole periods. timeStepPs/josimMaxRows keep JoSIM's time-point memory in check (measured: 80k points OK, 100k crashed on an 8 GB box). probeClockJunction/probeOutputJunction name the junction inside the testbench's DCSFQ-PTLTX / PTLRX-SFQDC instances that the phase probes address - a library-specific detail.",
   "clockPeriodPs": 0.0,
-  "launchOffsetPs": 50.0,
   "settlePs": 50.0,
   "dataPhasePs": 58.0,
   "startupPeriods": 0,
@@ -21,12 +12,12 @@
   "pulseWidthPs": 3.0,
   "pulseAmplitudeUa": 600.0,
   "riseFallPs": 2.0,
-  "ptlTdPsPerBlock": 0.1,
   "pipelineLevels": 3,
-  "pipelineLatencySlots": 3,
   "decodeStartPeriods": 0.0,
   "outputMarginPs": 100.0,
   "timeStepPs": 0.05,
   "josimMaxRows": 80000,
-  "slots": 8
+  "slots": 8,
+  "probeClockJunction": "B3",
+  "probeOutputJunction": "B1"
 }

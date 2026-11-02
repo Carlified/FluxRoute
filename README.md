@@ -120,18 +120,33 @@ packages, are in **[docs/BUILDING.md](docs/BUILDING.md)**. Short version:
 
 ## Helper tools
 
-The Python tools read the files exported by the app. Copy
+The Python tools work on one design folder at a time (the folder the Export
+page writes `<stem>.cir`, `<stem>.tb.json`, `.gds`, ... into). Copy
 [`tools/config.example.json`](tools/config.example.json) to `tools/config.json`
-and fill in your machine's paths (JoSIM binary, RSFQ library, output folder) —
+and fill in your machine's paths (the JoSIM binary and the RSFQ cell library);
 the real `config.json` is gitignored.
 
 | Script | Purpose |
 |---|---|
-| `tools/make_tb.py` | Build a JoSIM testbench from `<stem>.cir` + `<stem>.tb.json` |
-| `tools/checkbits.py` | Decode simulated output phases into bits |
-| `tools/plot_csv.py` | Plot a JoSIM CSV |
+| `tools/make_tb.py` | Build the JoSIM deck from `<stem>.cir` + `<stem>.tb.json`; `--run` simulates it with `josimCli` and `--decode` prints the recovered bits |
+| `tools/checkbits.py` | Decode output phase traces into a bit vector (period/slots/window come from the meta JSON) |
+| `tools/plot_csv.py` | Plot any JoSIM CSV columns (groups, separate axes, offset sliders) |
 | `tools/gds_to_json.py` | Convert a GDS to JSON for the in-app cell viewer |
 | `tools/write_die_gds.py` | Write the die GDS from the app's placement recipe |
+
+All three tools take `--dir <design folder>`; `--stem` defaults to the folder
+name, which is how the app lays its outputs out. For example:
+
+```powershell
+python tools/make_tb.py --dir Win64/Release/output/full_adder `
+  --bits a=10110011,b=01011101,cin=00110010 --run --decode
+python tools/checkbits.py --dir Win64/Release/output/full_adder --cols sum,cout
+python tools/plot_csv.py  --dir Win64/Release/output/full_adder --cols sum,cout --ps
+```
+
+The phase probes address a junction inside the testbench's own transmitter and
+readout cells; `probeClockJunction` / `probeOutputJunction` in `config.json` name
+those junctions for the cell library you use.
 
 ## Known limitations
 

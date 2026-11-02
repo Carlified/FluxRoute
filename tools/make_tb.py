@@ -1,29 +1,30 @@
 #!/usr/bin/env python3
-"""make_tb.py - build a JoSIM test bench for the exported die netlist.
+"""make_tb.py - build a JoSIM testbench around an exported FluxRoute die.
 
-Reads the app-exported design config (die.tb.json: clock net, I/O nets, clock
-frequency, ...), the tool config (config.json: paths + stimulus knobs), and a bit
-spec, then writes die_tb.cir that wraps die.cir with:
+    python make_tb.py --dir <design output folder> [--stem <name>] [--bits a=101,b=011]
 
-  * a clock:   pulse(0 A <offset> r f w <T>)  -> DCSFQ-PTLTX -> <clock>_i
-  * each data input: a PWL current pulse train (one 600uA pulse per '1')
-                     -> DCSFQ-PTLTX -> <net>_i
-  * each output: PTLRX-SFQDC -> 2 ohm sink, phase+voltage printed
+The folder must contain the files the app's Export page writes:
 
-The clock period comes from the config's clock frequency (period = 1000/freqGHz).
-Data is launched dataPhasePs after the clock launch (the routed data paths are
-shorter than the clock tree, so the stimulus has to compensate). The run length
-covers the counterflow pipeline latency, which is several clock cycles.
-Bit strings come from --bits (e.g. --bits a=11010010,b=01110101,cin=00011011) or
-from the spec file (tb_spec.json: {"a": "11010010", ...}).
+    <stem>.cir        flat SPICE netlist (pads are <in>_i, <out>_o, clk_i, clk_o)
+    <stem>.tb.json    timing metadata: clock net, I/O lists, freq, pipeline
+                      levels, min clock period, input windows, output travel
 
-Usage:
-  python make_tb.py --bits a=11010010,b=01110101,cin=00011011
-  python make_tb.py --spec tb_spec.json
+and this script writes:
+
+    <stem>_tb.cir        JoSIM deck: clock + data PWL sources through DCSFQ-PTLTX
+                         transmitters, one PTLRX-SFQDC readout per output
+    <stem>_tb.meta.json  the launch/window/watch times it used (checkbits reads it)
+
+--stem defaults to the folder name, which is how the tool lays its outputs out
+(<output>/<design>/<design>.cir). --run simulates the deck with the josimCli
+from tools/config.json and --decode turns the output phase traces into bits.
 """
+
 import argparse
 import json
 import os
+import subprocess
+import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DCSFQ = "mitll_DCSFQ-PTLTX/THmitll_DCSFQ-PTLTX_v3p0_extracted.cir"
@@ -32,10 +33,7 @@ PTLRX = "mitll_PTLRX-SFQDC/THmitll_PTLRX-SFQDC_v3p0_extracted.cir"
 
 def load_json(path):
     if not os.path.exists(path):
-        raise SystemExit(
-            f"config not found: {path}\n"
-            "Copy tools/config.example.json to tools/config.json and fill in the "
-            "paths for your machine (JoSIM, RSFQ library, output folder).")
+        raise SystemExit(f"file not found: {path}")
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -45,34 +43,38 @@ def winpath(p):
 
 
 def pwl(bits, period_ps, offset_ps, amp_ua, width_ps):
-    """One triangular current pulse (0 -> A -> 0) at k*period + offset for each '1'."""
-    pts = ["0 0"]
-    for k, b in enumerate(bits):
-        if b == "1":
-            t = k * period_ps + offset_ps
-            pts += [f"{fmt(t)}p 0", f"{fmt(t + width_ps)}p {fmt(amp_ua)}u",
-                    f"{fmt(t + 2 * width_ps)}p 0"]
-    return "pwl(" + " ".join(pts) + ")"
+    """Piecewise-linear input current: one pulse per '1', every clock period."""
+    if not bits:
+        return "0"
+    segs = []
+    for k, c in enumerate(bits):
+        if c != "1":
+            continue
+        t = offset_ps + k * period_ps
+        segs.append(f"{fmt(t)}p {fmt(amp_ua)}u {fmt(t + width_ps)}p 0")
+    if not segs:
+        return "0"
+    return "PWL(" + " ".join(segs) + ")"
 
 
 def fmt(v):
-    return ("%g" % v)
+    if v == int(v):
+        return str(int(v))
+    return f"{v:.6g}"
 
 
 def derive_launch(design, cfg, period):
     """Turn the exporter's timing JSON into absolute clock/data launch times.
 
-    inputWindow* in die.tb.json are relative to the clock edge being sent. The
-    window can be negative (data before the first clock edge); the testbench
+    inputWindow* in <stem>.tb.json are relative to the clock edge being sent.
+    The window can be negative (data before the first clock edge); the testbench
     keeps both sources at or after settlePs by delaying whichever one is later.
 
-    startupPeriods can shift the window to a later clock edge. It defaults to
-    zero now that the PTL block delay matches the exporter.
+    startupPeriods can shift the window to a later clock edge.
 
     If the requested period is below minClockPeriodPs, the exporter's target
     window is inverted (no safe launch point at that frequency). In that case
-    fall back to the min-period window, which is still a valid launch point for
-    the simulated data-leading capture.
+    fall back to the min-period window, which is still a valid launch point.
     """
     settle = float(cfg.get("settlePs", 50.0))
     use_window = bool(cfg.get("useInputWindow", True)) and bool(design.get("inputWindowFound"))
@@ -118,24 +120,28 @@ def derive_launch(design, cfg, period):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default=os.path.join(HERE, "config.json"))
-    ap.add_argument("--dir", help="circuit directory (overrides config outputDir)")
-    ap.add_argument("--stem", help="use <stem>.cir and <stem>.tb.json; write <stem>_tb.cir")
-    ap.add_argument("--bits", help="comma-separated net=bits, e.g. a=101,b=110")
-    ap.add_argument("--spec", help="JSON spec file {net: bits}")
-    ap.add_argument("--out", help="output .cir (default: config.tbOut)")
+    ap.add_argument("--dir", required=True,
+                    help="design output folder (the one holding <stem>.cir and <stem>.tb.json)")
+    ap.add_argument("--stem", help="design stem (default: the folder name)")
+    ap.add_argument("--bits", help="comma-separated net=bits stimulus, e.g. a=101,b=110")
+    ap.add_argument("--out", help="deck path (default: <dir>/<stem>_tb.cir)")
     ap.add_argument("--time-step", type=float, help="override timeStepPs from config")
     ap.add_argument("--period", type=float, help="override clock period in ps")
     ap.add_argument("--startup-periods", type=float,
                     help="override startupPeriods (skip this many clock edges)")
     ap.add_argument("--data-phase", type=float,
-                    help="override data-clock relative launch phase in ps")
+                    help="override the data-clock launch phase in ps (bypasses the window)")
     ap.add_argument("--slots", type=int, help="override number of bit slots")
     ap.add_argument("--decode-start-periods", type=float,
                     help="override decodeStartPeriods")
-    ap.add_argument("--minimal-probes", action="store_true",
-                    help="print only output phase probes (no clock/input/readout voltages)")
-    ap.add_argument("--probe-nodes", action="store_true",
+    ap.add_argument("--phases-only", action="store_true",
+                    help="print only the output phase probes (no clock/input/readout voltages)")
+    ap.add_argument("--output-nodes", action="store_true",
                     help="print output node voltages instead of phase probes")
+    ap.add_argument("--run", action="store_true", help="simulate the deck with josimCli")
+    ap.add_argument("--decode", action="store_true",
+                    help="with --run, decode the output phases into bits (checkbits.py)")
+    ap.add_argument("--expect", help="expected bits for --decode (one string per output)")
     args = ap.parse_args()
 
     cfg = load_json(args.config)
@@ -149,17 +155,13 @@ def main():
     if args.decode_start_periods is not None:
         cfg = dict(cfg)
         cfg["decodeStartPeriods"] = args.decode_start_periods
-    if args.dir:
-        cfg = dict(cfg)
-        cfg["outputDir"] = args.dir
-    if args.stem:
-        cfg = dict(cfg)
-        cfg["cir"] = args.stem + ".cir"
-        cfg["designConfig"] = args.stem + ".tb.json"
-        cfg["tbOut"] = args.stem + "_tb.cir"
-    out_dir = os.path.join(HERE, cfg["outputDir"])
-    design = load_json(os.path.join(out_dir, cfg["designConfig"]))
+
+    out_dir = os.path.abspath(args.dir)
+    stem = args.stem or os.path.basename(os.path.normpath(out_dir))
+    design = load_json(os.path.join(out_dir, stem + ".tb.json"))
     rsfq = cfg["rsfqLib"]
+    if not rsfq:
+        raise SystemExit("set rsfqLib in tools/config.json to the RSFQ cell library folder")
 
     # clock period (ps)
     period = args.period or cfg.get("clockPeriodPs", 0.0)
@@ -168,12 +170,11 @@ def main():
         if not freq or freq <= 0:
             raise SystemExit("no clock frequency: set freqGHz in the design config or clockPeriodPs in config.json")
         period = 1000.0 / freq
+    print(f"design: {stem}  ({os.path.join(out_dir, stem + '.cir')})")
     print(f"clock period: {period:g} ps  ({1000.0/period:g} GHz)")
 
     # bit spec
     bits = {}
-    if args.spec:
-        bits = load_json(os.path.join(HERE, args.spec) if not os.path.isabs(args.spec) else args.spec)
     if args.bits:
         for tok in args.bits.split(","):
             if "=" in tok:
@@ -195,12 +196,12 @@ def main():
     print(f"launch: clock {clk_off:g} ps, data {data_off:g} ps (data-clock {data_rel:g} ps)")
 
     L = []
-    L.append("* die_tb.cir - generated by make_tb.py")
+    L.append("* " + stem + "_tb.cir - generated by make_tb.py")
     L.append(f"* clock period {period:g} ps, {slots} slots")
     L.append(f"* clock launch {clk_off:g} ps, data launch {data_off:g} ps (data-clock {data_rel:g} ps)")
     L.append(f"* input window {win_start:g} .. {win_end:g} ps relative to clock send")
     L.append("")
-    L.append(".include " + winpath(os.path.join(out_dir, cfg["cir"])))
+    L.append(".include " + winpath(os.path.join(out_dir, stem + ".cir")))
     L.append(".include " + winpath(os.path.join(rsfq, DCSFQ)))
     L.append(".include " + winpath(os.path.join(rsfq, PTLRX)))
     L.append("")
@@ -225,7 +226,7 @@ def main():
     # minOutputTravelPs after a clock edge, plus the pipeline depth in periods.
     max_depth = design.get("pipelineLevels")
     if max_depth is None:
-        max_depth = cfg.get("pipelineLevels", cfg.get("pipelineLatencySlots", 4.0))
+        max_depth = cfg.get("pipelineLevels", 4.0)
     max_depth = float(max_depth)
     # minOutputTravelPs already includes the round trip that triggers the final
     # pipeline level, so the number of whole periods to add is max depth - 1.
@@ -255,23 +256,30 @@ def main():
     L.append(f"* output watch {watch:g} ps, decode window {decode_start:g} ps "
              f"(max depth {max_depth:g}, periods {levels:g}, travel {travel:g} ps)")
     L.append(f".tran {fmt(dt)}p {fmt(stop)}p 0")
-    if args.probe_nodes:
-        probe = [f"v({n}_o)" for n in design.get("outputs", [])]
-    elif args.minimal_probes:
-        probe = [f"p(B1.XR{n})" for n in design.get("outputs", [])]
+    # Phase probes address a junction inside the testbench's own DCSFQ/PTLRX
+    # instances; the junction names come from the cell library, so they are a
+    # config knob rather than being hard-coded.
+    clk_probe = str(cfg.get("probeClockJunction", "B3"))
+    out_probe = str(cfg.get("probeOutputJunction", "B1"))
+    outputs = design.get("outputs", [])
+    if args.output_nodes:
+        probe = [f"v({n}_o)" for n in outputs]
+    elif args.phases_only:
+        probe = [f"p({out_probe}.XR{n})" for n in outputs]
     else:
-        probe = ["p(B3.XSCLK)", "v(clk_i)", "i(I_clk)"]
+        probe = [f"p({clk_probe}.XSCLK)", "v(clk_i)", "i(I_clk)"]
         probe += [f"i(I_{n})" for n in inputs]
         probe += [f"v({n}_i)" for n in inputs]
-        probe += [f"p(B1.XR{n})" for n in design.get("outputs", [])]
-        probe += [f"v(r{n})" for n in design.get("outputs", [])]
+        probe += [f"p({out_probe}.XR{n})" for n in outputs]
+        probe += [f"v(r{n})" for n in outputs]
     L.append(".print " + " ".join(probe))
     L.append(".end")
 
-    out = args.out or os.path.join(out_dir, cfg["tbOut"])
+    out = args.out or os.path.join(out_dir, stem + "_tb.cir")
     with open(out, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(L) + "\n")
     meta = {
+        "design": stem,
         "periodPs": period,
         "clockSendPs": clk_off,
         "dataLaunchPs": data_off,
@@ -293,6 +301,30 @@ def main():
         json.dump(meta, f, indent=2)
     print(f"wrote {out}")
     print(f"wrote {meta_path}")
+
+    csv_out = os.path.splitext(out)[0] + ".csv"
+    if args.decode and not args.run:
+        raise SystemExit("--decode needs --run (simulate first)")
+    if args.run:
+        exe = cfg.get("josimCli", "")
+        if not exe or not os.path.exists(exe):
+            raise SystemExit(
+                "set josimCli in tools/config.json to the josim-cli executable for --run")
+        cmd = [exe, "-o", csv_out, out]
+        print("running:", " ".join(cmd))
+        rc = subprocess.call(cmd)
+        if rc != 0:
+            raise SystemExit(f"JoSIM exited with {rc}")
+        print(f"wrote {csv_out}")
+    if args.decode:
+        cmd = [sys.executable, os.path.join(HERE, "checkbits.py"),
+               "--csv", csv_out,
+               "--cols", ",".join(outputs),
+               "--slots", str(slots)]
+        if args.expect:
+            cmd += ["--expect", args.expect]
+        print("decoding:", " ".join(cmd))
+        subprocess.call(cmd)
 
 
 if __name__ == "__main__":

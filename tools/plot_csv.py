@@ -29,17 +29,6 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-def load_config(path=None):
-    path = path or os.path.join(HERE, "config.json")
-    if not os.path.exists(path):
-        raise SystemExit(
-            f"config not found: {path}\n"
-            "Copy tools/config.example.json to tools/config.json and fill in the "
-            "paths for your machine (JoSIM, RSFQ library, output folder).")
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
 def load_csv(path):
     with open(path, newline="") as f:
         rd = csv.reader(f)
@@ -219,8 +208,9 @@ def inject_offset_sliders(path, groups, axes):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", help="path to config.json")
-    ap.add_argument("--csv", help="CSV to read (default: <outputDir>/die_tb.csv)")
+    ap.add_argument("--dir", help="design output folder (holds <stem>_tb.csv)")
+    ap.add_argument("--stem", help="design stem (default: the folder name)")
+    ap.add_argument("--csv", help="CSV to read (default: <dir>/<stem>_tb.csv)")
     ap.add_argument("--cols", help="comma-separated column substrings to plot")
     ap.add_argument("--groups", help="semicolon-separated groups; each group is a comma-separated "
                                      "list of column substrings and becomes one stacked subplot row")
@@ -232,8 +222,16 @@ def main():
     ap.add_argument("--save", help="save to this file (.html for plotly, else image)")
     args = ap.parse_args()
 
-    cfg = load_config(args.config)
-    path = args.csv or os.path.join(HERE, cfg["outputDir"], "die_tb.csv")
+    if args.csv:
+        path = os.path.abspath(args.csv)
+    elif args.dir:
+        out_dir = os.path.abspath(args.dir)
+        stem = args.stem or os.path.basename(os.path.normpath(out_dir))
+        path = os.path.join(out_dir, stem + "_tb.csv")
+    else:
+        raise SystemExit("pass --csv <file.csv> or --dir <design output folder>")
+    if not os.path.exists(path):
+        raise SystemExit(f"no such CSV: {path}\nrun make_tb.py --run first, or pass --csv")
     header, rows = load_csv(path)
 
     if args.list:
