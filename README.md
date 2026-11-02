@@ -261,6 +261,7 @@ watch time shifts every bit one slot late.
 | `cout` drifts relative to `sum` | independent output anchoring is hiding a cycle slip; use a common grid |
 | A frequency passes one vector but fails another | maximum was tested with a single pattern; use all input combinations |
 | Coarse run passes, fine run fails | time-step convergence; use 0.1 ps or finer at the boundary |
+| JoSIM exits `3221226505` (0xC0000409) mid-run | nodes x time points too high; split the vector set into chunks, raise the step or shorten the run |
 
 ### 6. Worked full-adder result
 
@@ -310,6 +311,7 @@ These are observations from the current cell library and tested designs; use the
 ## Practical testbench gotchas
 
 - **Probe count does not drive JoSIM memory**; simulation nodes × time points do. `-m` only suppresses printed output. For large circuits, run one-shot first, hold unused high-order inputs constant, or reduce the time-step/run length. A smaller CSV does not mean a smaller solve.
+- **Split the vector set when it does not fit.** A run costs memory in nodes x time points, and the ceiling depends on the netlist: the 2,400-line 2-bit adders ran 38-66k points, while hamming74 (2,119 lines, 296 junctions) crashed at 66,264. Chunk the patterns into equal slices, e.g. hamming74 runs its 128 patterns as four 32-pattern decks; each chunk's first pattern launches at the same phase, so the decode grid and the concatenated result are unchanged.
 - **All input patterns matter.** A maximum frequency found with one vector is not a general maximum. Test all input combinations and report a failure if any pattern fails.
 - **Throw away single-vector frequency claims.** Pattern-specific passes produced several false maxima during testing (notably the full adder and KSA2).
 - **Check time-step convergence.** KSA2 passed at 0.2 ps and failed at 0.1 ps at the same period/phase. Re-run at least the boundary point with a halved step before signing off.

@@ -10,11 +10,17 @@ PTL blocks and SFQ cell subcircuits that the decks include, and every
 | `mult_2x2/` | 2x2 array multiplier, `p = a * b` (4 bit) | 10 GHz | 3 | 16 | 0.05 ps | 389.9 ps | pass |
 | `rca2/` | 2-bit ripple-carry adder, `s = a + b + cin` | 8 GHz | 5 | 32 | 0.2 ps | 710 ps | pass |
 | `ksa2/` | 2-bit Kogge-Stone adder, `s = a + b + cin` | 10 GHz | 5 | 32 | 0.1 ps | 588.5 ps | pass |
+| `hamming74/` | Hamming(7,4) syndrome + `err`, 7 in / 4 out | 8 GHz | 4 | 128 | 0.2 ps | 591 ps | pass |
 
 "Pass" means every pattern was decoded twice on the same shared grid: once
 from the output phase traces and once from the pads (one pulse per bit), and
 the input pads also read back the stimulus. The stimulus, the expected output
 strings and the full command trail for each design are in `<stem>_result.txt`.
+
+`hamming74/` ships its 128 patterns as four 32-pattern decks (`_tb_a` ..
+`_tb_d`), because a single run either exceeds `make_tb`'s 80000-point guard or
+crashes JoSIM: each chunk keeps the same decode grid, so the chunks are just
+slices of one run.
 
 ## Files per design
 

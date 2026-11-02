@@ -1,0 +1,21 @@
+{
+  "stem": "hamming74",
+  "clock": "clk",
+  "inputs": ["r1", "r2", "r3", "r4", "r5", "r6", "r7"],
+  "outputs": ["s1__spl_10", "s2__spl_12", "s3__spl_8", "err"],
+  "freqGHz": 8,
+  "pipelineLevels": 4,
+  "ptlDelayFsPerUm": 10,
+  "coreUm": 10,
+  "dieWUm": 1000,
+  "dieHUm": 1300,
+  "maxPtlLengthUm": 1000,
+  "minClockPeriodPs": 35.6,
+  "inputWindowFound": true,
+  "inputWindowStartPs": 68.2,
+  "inputWindowEndPs": 81.1,
+  "inputWindowTargetStartPs": 68.2,
+  "inputWindowTargetEndPs": 170.5,
+  "outputTravelFound": true,
+  "minOutputTravelPs": 41
+}

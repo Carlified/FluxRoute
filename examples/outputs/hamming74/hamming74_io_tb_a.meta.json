@@ -1,0 +1,20 @@
+{
+  "design": "hamming74",
+  "periodPs": 125.0,
+  "clockSendPs": 50.0,
+  "dataLaunchPs": 169.35,
+  "dataPhasePs": 119.35,
+  "inputWindowStartPs": 68.2,
+  "inputWindowEndPs": 170.5,
+  "inputWindowSource": "target window",
+  "pipelineLevels": 4.0,
+  "outputPeriods": 3.0,
+  "minOutputTravelPs": 41.0,
+  "outputWatchStartPs": 466.0,
+  "decodeShiftPeriods": 1.0,
+  "decodeShiftAuto": true,
+  "decodeWindowStartPs": 591.0,
+  "slots": 32,
+  "stopPs": 4566.0,
+  "timeStepPs": 0.2
+}
