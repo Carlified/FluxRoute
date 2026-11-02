@@ -71,6 +71,9 @@ TECH_DEBT.md
 dist/
 *.zip
 
+# Parked, invalidated tool outputs (kept locally, never committed)
+old_outputs/
+
 # Logs
 *.log
 
