@@ -203,12 +203,12 @@ The testbench computes:
 outputWatch = clockSend + (pipelineLevels - 1) * period + outputTravel
 ```
 
-This is an **earliest** output estimate, not the first data-valid slot. When
-data lags the clock, the first usable output window is one or more periods
-later:
+This is an **earliest** output estimate, not the first data-valid slot: a
+clocked cell only latches on an edge after the clock send, so the first usable
+output window is one period later:
 
 ```text
-decode start = outputWatch + ceil((dataLaunch - clockSend) / period) * period
+decode start = outputWatch + 1 period
 ```
 
 For the full-adder example at 10 GHz:
@@ -220,9 +220,11 @@ outputWatch = 277.2 ps
 decode start = 377.2 ps  (one period later)
 ```
 
-`make_tb.py` applies this offset automatically (it is the number of clock
-edges between the clock send and the data launch); `--decode-start-periods`
-overrides it. Starting the decoder at 277.2 ps shifts every bit one slot late.
+`make_tb.py` applies this offset automatically: the first word is captured on the
+edge after the clock send, and the launch phase is already inside the exported
+window, so the offset is one period for every design tested -- not a function of
+the lag. `--decode-start-periods` overrides it. Starting the decoder at the
+watch time shifts every bit one slot late.
 
 ### 4. Testbench recipe
 
@@ -250,7 +252,7 @@ overrides it. Starting the decoder at 277.2 ps shifts every bit one slot late.
 |---|---|
 | JoSIM says `Invalid PWL definition` | malformed input PWL; every pulse needs `0 -> 0 -> amplitude -> 0` |
 | One-slot case passes, multi-slot fails | stream/pipeline issue; verify all inputs and the data interval |
-| All outputs shift by one slot | decode window is one or more periods early; check the decode shift (`make_tb` reports it) |
+| All outputs shift by one slot | the decode window is one period out; `make_tb` uses watch + 1 period, `--decode-start-periods` overrides it |
 | `cout` drifts relative to `sum` | independent output anchoring is hiding a cycle slip; use a common grid |
 | A frequency passes one vector but fails another | maximum was tested with a single pattern; use all input combinations |
 | Coarse run passes, fine run fails | time-step convergence; use 0.1 ps or finer at the boundary |

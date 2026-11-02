@@ -22,7 +22,6 @@ from tools/config.json and --decode turns the output phase traces into bits.
 
 import argparse
 import json
-import math
 import os
 import subprocess
 import sys
@@ -237,15 +236,14 @@ def main():
     travel = float(design.get("minOutputTravelPs", 0.0)) if design.get("outputTravelFound") else 0.0
     watch = clk_off + levels * period + travel
     # The watch formula is an earliest bound relative to the first clock edge.
-    # A clocked cell only latches data on an edge *after* the data has been
-    # launched, so every whole period of data lag the first usable output window
-    # moves one edge later. That offset is automatic; --decode-start-periods
-    # overrides it for a die that behaves differently.
-    auto_shift = 0.0
-    if data_off > clk_off:
-        auto_shift = math.ceil((data_off - clk_off) / period - 1e-9)
+    # The first word is captured on the edge that follows the clock send (a
+    # clocked cell cannot latch anything before an edge), and the data launch
+    # phase is already part of the exported window, so the first usable output
+    # window is exactly one period after outputWatch. That holds for every
+    # design tested; --decode-start-periods overrides it for a die that behaves
+    # differently.
     shift_override = args.decode_start_periods is not None
-    shift = float(args.decode_start_periods) if shift_override else auto_shift
+    shift = float(args.decode_start_periods) if shift_override else 1.0
     decode_start = watch + shift * period
     margin = float(cfg.get("outputMarginPs", period))
     stop = max(decode_start + (slots - 1) * period + margin,
