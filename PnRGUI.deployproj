@@ -28,24 +28,6 @@
             <Overwrite>True</Overwrite>
             <Required>True</Required>
         </DeployFile>
-        <DeployFile Include="Pipeline.inc" Condition="'$(Config)'=='Debug'">
-            <RemoteDir>PnRGUI.app\Contents\Resources\StartUp\</RemoteDir>
-            <RemoteName>Pipeline.inc</RemoteName>
-            <DeployClass>ProjectFile</DeployClass>
-            <Operation>0</Operation>
-            <LocalCommand/>
-            <RemoteCommand/>
-            <Overwrite>True</Overwrite>
-        </DeployFile>
-        <DeployFile Include="FloorPlan.inc" Condition="'$(Config)'=='Debug'">
-            <RemoteDir>PnRGUI.app\Contents\Resources\StartUp\</RemoteDir>
-            <RemoteName>FloorPlan.inc</RemoteName>
-            <DeployClass>ProjectFile</DeployClass>
-            <Operation>0</Operation>
-            <LocalCommand/>
-            <RemoteCommand/>
-            <Overwrite>True</Overwrite>
-        </DeployFile>
         <DeployFile Include="OSXARM64\Debug\PnRGUI.entitlements" Condition="'$(Config)'=='Debug'">
             <RemoteDir>PnRGUI.app\..\</RemoteDir>
             <RemoteName>PnRGUI.entitlements</RemoteName>
@@ -73,15 +55,6 @@
             <RemoteCommand/>
             <Overwrite>True</Overwrite>
         </DeployFile>
-        <DeployFile Include="Placement.inc" Condition="'$(Config)'=='Debug'">
-            <RemoteDir>PnRGUI.app\Contents\Resources\StartUp\</RemoteDir>
-            <RemoteName>Placement.inc</RemoteName>
-            <DeployClass>ProjectFile</DeployClass>
-            <Operation>0</Operation>
-            <LocalCommand/>
-            <RemoteCommand/>
-            <Overwrite>True</Overwrite>
-        </DeployFile>
         <DeployFile Include="$(BDS)\bin\delphi_PROJECTICNS.icns" Condition="'$(Config)'=='Debug'">
             <RemoteDir>PnRGUI.app\Contents\Resources\</RemoteDir>
             <RemoteName>PnRGUI.icns</RemoteName>
@@ -91,44 +64,8 @@
             <RemoteCommand/>
             <Overwrite>True</Overwrite>
         </DeployFile>
-        <DeployFile Include="ConfigIO.inc" Condition="'$(Config)'=='Debug'">
-            <RemoteDir>PnRGUI.app\Contents\Resources\StartUp\</RemoteDir>
-            <RemoteName>ConfigIO.inc</RemoteName>
-            <DeployClass>ProjectFile</DeployClass>
-            <Operation>0</Operation>
-            <LocalCommand/>
-            <RemoteCommand/>
-            <Overwrite>True</Overwrite>
-        </DeployFile>
-        <DeployFile Include="Routing.inc" Condition="'$(Config)'=='Debug'">
-            <RemoteDir>PnRGUI.app\Contents\Resources\StartUp\</RemoteDir>
-            <RemoteName>Routing.inc</RemoteName>
-            <DeployClass>ProjectFile</DeployClass>
-            <Operation>0</Operation>
-            <LocalCommand/>
-            <RemoteCommand/>
-            <Overwrite>True</Overwrite>
-        </DeployFile>
-        <DeployFile Include="ClockPage.inc" Condition="'$(Config)'=='Debug'">
-            <RemoteDir>PnRGUI.app\Contents\Resources\StartUp\</RemoteDir>
-            <RemoteName>ClockPage.inc</RemoteName>
-            <DeployClass>ProjectFile</DeployClass>
-            <Operation>0</Operation>
-            <LocalCommand/>
-            <RemoteCommand/>
-            <Overwrite>True</Overwrite>
-        </DeployFile>
     </ItemGroup>
     <ItemGroup Condition="'$(Platform)'=='Win64'">
-        <DeployFile Include="ClockPage.inc" Condition="'$(Config)'=='Debug'">
-            <RemoteDir>PnRGUI\</RemoteDir>
-            <RemoteName>ClockPage.inc</RemoteName>
-            <DeployClass>ProjectFile</DeployClass>
-            <Operation>0</Operation>
-            <LocalCommand/>
-            <RemoteCommand/>
-            <Overwrite>True</Overwrite>
-        </DeployFile>
         <DeployFile Include="Win64\Debug\PnRGUI.exe" Condition="'$(Config)'=='Debug'">
             <RemoteDir>PnRGUI\</RemoteDir>
             <RemoteName>PnRGUI.exe</RemoteName>
@@ -138,51 +75,6 @@
             <RemoteCommand/>
             <Overwrite>True</Overwrite>
             <Required>True</Required>
-        </DeployFile>
-        <DeployFile Include="Routing.inc" Condition="'$(Config)'=='Debug'">
-            <RemoteDir>PnRGUI\</RemoteDir>
-            <RemoteName>Routing.inc</RemoteName>
-            <DeployClass>ProjectFile</DeployClass>
-            <Operation>0</Operation>
-            <LocalCommand/>
-            <RemoteCommand/>
-            <Overwrite>True</Overwrite>
-        </DeployFile>
-        <DeployFile Include="ConfigIO.inc" Condition="'$(Config)'=='Debug'">
-            <RemoteDir>PnRGUI\</RemoteDir>
-            <RemoteName>ConfigIO.inc</RemoteName>
-            <DeployClass>ProjectFile</DeployClass>
-            <Operation>0</Operation>
-            <LocalCommand/>
-            <RemoteCommand/>
-            <Overwrite>True</Overwrite>
-        </DeployFile>
-        <DeployFile Include="Pipeline.inc" Condition="'$(Config)'=='Debug'">
-            <RemoteDir>PnRGUI\</RemoteDir>
-            <RemoteName>Pipeline.inc</RemoteName>
-            <DeployClass>ProjectFile</DeployClass>
-            <Operation>0</Operation>
-            <LocalCommand/>
-            <RemoteCommand/>
-            <Overwrite>True</Overwrite>
-        </DeployFile>
-        <DeployFile Include="FloorPlan.inc" Condition="'$(Config)'=='Debug'">
-            <RemoteDir>PnRGUI\</RemoteDir>
-            <RemoteName>FloorPlan.inc</RemoteName>
-            <DeployClass>ProjectFile</DeployClass>
-            <Operation>0</Operation>
-            <LocalCommand/>
-            <RemoteCommand/>
-            <Overwrite>True</Overwrite>
-        </DeployFile>
-        <DeployFile Include="Placement.inc" Condition="'$(Config)'=='Debug'">
-            <RemoteDir>PnRGUI\</RemoteDir>
-            <RemoteName>Placement.inc</RemoteName>
-            <DeployClass>ProjectFile</DeployClass>
-            <Operation>0</Operation>
-            <LocalCommand/>
-            <RemoteCommand/>
-            <Overwrite>True</Overwrite>
         </DeployFile>
     </ItemGroup>
     <ItemGroup Condition="'$(Platform)'=='Win64x'"/>

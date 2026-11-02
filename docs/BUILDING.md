@@ -158,6 +158,16 @@ spctl -a -vvv PnRGUI.app          # should say "accepted, Notarized Developer ID
   ```
 
   The same applies to `Win64\Release` after a clean.
+- **`.inc` files appear in the home folder on the Mac** - the `{$I}` include
+  files used to be project items, so RAD Studio's Deployment Manager
+  classified them as deployable `ProjectFile` entries and PAServer copied
+  them relative to the deployment root. They are compile-time only, so the
+  project no longer lists them and ships no deployment entries for them. If an
+  older checkout or a re-saved project brings them back, open
+  **Project > Deployment** and delete those rows.
+- **The icon/version disappears after a build** - the IDE occasionally
+  truncates `PnRGUI.res` to 32 bytes when it rewrites the project. Restore it
+  with `git checkout -- PnRGUI.res` and rebuild.
 - **"macOS SDK not found"** ? the platform is installed but no SDK is configured;
   add one in the SDK Manager (?3.1).
 - **Build succeeds but the app will not start on the Mac** ? see ?3.3
