@@ -115,6 +115,7 @@ packages, are in **[docs/BUILDING.md](docs/BUILDING.md)**. Short version:
 | `BlifParser.*`, `LefParser.*` | Standalone console parsers for the same formats |
 | `tools/` | Python helpers (testbench, bit checks, plots, GDS writer/reader) |
 | `examples/blif/` | Example netlists |
+| `examples/outputs/` | Verified design exports with their JoSIM decks and results |
 | `docs/` | Build and release documentation |
 | `examples/RSFQlib/` | Sample LEF, export block library and the RSFQlib pruning guide |
 
@@ -147,6 +148,10 @@ python tools/make_tb.py --dir Win64/Release/output/full_adder `
   --bits a=10110011,b=01011101,cin=00110010 --io-nodes --run --out Win64/Release/output/full_adder/full_adder_io_tb.cir
 python tools/josim-plot.py Win64/Release/output/full_adder/full_adder_io_tb.csv -t stacked -x Win64/Release/output/full_adder/full_adder_io.html
 ```
+
+Verified examples with their decks and recorded results live in
+[`examples/outputs/`](examples/outputs/README.md): each folder runs as-is with
+`josim-cli` and reproduces the result listed there.
 
 The phase probes address a junction inside the testbench's own transmitter and
 readout cells; `probeClockJunction` / `probeOutputJunction` in `config.json` name

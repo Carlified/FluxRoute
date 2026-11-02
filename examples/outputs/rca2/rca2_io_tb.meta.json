@@ -1,0 +1,20 @@
+{
+  "design": "rca2",
+  "periodPs": 125.0,
+  "clockSendPs": 50.0,
+  "dataLaunchPs": 181.85,
+  "dataPhasePs": 131.85,
+  "inputWindowStartPs": 78.1,
+  "inputWindowEndPs": 185.6,
+  "inputWindowSource": "target window",
+  "pipelineLevels": 5.0,
+  "outputPeriods": 4.0,
+  "minOutputTravelPs": 35.0,
+  "outputWatchStartPs": 585.0,
+  "decodeShiftPeriods": 1.0,
+  "decodeShiftAuto": true,
+  "decodeWindowStartPs": 710.0,
+  "slots": 32,
+  "stopPs": 4691.85,
+  "timeStepPs": 0.2
+}

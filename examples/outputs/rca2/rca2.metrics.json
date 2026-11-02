@@ -1,0 +1,49 @@
+{
+  "design": {
+    "gates": 58,
+    "nets": 92,
+    "inputs": 6,
+    "outputs": 3,
+    "junctions": 395,
+    "clockedCells": 21,
+    "clockLevels": 5,
+    "clockTreeCells": 23,
+    "trunkCells": 4,
+    "lengthBuffers": 3
+  },
+  "area": {
+    "dieUm2": 1680000,
+    "floorplanBodyUm2": 851400,
+    "cellUm2": 129500,
+    "routedBBoxUm2": 924000,
+    "routedBBoxPctOfDie": 55,
+    "packingDensityPct": 7.70833333333333,
+    "rowTrunkAreaUm2": 445200,
+    "rowTrunkUtilisationPct": 29.0880503144654,
+    "effectiveUtilisationPct": 14.0151515151515
+  },
+  "wirelength": {
+    "signalUm": 26440,
+    "perLayerUm": {
+      "M1": 18470,
+      "M3": 7970
+    }
+  },
+  "timing": {
+    "minClockPeriodPs": 45.9,
+    "maxClockGHz": 21.7864923747277,
+    "minPeriodTimingPs": 45.9,
+    "minPeriodSpacingPs": 20.2,
+    "minPeriodWindowExtraPs": 0,
+    "clockLimiter": "data path",
+    "targetGHz": 8,
+    "pipelineLevels": 5,
+    "clockRows": [5, 4, 3, 2, 1],
+    "skewPs": [2.7, 2, 2.1, 3.5, 2.8],
+    "worstSkewPs": 3.5,
+    "worstSkewLevel": 2
+  },
+  "runtime": {
+    "routingMs": 362
+  }
+}

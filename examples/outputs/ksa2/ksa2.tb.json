@@ -1,0 +1,21 @@
+{
+  "stem": "ksa2",
+  "clock": "clk",
+  "inputs": ["a0", "a1", "b0", "b1", "cin"],
+  "outputs": ["s0", "s1", "cout"],
+  "freqGHz": 10,
+  "pipelineLevels": 5,
+  "ptlDelayFsPerUm": 10,
+  "coreUm": 10,
+  "dieWUm": 1000,
+  "dieHUm": 1300,
+  "maxPtlLengthUm": 5500,
+  "minClockPeriodPs": 35.8,
+  "inputWindowFound": true,
+  "inputWindowStartPs": 70.9,
+  "inputWindowEndPs": 91.7,
+  "inputWindowTargetStartPs": 70.9,
+  "inputWindowTargetEndPs": 155.9,
+  "outputTravelFound": true,
+  "minOutputTravelPs": 38.5
+}

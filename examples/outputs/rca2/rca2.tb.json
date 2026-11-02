@@ -1,0 +1,21 @@
+{
+  "stem": "rca2",
+  "clock": "clk",
+  "inputs": ["a0", "a1", "b0", "b1", "cin"],
+  "outputs": ["s0", "s1", "cout"],
+  "freqGHz": 8,
+  "pipelineLevels": 5,
+  "ptlDelayFsPerUm": 10,
+  "coreUm": 10,
+  "dieWUm": 1200,
+  "dieHUm": 1400,
+  "maxPtlLengthUm": 550,
+  "minClockPeriodPs": 45.9,
+  "inputWindowFound": true,
+  "inputWindowStartPs": 78.1,
+  "inputWindowEndPs": 106.5,
+  "inputWindowTargetStartPs": 78.1,
+  "inputWindowTargetEndPs": 185.6,
+  "outputTravelFound": true,
+  "minOutputTravelPs": 35
+}

@@ -1,0 +1,21 @@
+{
+  "stem": "mult_2x2",
+  "clock": "clk",
+  "inputs": ["a0", "a1", "b0", "b1"],
+  "outputs": ["p0", "p1", "p2", "p3"],
+  "freqGHz": 10,
+  "pipelineLevels": 3,
+  "ptlDelayFsPerUm": 10,
+  "coreUm": 10,
+  "dieWUm": 1000,
+  "dieHUm": 1000,
+  "maxPtlLengthUm": 5500,
+  "minClockPeriodPs": 40.7,
+  "inputWindowFound": true,
+  "inputWindowStartPs": 35.7,
+  "inputWindowEndPs": 67.9,
+  "inputWindowTargetStartPs": 35.7,
+  "inputWindowTargetEndPs": 127.2,
+  "outputTravelFound": true,
+  "minOutputTravelPs": 39.9
+}

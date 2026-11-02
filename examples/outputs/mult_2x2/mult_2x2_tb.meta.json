@@ -1,0 +1,20 @@
+{
+  "design": "mult_2x2",
+  "periodPs": 100.0,
+  "clockSendPs": 50.0,
+  "dataLaunchPs": 131.45,
+  "dataPhasePs": 81.45,
+  "inputWindowStartPs": 35.7,
+  "inputWindowEndPs": 127.2,
+  "inputWindowSource": "target window",
+  "pipelineLevels": 3.0,
+  "outputPeriods": 2.0,
+  "minOutputTravelPs": 39.9,
+  "outputWatchStartPs": 289.9,
+  "decodeShiftPeriods": 1.0,
+  "decodeShiftAuto": true,
+  "decodeWindowStartPs": 389.9,
+  "slots": 16,
+  "stopPs": 1989.9,
+  "timeStepPs": 0.05
+}

@@ -1,0 +1,5 @@
+* SPLIT_M5_4_SN - ideal (lossless) M5 3-way split, 10 um block.
+.subckt SPLIT_M5_4_SN P0 P1 P2
+T0 P0 0 P1 0 LOSSLESS Z0=5.3 TD=0.1p
+T1 P0 0 P2 0 LOSSLESS Z0=5.3 TD=0.1p
+.ends
