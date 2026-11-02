@@ -1,6 +1,7 @@
 program PnRGUI;
 
 uses
+  System.SysUtils,
   System.StartUpCopy,
   FMX.Forms,
   UGeometry in 'UGeometry.pas',
@@ -32,6 +33,13 @@ uses
 {$R *.res}
 
 begin
+  // Every number this program shows, parses or writes uses '.' as the decimal
+  // separator, whatever the OS locale: the edit boxes, the log, the project
+  // files and the exported JSON/CIR all agree, and the Python tools read the
+  // same text. Without this a comma locale makes the config page reformat its
+  // values with commas while the parser expects periods.
+  FormatSettings := TFormatSettings.Invariant;
+
   Application.Initialize;
   Application.CreateForm(TForm1, Form1);
   Application.Run;

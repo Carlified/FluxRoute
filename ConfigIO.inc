@@ -58,20 +58,32 @@ begin
   if Abs(V - Round(V)) < 1e-6 then
     Result := IntToStr(Round(V))
   else
-    Result := FloatToStr(V);
+    Result := FloatToStr(V, TFormatSettings.Invariant);
 end;
 
+// Parses a number the user typed. The canonical form used by the UI, the
+// project files and the exports is '.', but a comma is accepted too: on a
+// locale with a decimal comma that is what the keyboard produces, and refusing
+// it here would make the field look broken. The value is stored as a number, so
+// the canonical form is restored the next time the field is formatted.
 function TryDimParse(const S: string; out V: Double): Boolean;
+var
+  T: string;
 begin
   V := 0;
-  if Trim(S) = '' then
+  T := Trim(S);
+  if T = '' then
     Exit(False);
-  Result := TryStrToFloat(S, V, TFormatSettings.Invariant);
+  Result := TryStrToFloat(T, V, TFormatSettings.Invariant);
+  if Result then
+    Exit;
+  T := StringReplace(T, ',', '.', [rfReplaceAll]);
+  Result := TryStrToFloat(T, V, TFormatSettings.Invariant);
 end;
 
 function FormatDim2(const V: Double): string;
 begin
-  Result := FormatFloat('0.00', V);
+  Result := FormatFloat('0.00', V, TFormatSettings.Invariant);
 end;
 
 procedure TForm1.InitializePlacementConfig;
