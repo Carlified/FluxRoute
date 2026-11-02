@@ -2,9 +2,8 @@
 
 FluxRoute does not ship the MIT-LL / ColdFlux RSFQ cell library. Get it from
 [`sunmagnetics/RSFQlib`](https://github.com/sunmagnetics/RSFQlib) (v3.0) and point
-the app's **Library** page at it. This folder holds the two things that make a
-stock checkout usable by the tool: the LEF to load, and the list of files to
-remove.
+the app's **Library** page at it. This folder holds what makes a stock checkout usable by the tool: the LEF to
+load, a block library to export with, and the list of files to remove.
 
 ## The LEF: use `library_fixed.lef`
 
@@ -30,6 +29,26 @@ eleven PTL-enabled `*T` cells — and differs in the three things the flow needs
 
 Load it on the Library page. The stock `lef_*_metals.lef` files in the RSFQlib
 repository are not used by this flow.
+
+## Block library (export data)
+
+The exporter does not draw geometry itself: for every block kind the routed
+layout contains (PTL runs, bends, vias, bias tracks, ground fill) it places a
+pre-verified GDS block and, where one exists, a CIR subcircuit, all looked up
+through `manifest.json`. Cell instances come from the RSFQlib checkout, so an
+export needs both folders.
+
+| Folder | What it is |
+|---|---|
+| `blocklib/` | The default library behind the report's results: square PTL and bias bends, and a ground-plane fill for every unused grid block (so the routed metal is hidden under the planes). |
+| `blocklib_mitred/` | The alternative of report Appendix D: mitred (45°) PTL bends and no fill block, which leaves the routing visible. |
+
+On the **Export** page, set *Block library* to one of these folders (or to your
+own with the same layout) and the cell-source folder to the pruned RSFQlib
+checkout. The blocks are 10 um tiles on a 10 um grid (`gridPitchUm` in the
+manifest), and the CIR subcircuits are what appear in the exported netlist;
+bias and track kinds are marked `noCir`/`structuralOnly` and are omitted from
+the CIR, as the report describes.
 
 ## Prune a stock RSFQlib
 

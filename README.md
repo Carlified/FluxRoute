@@ -81,8 +81,8 @@ packages, are in **[docs/BUILDING.md](docs/BUILDING.md)**. Short version:
 
 1. **Library page** — load your LEF file, then select the folder holding the
    cell sources. Both are required before the flow continues. With the MIT-LL
-   library use [`examples/rsfq_lib/library_fixed.lef`](examples/rsfq_lib/library_fixed.lef);
-   [that folder's guide](examples/rsfq_lib/README.md) lists the files to prune
+   library use [`examples/RSFQlib/library_fixed.lef`](examples/RSFQlib/library_fixed.lef);
+   [that folder's guide](examples/RSFQlib/README.md) lists the files to prune
    from a stock RSFQlib checkout.
 2. **Components page** — choose the splitter cell(s), the flip-flop and the
    buffer cells.
@@ -96,7 +96,10 @@ packages, are in **[docs/BUILDING.md](docs/BUILDING.md)**. Short version:
    Bias Lines**.
 7. **Routing** — **Route and Validate** runs routing, bias, clock/length
    validation and the final audit in one action.
-8. **Export** — pick the output folder/stem and the formats.
+8. **Export** — set the output folder/stem, the formats, and the *Block
+   library* folder ([`examples/RSFQlib/blocklib`](examples/RSFQlib/blocklib)
+   for the sample library; the exporter places a pre-verified GDS block per
+   block kind, so it cannot run without one).
 
 ## Repository layout
 
@@ -113,7 +116,7 @@ packages, are in **[docs/BUILDING.md](docs/BUILDING.md)**. Short version:
 | `tools/` | Python helpers (testbench, bit checks, plots, GDS writer/reader) |
 | `examples/blif/` | Example netlists |
 | `docs/` | Build and release documentation |
-| `examples/rsfq_lib/` | Sample LEF (`library_fixed.lef`) and the RSFQlib pruning guide |
+| `examples/RSFQlib/` | Sample LEF, export block library and the RSFQlib pruning guide |
 
 ## Helper tools
 
@@ -153,7 +156,7 @@ The Corresponding Source is this repository. If you distribute a binary, convey
 the source for that same version: the "Source code" archives GitHub generates
 for a tagged release are exactly that, so do not remove them from a release.
 
-`examples/rsfq_lib/library_fixed.lef` comes from
+`examples/RSFQlib/library_fixed.lef` comes from
 [`sunmagnetics/RSFQlib`](https://github.com/sunmagnetics/RSFQlib) (GPL-3.0).
 
 JoSIM, gdstk, RAD Studio and the other RSFQ cell libraries are external projects
