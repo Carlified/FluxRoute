@@ -8,14 +8,14 @@ load, a block library to export with, and the list of files to remove.
 ## The LEF: use `library_fixed.lef`
 
 `library_fixed.lef` describes the same 16 cells as the stock
-`lef_files/lef_6_metals.lef` — the `PAD`, the four `ALWAYS0` variants and the
+`lef_files/lef_7_metals.lef` — the `PAD`, the four `ALWAYS0` variants and the
 eleven PTL-enabled `*T` cells — and differs in the three things the flow needs:
 
 - **Two routing layers, one via.** Only `M1` (horizontal) and `M3` (vertical) are
   `TYPE ROUTING`; `M0`, `M2`, `M4` and `M7` are ground planes and `M5`/`M6` are
   cell metal. The only via is `M1` to `M3`, the stacked `via1`+`via2` pair that
   passes through an isolated island in the `M2` plane. The stock files declare
-  every metal from `M1` to `M6` as routing with five via types, so the router
+  every metal from `M1` to `M7` as routing with six via types, so the router
   would happily use layers the cell blocks never wire on.
 - **`VDD` power pins** (`USE POWER`, on `M5` at the top and bottom edges) on the
   eleven biased cells; the `PAD` and the four `ALWAYS0` cells draw no bias. The
@@ -97,5 +97,5 @@ ships one, the timing-extraction PDF — only the duplicate models are gone.
 
 The cell library is not part of FluxRoute: [`sunmagnetics/RSFQlib`](https://github.com/sunmagnetics/RSFQlib)
 is distributed under **GPL-3.0**. `library_fixed.lef` is a modified version of
-`lef_6_metals.lef` from that project and is included here under those terms, with
+`lef_7_metals.lef` from that project and is included here under those terms, with
 the cell names and geometry from that project.
