@@ -1,0 +1,71 @@
+full_adder - functional result, 2026-11-03
+
+Function: 1-bit full adder, sum = a ^ b ^ cin, cout = majority(a, b, cin).
+Clocked pads: 3 inputs (a, b, cin), 2 outputs (sum, cout).
+Target: 3 pipeline levels at 10 GHz
+(period 100 ps); input window 39.3..123 ps,
+chosen centre phase 81.15 ps.
+
+This is the worked example for the whole flow; the same steps are written out
+with explanations in docs/TESTING.md.
+
+--- from .cir to a viewable, verified waveform ---
+
+Run from the repository root; the design folder holds full_adder.cir and
+full_adder.tb.json.
+
+  $design = "Win64/Release/output/full_adder"    # examples/outputs/full_adder on a checkout
+
+1. Read the exported metadata:
+     Get-Content $design/full_adder.tb.json
+   inputs a,b,cin   outputs sum,cout
+   frequency, pipeline levels, input window and output travel are in this file.
+
+2. Build the stimulus for all 8 patterns and the expected outputs.
+   Pattern k assigns a,b,cin to bits 2..0 of k;
+   sum = a ^ b ^ cin, cout = (a & b) | (cin & (a ^ b)).
+     A     = 00001111
+     B     = 00110011
+     CIN   = 01010101
+   expected:
+     SUM   = 01101001
+     COUT  = 00010111
+
+3. Build, simulate and decode the phase deck:
+     python tools/make_tb.py --dir $design `
+       --bits "a=00001111,b=00110011,cin=01010101" --slots 8 `
+       --run --decode --expect "sum=01101001,cout=00010111"
+   0.05 ps (23544 points) is stable here.
+
+4. The decode window starts at watch + 1 period (make_tb default):
+     clock send  50 ps     data launch 131.15 ps
+     watch       277.2 ps  = clock send + 3 periods + travel
+     decode      377.2 ps  = watch + 1 period (auto: first capture edge after the data)
+     period 100 ps   slots 8   step 0.05 ps
+     stop   1177.2 ps (23544 points)
+
+5. Build the I/O-port deck for the same run and look for one pulse per bit
+   on every pad:
+     python tools/make_tb.py --dir $design `
+       --bits "a=00001111,b=00110011,cin=01010101" --slots 8 --io-nodes `
+       --out $design/full_adder_io_tb.cir --run
+
+6. View the waveforms:
+     python tools/josim-plot.py $design/full_adder_io_tb.csv -t stacked `
+       -x $design/full_adder_io_trace.html
+   or, for a static image (what is committed here):
+     python tools/josim-plot.py $design/full_adder_io_tb.csv -t stacked `
+       -o $design/full_adder_io_trace.png -d 1600x1000
+
+--- result ---
+
+All 8 input combinations, decoded twice on the same shared grid:
+  phase traces   P(B1|XRsum), P(B1|XRcout): both OK
+  pad pulses     V(sum_o), V(cout_o): 8/8 bits, matches the truth table
+  input pads     V(a_i), V(b_i), V(cin_i): read back the stimulus exactly
+The die is functionally correct at 10 GHz with the chosen centre phase.
+
+Files:
+  full_adder_tb.cir/.csv/.meta.json     phase probes
+  full_adder_io_tb.cir/.csv/.meta.json  I/O port probes
+  full_adder_io_trace.png               static trace image (1600x1000)

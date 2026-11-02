@@ -1,0 +1,21 @@
+{
+  "stem": "full_adder",
+  "clock": "clk",
+  "inputs": ["a", "b", "cin"],
+  "outputs": ["sum", "cout"],
+  "freqGHz": 10,
+  "pipelineLevels": 3,
+  "ptlDelayFsPerUm": 10,
+  "coreUm": 10,
+  "dieWUm": 600,
+  "dieHUm": 1000,
+  "maxPtlLengthUm": 800,
+  "minClockPeriodPs": 34.2,
+  "inputWindowFound": true,
+  "inputWindowStartPs": 39.3,
+  "inputWindowEndPs": 57.2,
+  "inputWindowTargetStartPs": 39.3,
+  "inputWindowTargetEndPs": 123,
+  "outputTravelFound": true,
+  "minOutputTravelPs": 27.2
+}

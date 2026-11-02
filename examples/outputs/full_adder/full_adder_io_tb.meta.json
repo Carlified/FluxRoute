@@ -1,0 +1,20 @@
+{
+  "design": "full_adder",
+  "periodPs": 100.0,
+  "clockSendPs": 50.0,
+  "dataLaunchPs": 131.15,
+  "dataPhasePs": 81.15,
+  "inputWindowStartPs": 39.3,
+  "inputWindowEndPs": 123.0,
+  "inputWindowSource": "target window",
+  "pipelineLevels": 3.0,
+  "outputPeriods": 2.0,
+  "minOutputTravelPs": 27.2,
+  "outputWatchStartPs": 277.2,
+  "decodeShiftPeriods": 1.0,
+  "decodeShiftAuto": true,
+  "decodeWindowStartPs": 377.2,
+  "slots": 8,
+  "stopPs": 1177.2,
+  "timeStepPs": 0.05
+}

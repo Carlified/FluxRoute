@@ -7,6 +7,7 @@ PTL blocks and SFQ cell subcircuits that the decks include, and every
 
 | folder | function | clock | levels | patterns | step | decode start | result |
 |---|---|---|---|---|---|---|---|
+| `full_adder/` | 1-bit full adder, `sum`, `cout` | 10 GHz | 3 | 8 | 0.05 ps | 377.2 ps | pass |
 | `mult_2x2/` | 2x2 array multiplier, `p = a * b` (4 bit) | 10 GHz | 3 | 16 | 0.05 ps | 389.9 ps | pass |
 | `rca2/` | 2-bit ripple-carry adder, `s = a + b + cin` | 8 GHz | 5 | 32 | 0.2 ps | 710 ps | pass |
 | `ksa2/` | 2-bit Kogge-Stone adder, `s = a + b + cin` | 10 GHz | 5 | 32 | 0.1 ps | 588.5 ps | pass |
@@ -21,6 +22,12 @@ strings and the full command trail for each design are in `<stem>_result.txt`.
 `_tb_d`), because a single run either exceeds `make_tb`'s 80000-point guard or
 crashes JoSIM: each chunk keeps the same decode grid, so the chunks are just
 slices of one run.
+
+Only the full adder has a graph in the repository: `full_adder_io_trace.png`
+(198 KB). The interactive HTML traces are 9-12 MB each and are fully
+reproducible from the decks and the commands in `<stem>_result.txt`, so they
+stay out of git along with the CSVs. `docs/TESTING.md` walks through the
+full-adder run step by step.
 
 ## Files per design
 

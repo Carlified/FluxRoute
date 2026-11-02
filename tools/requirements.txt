@@ -1,5 +1,7 @@
 # Python helpers: gdstk is needed by the in-app cell viewer (gds_to_json.py)
 # and by the GDS export (write_die_gds.py). The other tools use only the stdlib.
+# kaleido is only needed to write PNG/SVG traces (josim-plot.py -o file.png).
 gdstk
 pandas
 plotly
+kaleido

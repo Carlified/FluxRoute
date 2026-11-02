@@ -116,7 +116,7 @@ packages, are in **[docs/BUILDING.md](docs/BUILDING.md)**. Short version:
 | `tools/` | Python helpers (testbench, bit checks, plots, GDS writer/reader) |
 | `examples/blif/` | Example netlists |
 | `examples/outputs/` | Verified design exports with their JoSIM decks and results |
-| `docs/` | Build and release documentation |
+| `docs/` | Build, testing and release documentation |
 | `examples/RSFQlib/` | Sample LEF, export block library and the RSFQlib pruning guide |
 
 ## Helper tools
@@ -151,7 +151,8 @@ python tools/josim-plot.py Win64/Release/output/full_adder/full_adder_io_tb.csv 
 
 Verified examples with their decks and recorded results live in
 [`examples/outputs/`](examples/outputs/README.md): each folder runs as-is with
-`josim-cli` and reproduces the result listed there.
+`josim-cli` and reproduces the result listed there. A step-by-step walkthrough of the whole process, using the full adder, is
+in [`docs/TESTING.md`](docs/TESTING.md).
 
 The phase probes address a junction inside the testbench's own transmitter and
 readout cells; `probeClockJunction` / `probeOutputJunction` in `config.json` name

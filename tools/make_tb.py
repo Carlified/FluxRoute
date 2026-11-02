@@ -257,8 +257,8 @@ def main():
         raise SystemExit(
             f"requested {rows:.0f} time points exceeds the JoSIM safe limit "
             f"of {safe_rows} (set josimMaxRows/timeStepPs in config.json)")
-    print(f"output watch/start: {watch:g} ps (max depth {max_depth:g}, "
-          f"{'data leads' if data_rel <= 0 else 'data lags'} -> {levels:g} periods, travel {travel:g} ps)")
+    print(f"output watch: {watch:g} ps (max depth {max_depth:g}, periods {levels:g}, "
+          f"travel {travel:g} ps)")
     print(f"decode shift: {shift:g} period(s) "
           f"({'override' if shift_override else 'auto: first capture edge after the data'})")
     print(f"decode window start: {decode_start:g} ps")
