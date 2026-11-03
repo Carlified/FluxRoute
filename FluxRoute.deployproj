@@ -18,24 +18,23 @@
         </DeployFile>
     </ItemGroup>
     <ItemGroup Condition="'$(Platform)'=='OSXARM64'">
-        <DeployFile Include="ClockPage.inc" Condition="'$(Config)'=='Release'">
-            <RemoteDir>FluxRoute.app\Contents\Resources\StartUp\</RemoteDir>
-            <RemoteName>ClockPage.inc</RemoteName>
-            <DeployClass>ProjectFile</DeployClass>
-            <Operation>0</Operation>
-            <LocalCommand/>
-            <RemoteCommand/>
-            <Overwrite>True</Overwrite>
-        </DeployFile>
-        <DeployFile Include="OSXARM64\Debug\FluxRoute" Condition="'$(Config)'=='Debug'">
-            <RemoteDir>FluxRoute.app\Contents\MacOS\</RemoteDir>
-            <RemoteName>FluxRoute</RemoteName>
-            <DeployClass>ProjectOutput</DeployClass>
+        <DeployFile Include="OSXARM64\Release\FluxRoute.entitlements" Condition="'$(Config)'=='Release'">
+            <RemoteDir>FluxRoute.app\..\</RemoteDir>
+            <RemoteName>FluxRoute.entitlements</RemoteName>
+            <DeployClass>ProjectOSXEntitlements</DeployClass>
             <Operation>1</Operation>
             <LocalCommand/>
             <RemoteCommand/>
             <Overwrite>True</Overwrite>
-            <Required>True</Required>
+        </DeployFile>
+        <DeployFile Include="FluxRoute_Icns.icns" Condition="'$(Config)'=='Debug'">
+            <RemoteDir>FluxRoute.app\Contents\Resources\</RemoteDir>
+            <RemoteName>FluxRoute.icns</RemoteName>
+            <DeployClass>ProjectOSXResource</DeployClass>
+            <Operation>1</Operation>
+            <LocalCommand/>
+            <RemoteCommand/>
+            <Overwrite>True</Overwrite>
         </DeployFile>
         <DeployFile Include="Pipeline.inc" Condition="'$(Config)'=='Debug'">
             <RemoteDir>FluxRoute.app\Contents\Resources\StartUp\</RemoteDir>
@@ -55,6 +54,88 @@
             <RemoteCommand/>
             <Overwrite>True</Overwrite>
         </DeployFile>
+        <DeployFile Include="FloorPlan.inc" Condition="'$(Config)'=='Release'">
+            <RemoteDir>FluxRoute.app\Contents\Resources\StartUp\</RemoteDir>
+            <RemoteName>FloorPlan.inc</RemoteName>
+            <DeployClass>ProjectFile</DeployClass>
+            <Operation>0</Operation>
+            <LocalCommand/>
+            <RemoteCommand/>
+            <Overwrite>True</Overwrite>
+        </DeployFile>
+        <DeployFile Include="Pipeline.inc" Condition="'$(Config)'=='Release'">
+            <RemoteDir>FluxRoute.app\Contents\Resources\StartUp\</RemoteDir>
+            <RemoteName>Pipeline.inc</RemoteName>
+            <DeployClass>ProjectFile</DeployClass>
+            <Operation>0</Operation>
+            <LocalCommand/>
+            <RemoteCommand/>
+            <Overwrite>True</Overwrite>
+        </DeployFile>
+        <DeployFile Include="Placement.inc" Condition="'$(Config)'=='Debug'">
+            <RemoteDir>FluxRoute.app\Contents\Resources\StartUp\</RemoteDir>
+            <RemoteName>Placement.inc</RemoteName>
+            <DeployClass>ProjectFile</DeployClass>
+            <Operation>0</Operation>
+            <LocalCommand/>
+            <RemoteCommand/>
+            <Overwrite>True</Overwrite>
+        </DeployFile>
+        <DeployFile Include="Placement.inc" Condition="'$(Config)'=='Release'">
+            <RemoteDir>FluxRoute.app\Contents\Resources\StartUp\</RemoteDir>
+            <RemoteName>Placement.inc</RemoteName>
+            <DeployClass>ProjectFile</DeployClass>
+            <Operation>0</Operation>
+            <LocalCommand/>
+            <RemoteCommand/>
+            <Overwrite>True</Overwrite>
+        </DeployFile>
+        <DeployFile Include="FluxRoute_Icns.icns" Condition="'$(Config)'=='Release'">
+            <RemoteDir>FluxRoute.app\Contents\Resources\</RemoteDir>
+            <RemoteName>FluxRoute.icns</RemoteName>
+            <DeployClass>ProjectOSXResource</DeployClass>
+            <Operation>1</Operation>
+            <LocalCommand/>
+            <RemoteCommand/>
+            <Overwrite>True</Overwrite>
+        </DeployFile>
+        <DeployFile Include="ConfigIO.inc" Condition="'$(Config)'=='Debug'">
+            <RemoteDir>FluxRoute.app\Contents\Resources\StartUp\</RemoteDir>
+            <RemoteName>ConfigIO.inc</RemoteName>
+            <DeployClass>ProjectFile</DeployClass>
+            <Operation>0</Operation>
+            <LocalCommand/>
+            <RemoteCommand/>
+            <Overwrite>True</Overwrite>
+        </DeployFile>
+        <DeployFile Include="ConfigIO.inc" Condition="'$(Config)'=='Release'">
+            <RemoteDir>FluxRoute.app\Contents\Resources\StartUp\</RemoteDir>
+            <RemoteName>ConfigIO.inc</RemoteName>
+            <DeployClass>ProjectFile</DeployClass>
+            <Operation>0</Operation>
+            <LocalCommand/>
+            <RemoteCommand/>
+            <Overwrite>True</Overwrite>
+        </DeployFile>
+        <DeployFile Include="OSXARM64\Release\FluxRoute.info.plist" Condition="'$(Config)'=='Release'">
+            <RemoteDir>FluxRoute.app\Contents\</RemoteDir>
+            <RemoteName>Info.plist</RemoteName>
+            <DeployClass>ProjectOSXInfoPList</DeployClass>
+            <Operation>1</Operation>
+            <LocalCommand/>
+            <RemoteCommand/>
+            <Overwrite>True</Overwrite>
+        </DeployFile>
+        <DeployFile Include="OSXARM64\Debug\FluxRoute" Condition="'$(Config)'=='Debug'">
+            <RemoteDir>FluxRoute.app\Contents\MacOS\</RemoteDir>
+            <RemoteName>FluxRoute</RemoteName>
+            <DeployClass>ProjectOutput</DeployClass>
+            <Operation>1</Operation>
+            <LocalCommand/>
+            <RemoteCommand/>
+            <Overwrite>True</Overwrite>
+            <Required>True</Required>
+        </DeployFile>
         <DeployFile Include="OSXARM64\Debug\FluxRoute.entitlements" Condition="'$(Config)'=='Debug'">
             <RemoteDir>FluxRoute.app\..\</RemoteDir>
             <RemoteName>FluxRoute.entitlements</RemoteName>
@@ -73,18 +154,9 @@
             <RemoteCommand/>
             <Overwrite>True</Overwrite>
         </DeployFile>
-        <DeployFile Include="Placement.inc" Condition="'$(Config)'=='Debug'">
+        <DeployFile Include="Routing.inc" Condition="'$(Config)'=='Debug'">
             <RemoteDir>FluxRoute.app\Contents\Resources\StartUp\</RemoteDir>
-            <RemoteName>Placement.inc</RemoteName>
-            <DeployClass>ProjectFile</DeployClass>
-            <Operation>0</Operation>
-            <LocalCommand/>
-            <RemoteCommand/>
-            <Overwrite>True</Overwrite>
-        </DeployFile>
-        <DeployFile Include="FloorPlan.inc" Condition="'$(Config)'=='Release'">
-            <RemoteDir>FluxRoute.app\Contents\Resources\StartUp\</RemoteDir>
-            <RemoteName>FloorPlan.inc</RemoteName>
+            <RemoteName>Routing.inc</RemoteName>
             <DeployClass>ProjectFile</DeployClass>
             <Operation>0</Operation>
             <LocalCommand/>
@@ -100,78 +172,6 @@
             <RemoteCommand/>
             <Overwrite>True</Overwrite>
             <Required>True</Required>
-        </DeployFile>
-        <DeployFile Include="Pipeline.inc" Condition="'$(Config)'=='Release'">
-            <RemoteDir>FluxRoute.app\Contents\Resources\StartUp\</RemoteDir>
-            <RemoteName>Pipeline.inc</RemoteName>
-            <DeployClass>ProjectFile</DeployClass>
-            <Operation>0</Operation>
-            <LocalCommand/>
-            <RemoteCommand/>
-            <Overwrite>True</Overwrite>
-        </DeployFile>
-        <DeployFile Include="Placement.inc" Condition="'$(Config)'=='Release'">
-            <RemoteDir>FluxRoute.app\Contents\Resources\StartUp\</RemoteDir>
-            <RemoteName>Placement.inc</RemoteName>
-            <DeployClass>ProjectFile</DeployClass>
-            <Operation>0</Operation>
-            <LocalCommand/>
-            <RemoteCommand/>
-            <Overwrite>True</Overwrite>
-        </DeployFile>
-        <DeployFile Include="FluxRoute_Icns.icns" Condition="'$(Config)'=='Debug'">
-            <RemoteDir>FluxRoute.app\Contents\Resources\</RemoteDir>
-            <RemoteName>FluxRoute.icns</RemoteName>
-            <DeployClass>ProjectOSXResource</DeployClass>
-            <Operation>1</Operation>
-            <LocalCommand/>
-            <RemoteCommand/>
-            <Overwrite>True</Overwrite>
-        </DeployFile>
-        <DeployFile Include="ConfigIO.inc" Condition="'$(Config)'=='Debug'">
-            <RemoteDir>FluxRoute.app\Contents\Resources\StartUp\</RemoteDir>
-            <RemoteName>ConfigIO.inc</RemoteName>
-            <DeployClass>ProjectFile</DeployClass>
-            <Operation>0</Operation>
-            <LocalCommand/>
-            <RemoteCommand/>
-            <Overwrite>True</Overwrite>
-        </DeployFile>
-        <DeployFile Include="FluxRoute_Icns.icns" Condition="'$(Config)'=='Release'">
-            <RemoteDir>FluxRoute.app\Contents\Resources\</RemoteDir>
-            <RemoteName>FluxRoute.icns</RemoteName>
-            <DeployClass>ProjectOSXResource</DeployClass>
-            <Operation>1</Operation>
-            <LocalCommand/>
-            <RemoteCommand/>
-            <Overwrite>True</Overwrite>
-        </DeployFile>
-        <DeployFile Include="ConfigIO.inc" Condition="'$(Config)'=='Release'">
-            <RemoteDir>FluxRoute.app\Contents\Resources\StartUp\</RemoteDir>
-            <RemoteName>ConfigIO.inc</RemoteName>
-            <DeployClass>ProjectFile</DeployClass>
-            <Operation>0</Operation>
-            <LocalCommand/>
-            <RemoteCommand/>
-            <Overwrite>True</Overwrite>
-        </DeployFile>
-        <DeployFile Include="OSXARM64\Release\FluxRoute.entitlements" Condition="'$(Config)'=='Release'">
-            <RemoteDir>FluxRoute.app\..\</RemoteDir>
-            <RemoteName>FluxRoute.entitlements</RemoteName>
-            <DeployClass>ProjectOSXEntitlements</DeployClass>
-            <Operation>1</Operation>
-            <LocalCommand/>
-            <RemoteCommand/>
-            <Overwrite>True</Overwrite>
-        </DeployFile>
-        <DeployFile Include="Routing.inc" Condition="'$(Config)'=='Debug'">
-            <RemoteDir>FluxRoute.app\Contents\Resources\StartUp\</RemoteDir>
-            <RemoteName>Routing.inc</RemoteName>
-            <DeployClass>ProjectFile</DeployClass>
-            <Operation>0</Operation>
-            <LocalCommand/>
-            <RemoteCommand/>
-            <Overwrite>True</Overwrite>
         </DeployFile>
         <DeployFile Include="Routing.inc" Condition="'$(Config)'=='Release'">
             <RemoteDir>FluxRoute.app\Contents\Resources\StartUp\</RemoteDir>
@@ -191,19 +191,8 @@
             <RemoteCommand/>
             <Overwrite>True</Overwrite>
         </DeployFile>
-        <DeployFile Include="OSXARM64\Release\FluxRoute.info.plist" Condition="'$(Config)'=='Release'">
-            <RemoteDir>FluxRoute.app\Contents\</RemoteDir>
-            <RemoteName>Info.plist</RemoteName>
-            <DeployClass>ProjectOSXInfoPList</DeployClass>
-            <Operation>1</Operation>
-            <LocalCommand/>
-            <RemoteCommand/>
-            <Overwrite>True</Overwrite>
-        </DeployFile>
-    </ItemGroup>
-    <ItemGroup Condition="'$(Platform)'=='Win64'">
-        <DeployFile Include="ClockPage.inc" Condition="'$(Config)'=='Debug'">
-            <RemoteDir>FluxRoute\</RemoteDir>
+        <DeployFile Include="ClockPage.inc" Condition="'$(Config)'=='Release'">
+            <RemoteDir>FluxRoute.app\Contents\Resources\StartUp\</RemoteDir>
             <RemoteName>ClockPage.inc</RemoteName>
             <DeployClass>ProjectFile</DeployClass>
             <Operation>0</Operation>
@@ -211,6 +200,8 @@
             <RemoteCommand/>
             <Overwrite>True</Overwrite>
         </DeployFile>
+    </ItemGroup>
+    <ItemGroup Condition="'$(Platform)'=='Win64'">
         <DeployFile Include="Win64\Debug\FluxRoute.exe" Condition="'$(Config)'=='Debug'">
             <RemoteDir>FluxRoute\</RemoteDir>
             <RemoteName>FluxRoute.exe</RemoteName>
@@ -220,6 +211,15 @@
             <RemoteCommand/>
             <Overwrite>True</Overwrite>
             <Required>True</Required>
+        </DeployFile>
+        <DeployFile Include="ClockPage.inc" Condition="'$(Config)'=='Debug'">
+            <RemoteDir>FluxRoute\</RemoteDir>
+            <RemoteName>ClockPage.inc</RemoteName>
+            <DeployClass>ProjectFile</DeployClass>
+            <Operation>0</Operation>
+            <LocalCommand/>
+            <RemoteCommand/>
+            <Overwrite>True</Overwrite>
         </DeployFile>
         <DeployFile Include="Routing.inc" Condition="'$(Config)'=='Debug'">
             <RemoteDir>FluxRoute\</RemoteDir>
