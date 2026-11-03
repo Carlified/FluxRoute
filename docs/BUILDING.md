@@ -88,13 +88,15 @@ That `.app` is the permanent binary. It is a directory bundle — copy it whole
 normally created by *Deploy*), lay the bundle out locally - no PAServer, no Mac:
 
 ```bat
-python packaging\make-macos-app.py OSXARM64\Release --icon path\to\PnRGUI.icns
+python packaging\make-macos-app.py OSXARM64\Release --icon PnRGUI_Icns.icns
 ```
 
 That creates `OSXARM64\Release\PnRGUI.app` with the executable, the generated
-`Info.plist` (UTF-8 BOM stripped) and, when given, the icon. A Debug bundle from
-an earlier run already holds the icon at
-`PnRGUI.app/Contents/Resources/PnRGUI.icns`; the icon is optional.
+`Info.plist` (UTF-8 BOM stripped) and the icon. Pass `--icon PnRGUI_Icns.icns`
+from the project root: **Build alone does not place the icon in the bundle**, so
+a bundle assembled without it keeps whatever `Resources/PnRGUI.icns` was there
+before. Check the file size - about 174 KB is the FluxRoute icon, 524 KB is the
+generic Delphi one.
 
 ### 3.3 First launch on the Mac
 
