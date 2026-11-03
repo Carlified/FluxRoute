@@ -839,6 +839,7 @@ var
   i, k, L, ci, band: Integer;
   RowCells: TArray<Integer>;
   j, MaxRight, Shift: Integer;
+  Total, Unmatched: Integer;
   Pt: TPoint;
   PGate: TGateInstance;
 
@@ -932,12 +933,18 @@ begin
 
     // Restore logic cells' X and band (keeps the optimized row layout and the
     // wrapping exactly as it was before the rebuild).
+    Total := 0;
+    Unmatched := 0;
     for i := 0 to High(FPlacedComponents) do
     begin
+      Inc(Total);
       if not LogicSnap.TryGetValue(FPlacedComponents[i].Gate, S) then
         if (not NewIdx.TryGetValue(FPlacedComponents[i].Gate, k)) or
            (not IdxSnap.TryGetValue(k, S)) then
+        begin
+          Inc(Unmatched);
           Continue;
+        end;
       FPlacedComponents[i].X := FPlanXLeft + S.X;
       // Keep the cell in the band (layer + chunk) it was optimised into.
       L := LevelIndexOf(FPlacedComponents[i].ClockLevel);
@@ -953,6 +960,14 @@ begin
       FGatePlacement.AddOrSetValue(FPlacedComponents[i].Gate,
         TPoint.Create(FPlacedComponents[i].X, FPlacedComponents[i].Y));
     end;
+    // Canary: if nothing matched, the snapshot was taken against gates that no
+    // longer belong to the model being laid out (a freed validation clone, a
+    // changed netlist). The rows then sit at the packed start; say so instead of
+    // letting it look like the optimiser silently reshuffled everything.
+    if (Total > 0) and (Unmatched = Total) then
+      MemoRouting.Lines.Add('[placement] the model changed and no cell could be ' +
+        'matched by gate or index; the rows were rebuilt from the packed start.');
+
     // A grown bias lane narrows the rows: shift each band's cells left uniformly
     // so they fit, moving logic cells and clock-row nodes together.
     for band := 0 to High(FPlanBandStarts) do

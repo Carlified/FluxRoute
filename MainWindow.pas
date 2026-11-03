@@ -373,7 +373,10 @@ procedure ButtonOptimizeClick(Sender: TObject);
     // non-owning alias into FPipelineModel/FModel (cleared by the free helpers).
     procedure InitWorkspaceContainers;
     procedure FreeWorkspaceContainers;
-    procedure ScrapValidationModel;
+    // APreservePlacement maps the placed cells from the validation clone back
+    // onto the pristine model before the clone is freed, so the optimised rows
+    // survive the switch (the routed and validated placement must not reset).
+    procedure ScrapValidationModel(APreservePlacement: Boolean = False);
     procedure RemoveClockValidationBuffers;
     // Length-fixing validation buffers live in their own mask layer: positioned
     // over the logic/clock rows, visible to routing/bias but never merged into
@@ -968,7 +971,9 @@ end;
 {$I ConfigIO.inc}
 
 
-procedure TForm1.ScrapValidationModel;
+procedure TForm1.ScrapValidationModel(APreservePlacement: Boolean);
+var
+  Clone: TBlifModel;
 begin
   // Clock validation buffers live in the persistent buffered clock model (the
   // signal ones live on the throwaway placement clone), so take them out
@@ -982,12 +987,20 @@ begin
   FValidationBuffers := nil;
   FreeAndNil(FBiasGateSet);
   FBiasGatesSeen := 0;
+  Clone := FOwnedPlacementModel;
+  FOwnedPlacementModel := nil;
   // Restore the pristine base: validation results never travel backwards.
   FPlacementModel := FPipelineModel;
   if FPlacementModel = nil then
     FPlacementModel := FModel;
-  FOwnedPlacementModel.Free;
-  FOwnedPlacementModel := nil;
+  // FPlacedComponents still holds the clone's gate objects. Map them onto the
+  // pristine model by index while both models are alive; without this every
+  // lookup misses and the rows revert to their packed starting positions
+  // (horizontally packed left), which is what a second Route click used to do.
+  if APreservePlacement and FFloorplanValid and
+     (Length(FPlacedComponents) > 0) then
+    RebuildFloorplanPreserve(Clone);
+  Clone.Free;
 end;
 
 procedure TForm1.InitWorkspaceContainers;
@@ -1717,9 +1730,12 @@ begin
   UpdateNavButtons;
   // The Routing page state belongs to the circuit routed there; navigating back
   // discards it so a re-placed circuit never shows or validates against stale traces.
+  // The PLACEMENT is not part of that state: keep the optimised, bias-expanded
+  // rows while the validation clone is swapped back to the pristine model, or
+  // the floorplan snaps to the packed starting layout on the way back.
   if TabControl1.TabIndex < TabRouting then
   begin
-    ScrapValidationModel;
+    ScrapValidationModel(True);
     FRouteTraces := nil;
     MemoRouting.Lines.Clear;
   end;
@@ -1976,8 +1992,10 @@ begin
   FRoutingBusy := True;
   try
     // Routing always starts from the pristine model: a committed validation
-    // clone (with its buffers) is never what the router works on.
-    ScrapValidationModel;
+    // clone (with its buffers) is never what the router works on. Keep the
+    // placement: the cells still point at the clone's gates, so the switch has
+    // to re-key them or every row snaps back to the packed start.
+    ScrapValidationModel(True);
     // Validation-inserted extra rows go away, but never the placement itself:
     // once the user has optimised (and bias-expanded) the rows, routing rebuilds
     // the geometry only. Re-packing here would discard the layout they approved

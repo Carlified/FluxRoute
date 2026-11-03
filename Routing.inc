@@ -3351,8 +3351,9 @@ begin
     Exit;
   end;
   // Validation runs on a CLEAN model every time: scrap any prior validation
-  // clone, then clone the pristine base fresh and mutate only that.
-  ScrapValidationModel;
+  // clone, then clone the pristine base fresh and mutate only that. Keep the
+  // optimised placement across the switch.
+  ScrapValidationModel(True);
   // Traces left over from a previous validation reference its buffer nets, which
   // the clean model does not have; re-route the pristine model first so the
   // input traces match the netlist being validated.
