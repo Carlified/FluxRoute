@@ -3,7 +3,7 @@
         <ProjectGuid>{98C11570-EF1E-439B-AB44-92657F0B5738}</ProjectGuid>
     </PropertyGroup>
     <ItemGroup>
-        <Projects Include="PnRGUI.dproj">
+        <Projects Include="FluxRoute.dproj">
             <Dependencies/>
         </Projects>
         <Projects Include="BlifParser.dproj">
@@ -20,14 +20,14 @@
             <Default.Personality/>
         </BorlandProject>
     </ProjectExtensions>
-    <Target Name="PnRGUI">
-        <MSBuild Projects="PnRGUI.dproj"/>
+    <Target Name="FluxRoute">
+        <MSBuild Projects="FluxRoute.dproj"/>
     </Target>
-    <Target Name="PnRGUI:Clean">
-        <MSBuild Projects="PnRGUI.dproj" Targets="Clean"/>
+    <Target Name="FluxRoute:Clean">
+        <MSBuild Projects="FluxRoute.dproj" Targets="Clean"/>
     </Target>
-    <Target Name="PnRGUI:Make">
-        <MSBuild Projects="PnRGUI.dproj" Targets="Make"/>
+    <Target Name="FluxRoute:Make">
+        <MSBuild Projects="FluxRoute.dproj" Targets="Make"/>
     </Target>
     <Target Name="BlifParser">
         <MSBuild Projects="BlifParser.dproj"/>
@@ -48,13 +48,13 @@
         <MSBuild Projects="LefParser.dproj" Targets="Make"/>
     </Target>
     <Target Name="Build">
-        <CallTarget Targets="PnRGUI;BlifParser;LefParser"/>
+        <CallTarget Targets="FluxRoute;BlifParser;LefParser"/>
     </Target>
     <Target Name="Clean">
-        <CallTarget Targets="PnRGUI:Clean;BlifParser:Clean;LefParser:Clean"/>
+        <CallTarget Targets="FluxRoute:Clean;BlifParser:Clean;LefParser:Clean"/>
     </Target>
     <Target Name="Make">
-        <CallTarget Targets="PnRGUI:Make;BlifParser:Make;LefParser:Make"/>
+        <CallTarget Targets="FluxRoute:Make;BlifParser:Make;LefParser:Make"/>
     </Target>
     <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
 </Project>

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Package a macOS .app bundle into a release zip, from any OS.
 
-    python tools/../packaging/package-macos.py <path/to/PnRGUI.app> 1.0.0 [arm64|x64]
+    python tools/../packaging/package-macos.py <path/to/FluxRoute.app> 1.0.0 [arm64|x64]
 
 Why not just zip it? A .app is a directory bundle and macOS needs the main
 executable to carry the executable bit. Zip tools on Windows do not store Unix
 modes, so this script writes the archive entry by entry with the right modes
 (0755 for Contents/MacOS/*, 0644 elsewhere). The archive layout matches the
-Windows package: PnRGUI.app, tools/, docs/, examples/, README.md, LICENSE at the zip root.
+Windows package: FluxRoute.app, tools/, docs/, examples/, README.md, LICENSE at the zip root.
 
 Run it on macOS with `ditto` instead if you prefer (packaging/package-macos.sh);
 both produce the same layout.
@@ -27,9 +27,9 @@ FIRST_LAUNCH = b"""#!/bin/sh
 # Windows, where neither can be fixed.
 set -eu
 cd "$(dirname "$0")"
-APP="PnRGUI.app"
+APP="FluxRoute.app"
 if [ ! -d "$APP" ]; then
-    echo "PnRGUI.app is not next to this script." >&2
+    echo "FluxRoute.app is not next to this script." >&2
     exit 1
 fi
 xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
@@ -73,7 +73,7 @@ def add_tree(zf, src, arc_root):
 
 def main():
     if len(sys.argv) < 3:
-        print("usage: package-macos.py <path/to/PnRGUI.app> <version> [arm64|x64]",
+        print("usage: package-macos.py <path/to/FluxRoute.app> <version> [arm64|x64]",
               file=sys.stderr)
         return 2
     app = sys.argv[1].rstrip("\\/")
@@ -91,7 +91,7 @@ def main():
         os.remove(out)
 
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
-        add_tree(zf, app, "PnRGUI.app")
+        add_tree(zf, app, "FluxRoute.app")
         for tree in ("tools", "docs", "examples"):
             add_tree(zf, os.path.join(ROOT, tree), tree)
         for extra in ("README.md", "LICENSE"):

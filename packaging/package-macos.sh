@@ -1,7 +1,7 @@
 #!/bin/sh
 # Packages a macOS release bundle into dist/.
 #
-#   packaging/package-macos.sh OSXARM64/Release/PnRGUI.app 1.0.0 [arm64|x64]
+#   packaging/package-macos.sh OSXARM64/Release/FluxRoute.app 1.0.0 [arm64|x64]
 #
 # Build the macOS target in RAD Studio first (see docs/BUILDING.md).
 # ditto preserves the bundle's metadata and symlinks; plain zip can corrupt it.
@@ -14,7 +14,7 @@ ARCH="${3:-arm64}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 if [ -z "$APP" ] || [ ! -d "$APP" ]; then
-  echo "usage: $0 <path/to/PnRGUI.app> <version> [arm64|x64]" >&2
+  echo "usage: $0 <path/to/FluxRoute.app> <version> [arm64|x64]" >&2
   exit 2
 fi
 
@@ -30,8 +30,8 @@ cp -R "$ROOT/docs" "$ROOT/examples" "$STAGE/"
 cp "$ROOT/README.md" "$ROOT/LICENSE" "$STAGE/"
 rm -f "$STAGE/tools/config.json"
 # Debug deployments copy the {$I} sources into the bundle; never ship them.
-find "$STAGE/PnRGUI.app" -name '*.inc' -delete 2>/dev/null || true
-rm -rf "$STAGE/PnRGUI.app/Contents/_CodeSignature"
+find "$STAGE/FluxRoute.app" -name '*.inc' -delete 2>/dev/null || true
+rm -rf "$STAGE/FluxRoute.app/Contents/_CodeSignature"
 find "$STAGE/tools" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 
 ZIP="$DIST/$NAME.zip"

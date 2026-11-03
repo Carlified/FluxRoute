@@ -1,4 +1,4 @@
-program PnRGUI;
+program FluxRoute;
 
 uses
   System.SysUtils,
@@ -41,6 +41,7 @@ begin
   FormatSettings := TFormatSettings.Invariant;
 
   Application.Initialize;
+  Application.Title := 'FluxRoute';
   Application.CreateForm(TForm1, Form1);
   Application.Run;
 end.

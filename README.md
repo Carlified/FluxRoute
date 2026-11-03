@@ -7,7 +7,7 @@ synthesis and balancing, floorplanning and placement, bias-network expansion,
 multi-layer maze routing with vias, timing/clock/resonance validation, and GDS /
 SPICE / testbench export.
 
-The GUI (`PnRGUI`) is a Delphi FireMonkey application; the simulation and GDS
+The GUI (`FluxRoute`) is a Delphi FireMonkey application; the simulation and GDS
 helpers are Python scripts in [`tools/`](tools).
 
 ```
@@ -55,7 +55,7 @@ Prebuilt binaries are attached to the [Releases](../../releases) page when
 available (`FluxRoute-<version>-win64.zip`, `FluxRoute-<version>-macos-*.zip`).
 The macOS bundle is unsigned unless noted in the release: right-click the app and
 choose **Open** the first time, or run
-`xattr -dr com.apple.quarantine PnRGUI.app`.
+`xattr -dr com.apple.quarantine FluxRoute.app`.
 
 ## Requirements
 
@@ -71,11 +71,11 @@ choose **Open** the first time, or run
 Full instructions, including producing a permanent macOS `.app` and release
 packages, are in **[docs/BUILDING.md](docs/BUILDING.md)**. Short version:
 
-1. Open `PnRGUI.dproj` in RAD Studio.
+1. Open `FluxRoute.dproj` in RAD Studio.
 2. Pick the target platform (`Win64`, `OSX64` or `OSXARM64`) and the `Release`
    configuration.
-3. **Build** (Shift+F9). The binary lands in `Win64\Release\PnRGUI.exe` or
-   `OSXARM64\Release\PnRGUI.app` — no PAServer needed to *build*.
+3. **Build** (Shift+F9). The binary lands in `Win64\Release\FluxRoute.exe` or
+   `OSXARM64\Release\FluxRoute.app` — no PAServer needed to *build*.
 
 ## Quick start
 
@@ -105,7 +105,7 @@ packages, are in **[docs/BUILDING.md](docs/BUILDING.md)**. Short version:
 
 | Path | Contents |
 |---|---|
-| `PnRGUI.dproj`, `PnRGUI.dpr` | GUI application project |
+| `FluxRoute.dproj`, `FluxRoute.dpr` | GUI application project |
 | `MainWindow.pas`, `*.inc` | Form, pages (clock, pipeline, placement, floorplan, routing, config, export) |
 | `BlifLibrary.pas`, `LefLibrary.pas` | LEF/BLIF parsing and model |
 | `SplitterInsert.pas`, `FlipFlopInsert.pas`, `Pipeline*.pas` | Splitter trees, pipelining, levelisation |

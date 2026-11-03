@@ -1,4 +1,4 @@
-# Packages a Windows release: PnRGUI.exe + tools/ + docs/ + examples/, zipped into dist/.
+# Packages a Windows release: FluxRoute.exe + tools/ + docs/ + examples/, zipped into dist/.
 #
 #   pwsh packaging/package-win.ps1 -Version 1.0.0 [-Configuration Release]
 #
@@ -12,7 +12,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$exe  = Join-Path $root "$Platform\$Configuration\PnRGUI.exe"
+$exe  = Join-Path $root "$Platform\$Configuration\FluxRoute.exe"
 if (-not (Test-Path -LiteralPath $exe)) {
   throw "not found: $exe`nBuild the $Platform $Configuration target in RAD Studio first."
 }

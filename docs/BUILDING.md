@@ -1,6 +1,6 @@
 # Building and releasing FluxRoute
 
-The GUI is a Delphi FireMonkey application (`PnRGUI.dproj`). Everything below is
+The GUI is a Delphi FireMonkey application (`FluxRoute.dproj`). Everything below is
 about producing a binary you can hand to someone, not about running from the IDE.
 
 Two things worth knowing up front:
@@ -37,11 +37,11 @@ for simulation.
 
 ## 2. Windows build
 
-1. Open `PnRGUI.dproj`.
+1. Open `FluxRoute.dproj`.
 2. In the Projects window select the **Win64** platform (or Win32) and the
    **Release** configuration.
 3. `Project > Build` (Shift+F9).
-4. Output: `Win64\Release\PnRGUI.exe`.
+4. Output: `Win64\Release\FluxRoute.exe`.
 
 Run it from the repository folder so the `tools/` lookup works, or copy the
 `tools/` folder next to the executable. The app searches for its helper scripts
@@ -51,7 +51,7 @@ Command line (RAD Studio command prompt):
 
 ```bat
 call "C:\Program Files (x86)\Embarcadero\Studio\23.0\bin\rsvars.bat"
-msbuild PnRGUI.dproj /t:Build /p:Platform=Win64 /p:Config=Release
+msbuild FluxRoute.dproj /t:Build /p:Platform=Win64 /p:Config=Release
 ```
 
 (Adjust the Studio version folder to your installation.)
@@ -77,24 +77,24 @@ msbuild PnRGUI.dproj /t:Build /p:Platform=Win64 /p:Config=Release
 4. The bundle appears in the project folder:
 
 ```
-OSXARM64\Release\PnRGUI.app      (Apple silicon)
-OSX64\Release\PnRGUI.app         (Intel)
+OSXARM64\Release\FluxRoute.app      (Apple silicon)
+OSX64\Release\FluxRoute.app         (Intel)
 ```
 
 That `.app` is the permanent binary. It is a directory bundle — copy it whole
 (`scp -r`, AirDrop, or zip it first; see §6).
 
-**If Build only produced `PnRGUI` + `PnRGUI.info.plist`** (the bundle itself is
+**If Build only produced `FluxRoute` + `FluxRoute.info.plist`** (the bundle itself is
 normally created by *Deploy*), lay the bundle out locally - no PAServer, no Mac:
 
 ```bat
-python packaging\make-macos-app.py OSXARM64\Release --icon PnRGUI_Icns.icns
+python packaging\make-macos-app.py OSXARM64\Release --icon FluxRoute_Icns.icns
 ```
 
-That creates `OSXARM64\Release\PnRGUI.app` with the executable, the generated
-`Info.plist` (UTF-8 BOM stripped) and the icon. Pass `--icon PnRGUI_Icns.icns`
+That creates `OSXARM64\Release\FluxRoute.app` with the executable, the generated
+`Info.plist` (UTF-8 BOM stripped) and the icon. Pass `--icon FluxRoute_Icns.icns`
 from the project root: **Build alone does not place the icon in the bundle**, so
-a bundle assembled without it keeps whatever `Resources/PnRGUI.icns` was there
+a bundle assembled without it keeps whatever `Resources/FluxRoute.icns` was there
 before. Check the file size - about 174 KB is the FluxRoute icon, 524 KB is the
 generic Delphi one.
 
@@ -106,17 +106,17 @@ opened. (Deploying through PAServer signs it on the Mac for you; assembling with
 `make-macos-app.py` cannot.) So both steps are required, in this order:
 
 ```sh
-xattr -dr com.apple.quarantine /Applications/PnRGUI.app
-codesign --force --deep --sign - /Applications/PnRGUI.app
+xattr -dr com.apple.quarantine /Applications/FluxRoute.app
+codesign --force --deep --sign - /Applications/FluxRoute.app
 ```
 
-The release archive ships `first-launch.command` next to `PnRGUI.app`, which
+The release archive ships `first-launch.command` next to `FluxRoute.app`, which
 does exactly these two steps and then opens the app - double-click it, or run
 `sh first-launch.command`. If Gatekeeper blocks the script itself, right-click
 it → **Open** once, or run it from Terminal.
 
-To confirm the signature afterwards, `codesign -dv PnRGUI.app` should print
-`Signature=adhoc`, and `spctl --assess --verbose PnRGUI.app` will still reject
+To confirm the signature afterwards, `codesign -dv FluxRoute.app` should print
+`Signature=adhoc`, and `spctl --assess --verbose FluxRoute.app` will still reject
 the bundle (ad-hoc signatures are not notarised) - that is expected and does not
 stop it launching.
 
@@ -126,11 +126,11 @@ Build both macOS targets, then merge the two executables:
 
 ```sh
 lipo -create \
-  OSX64/Release/PnRGUI.app/Contents/MacOS/PnRGUI \
-  OSXARM64/Release/PnRGUI.app/Contents/MacOS/PnRGUI \
-  -output /tmp/PnRGUI-universal
-cp /tmp/PnRGUI-universal OSXARM64/Release/PnRGUI.app/Contents/MacOS/PnRGUI
-codesign --force --deep --sign - OSXARM64/Release/PnRGUI.app
+  OSX64/Release/FluxRoute.app/Contents/MacOS/FluxRoute \
+  OSXARM64/Release/FluxRoute.app/Contents/MacOS/FluxRoute \
+  -output /tmp/FluxRoute-universal
+cp /tmp/FluxRoute-universal OSXARM64/Release/FluxRoute.app/Contents/MacOS/FluxRoute
+codesign --force --deep --sign - OSXARM64/Release/FluxRoute.app
 ```
 
 Otherwise ship two zips (`-arm64` and `-x64`); Apple silicon runs the Intel
@@ -143,13 +143,13 @@ Developer account and a **Developer ID Application** certificate.
 
 ```sh
 codesign --deep --force --options runtime --timestamp \
-  --sign "Developer ID Application: Your Name (TEAMID)" PnRGUI.app
+  --sign "Developer ID Application: Your Name (TEAMID)" FluxRoute.app
 
-ditto -c -k --sequesterRsrc --keepParent PnRGUI.app PnRGUI.zip
-xcrun notarytool submit PnRGUI.zip --apple-id you@example.com \
+ditto -c -k --sequesterRsrc --keepParent FluxRoute.app FluxRoute.zip
+xcrun notarytool submit FluxRoute.zip --apple-id you@example.com \
   --team-id TEAMID --password "app-specific-password" --wait
-xcrun stapler staple PnRGUI.app
-spctl -a -vvv PnRGUI.app          # should say "accepted, Notarized Developer ID"
+xcrun stapler staple FluxRoute.app
+spctl -a -vvv FluxRoute.app          # should say "accepted, Notarized Developer ID"
 ```
 
 ---
@@ -157,7 +157,7 @@ spctl -a -vvv PnRGUI.app          # should say "accepted, Notarized Developer ID
 ### 3.6 Troubleshooting
 
 - **`CreateInfoPlistFile` fails with `DirectoryNotFoundException` for
-  `OSXARM64\Release\PnRGUI.info.plist`** ? the Release output folder does not
+  `OSXARM64\Release\FluxRoute.info.plist`** ? the Release output folder does not
   exist yet (Debug was built first) and the task does not create it. Create it
   once and rebuild:
 
@@ -173,7 +173,7 @@ spctl -a -vvv PnRGUI.app          # should say "accepted, Notarized Developer ID
   project no longer lists them and ships no deployment entries for them. If an
   older checkout or a re-saved project brings them back, open
   **Project > Deployment** and delete those rows.
-- **`PnRGUI.res` shrinks to 32 bytes after a build** - expected. The IDE
+- **`FluxRoute.res` shrinks to 32 bytes after a build** - expected. The IDE
   regenerates the project resource from the project options on save, and this
   project keeps its icon and version info there (`Icon_MainIcon`,
   `Icns_MainIcns`, `VerInfo_Keys`), which the linker embeds directly. The empty
@@ -191,9 +191,9 @@ From the RAD Studio command prompt:
 ```bat
 call "C:\Program Files (x86)\Embarcadero\Studio\23.0\bin\rsvars.bat"
 
-msbuild PnRGUI.dproj /t:Build /p:Platform=Win64     /p:Config=Release
-msbuild PnRGUI.dproj /t:Build /p:Platform=OSXARM64  /p:Config=Release
-msbuild PnRGUI.dproj /t:Build /p:Platform=OSX64     /p:Config=Release
+msbuild FluxRoute.dproj /t:Build /p:Platform=Win64     /p:Config=Release
+msbuild FluxRoute.dproj /t:Build /p:Platform=OSXARM64  /p:Config=Release
+msbuild FluxRoute.dproj /t:Build /p:Platform=OSX64     /p:Config=Release
 ```
 
 CI note: GitHub-hosted runners do not include RAD Studio, so a public workflow
@@ -226,15 +226,15 @@ pwsh packaging/package-win.ps1 -Version 1.0.0
 
 ```sh
 # on macOS (uses ditto, preserves the bundle)
-sh packaging/package-macos.sh OSXARM64/Release/PnRGUI.app 1.0.0
+sh packaging/package-macos.sh OSXARM64/Release/FluxRoute.app 1.0.0
 # -> dist/FluxRoute-1.0.0-macos-arm64.zip
 
 # on Windows (no ditto): stores the bundle entry by entry with the right modes
-python packaging/package-macos.py "C:\path\to\PnRGUI.app" 1.0.0 arm64
+python packaging/package-macos.py "C:\path\to\FluxRoute.app" 1.0.0 arm64
 ```
 
 Package a **Release** build: a Debug deployment copies the `{$I}` sources into
-`PnRGUI.app/Contents/Resources/StartUp/` (the packagers strip them, but the
+`FluxRoute.app/Contents/Resources/StartUp/` (the packagers strip them, but the
 Release binary is also smaller and faster).
 
 Both bundles contain the binary, `README.md`, `LICENSE` and the `tools/` folder,
