@@ -15,6 +15,12 @@ procedure TForm1.FreeClockModel;
 begin
   FClockNet.Free;
   FClockNet := nil;
+  // The placed clock nodes and the trunk borrow these models' gates; they
+  // must not survive the free (the routing page paints their cells).
+  FSpine := nil;
+  FClockSubtree := nil;
+  FClockBuiltPipeline := nil;
+  FClockBuiltLib := nil;
   FClockBufferedModel.Free;
   FClockBufferedModel := nil;
   FClockModel.Free;
@@ -32,6 +38,16 @@ var
   NumOutputs: Integer;
   InPin, OutPin: string;
 begin
+  // A visit with nothing changed must not rebuild: the placed clock nodes
+  // and the trunk reference this model's gate objects, and routing/export
+  // use them after a round trip through this page.
+  if (FClockModel <> nil) and (FClockNet <> nil) and
+     (FPipelineModel <> nil) and
+     (FClockBuiltPipeline = FPipelineModel) and (FClockBuiltLib = FLib) and
+     (FClockBuiltBuffers = FBufferNames.Text) and
+     (FClockBuiltFF = FFlipFlopNames.Text) and
+     (FClockBuiltSeed = CheckBoxSeedBuffers.IsChecked) then
+    Exit;
   FreeClockModel;
   if (FPipelineModel = nil) or (FLib = nil) or (FFlipFlopNames.Count = 0) then
     Exit;
@@ -97,6 +113,18 @@ begin
   finally
     Errors.Free;
   end;
+  if FClockNet <> nil then
+  begin
+    FClockBuiltPipeline := FPipelineModel;
+    FClockBuiltLib := FLib;
+    FClockBuiltBuffers := FBufferNames.Text;
+    FClockBuiltFF := FFlipFlopNames.Text;
+    FClockBuiltSeed := CheckBoxSeedBuffers.IsChecked;
+  end;
+  // The clock network changed: the clock nodes, the trunk and everything
+  // routed against them are stale. The logic placement is not.
+  if FFlowStage > fsPlacement then
+    FFlowStage := fsPlacement;
 end;
 
 // Rebuilds the clock model when the seed-stage buffer toggle changes, so the

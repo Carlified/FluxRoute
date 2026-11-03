@@ -232,6 +232,14 @@ procedure ButtonOptimizeClick(Sender: TObject);
     FPipeLevelYOff: TArray<Integer>;                  // first-row offset per level
     FPipeHasGateRow: TArray<Boolean>;                 // level holds clocked gates
     FPipeArea, FPipeWorstPath: Double;
+    // Inputs of the last successful pipeline build. A page visit must not
+    // free and rebuild an unchanged model: the placement and the routing
+    // state hold that model's gate objects.
+    FPipeBuiltModel: TBlifModel;
+    FPipeBuiltLib: TLibrary;
+    FPipeBuiltGateCount: Integer;
+    FPipeBuiltSlider: Integer;
+    FPipeBuiltFF: string;
     FSliderPos: Integer;
     FSliderUpdating: Boolean;
     FSliderTimer: TTimer;
@@ -241,6 +249,13 @@ procedure ButtonOptimizeClick(Sender: TObject);
     FCompactWorstDelay: Double;
     FClockModel: TBlifModel;      // deep copy of the DFF-inserted netlist
     FClockBufferedModel: TBlifModel; // copy with delay blocks -> buffer chains
+    // Inputs of the last successful clock build: visiting the clock page must
+    // not free a model the placed clock cells still reference.
+    FClockBuiltPipeline: TBlifModel;
+    FClockBuiltLib: TLibrary;
+    FClockBuiltBuffers: string;
+    FClockBuiltFF: string;
+    FClockBuiltSeed: Boolean;
     FClockNet: TClockNetworkInfo; // clock stage registry (top-down)
     FProject: TProjectFile;
     FProjectPath: string;
@@ -552,6 +567,9 @@ procedure AppendScanTally(const D: TExportDesign;
     // placement back. OldModel is the model the current placement was built
     // from, when FPlacementModel has already been swapped for a clone.
     procedure RebuildFloorplanPreserve(OldModel: TBlifModel = nil);
+    // Drops a gate's placement record when its netlist entry is removed (a
+    // failed buffer insertion frees the gate; paint and bias read it).
+    procedure ForgetPlacedGate(G: TGateInstance);
     function BandIndexOfY(Y: Integer): Integer; // band containing grid row Y
     // Bias-line current-capacity helpers. Each returns True on success; a
     // horizontal shortage is absorbed by widening the die (GrowDieWidth); any
@@ -610,6 +628,10 @@ begin
   FFlowStage := fsVirgin;
   FPlacementInitialized := False;
   FPlacedComponents := nil;
+  FSpine := nil;
+  FClockSubtree := nil;
+  FFloorplan := nil;
+  FFloorplanValid := False;
   FGatePlacement.Clear;
   FLogicRowExtra := nil;
   FClockRowExtra := nil;
@@ -764,6 +786,7 @@ begin
   end;
 
   FBlifFile := Path;
+  FPlacementModel := nil; // non-owning alias, drop it before the model dies
   FModel.Free; // a new BLIF file invalidates the previously parsed netlist
   FModel := nil;
   FFlowStage := fsVirgin;
@@ -980,13 +1003,13 @@ begin
   // explicitly: going back must start from the pristine clock tree.
   RemoveLengthBuffers;
   RemoveClockValidationBuffers;
-  if FOwnedPlacementModel = nil then
-    Exit;
-  // The clone's gates are referenced by FValidationBuffers and the bias audit
-  // set, so those go with it (they are meaningless once the model is gone).
+  // Both removers free gate objects that the buffer list and the bias audit
+  // set may still name; drop them here, whatever model owns the placement.
   FValidationBuffers := nil;
   FreeAndNil(FBiasGateSet);
   FBiasGatesSeen := 0;
+  if FOwnedPlacementModel = nil then
+    Exit;
   Clone := FOwnedPlacementModel;
   FOwnedPlacementModel := nil;
   // Restore the pristine base: validation results never travel backwards.
@@ -999,7 +1022,19 @@ begin
   // (horizontally packed left), which is what a second Route click used to do.
   if APreservePlacement and FFloorplanValid and
      (Length(FPlacedComponents) > 0) then
-    RebuildFloorplanPreserve(Clone);
+    RebuildFloorplanPreserve(Clone)
+  else
+  begin
+    // Nothing may outlive the clone: the placement, the clock nodes, the
+    // gate map and the route belong to the netlist that was just freed.
+    FPlacedComponents := nil;
+    FSpine := nil;
+    FClockSubtree := nil;
+    FGatePlacement.Clear;
+    FFloorplan := nil;
+    FFloorplanValid := False;
+    FRouteTraces := nil;
+  end;
   Clone.Free;
 end;
 
@@ -1815,6 +1850,14 @@ begin
     FRouteZoom := 1.0;
     FRouteNeedsFit := True;
     BuildRoutingLayers;
+    // The clock page rebuilds its models, which drops the placed clock
+    // cells (their gates die with the old models). Re-derive them from the
+    // current tree before painting; the routing page dereferences them.
+    if FFloorplanValid and (Length(FClockSubtree) = 0) then
+    begin
+      BuildClockSubtreePlacements;
+      BuildSpinePlacement;
+    end;
     RepaintRoutingPage;
   end;
   if TabControl1.TabIndex = TabExport then

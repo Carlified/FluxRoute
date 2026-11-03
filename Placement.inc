@@ -435,6 +435,10 @@ end;
 
 procedure TForm1.ButtonOptimizeClick(Sender: TObject);
 begin
+  // Optimising is a fresh placement pass: drop any committed validation
+  // clone first, so the pass runs on the pristine netlist and nothing keeps
+  // pointing at the clone's gates.
+  ScrapValidationModel;
   // Optimize doubles as the placement reset: drop the bias expansion geometry
   // (rows, lanes, trunk, run-time die growth) and optimise from clean state.
   // This must NOT be gated on FFlowStage >= fsBias: a FAILED expansion leaves the
@@ -1078,6 +1082,28 @@ begin
     IdxSnap.Free;
   end;
   RepaintFloorplanPage;
+end;
+
+// Removes one gate's placement record. Called before the gate is freed (a
+// failed validation-buffer insertion): the floorplan paint and the bias
+// collectors dereference these gate pointers, so no record may outlive it.
+procedure TForm1.ForgetPlacedGate(G: TGateInstance);
+var
+  i, n: Integer;
+begin
+  if G = nil then
+    Exit;
+  n := 0;
+  for i := 0 to High(FPlacedComponents) do
+    if FPlacedComponents[i].Gate <> G then
+    begin
+      if n <> i then
+        FPlacedComponents[n] := FPlacedComponents[i];
+      Inc(n);
+    end;
+  if n <> Length(FPlacedComponents) then
+    SetLength(FPlacedComponents, n);
+  FGatePlacement.Remove(G);
 end;
 
 procedure TForm1.CheckBoxToggleChange(Sender: TObject);

@@ -2994,6 +2994,10 @@ begin
       Repoint(Driver, DriverPin, NewNetName, NetName)
     else
       Repoint(Load, LoadPin, NewNetName, NetName);
+    // The gate is about to be freed: drop its placement record first, and
+    // re-derive the clock nodes if it was inserted on a clock link (the
+    // clock tree builder owns those entries).
+    ForgetPlacedGate(BufGate);
     Model.Gates.Remove(BufGate); // owns objects: frees BufGate
     Model.Nets.Remove(NewNetName);
     Net.Connections.Clear;
@@ -3002,6 +3006,11 @@ begin
       SetLength(FLengthBuffers, Length(FLengthBuffers) - 1)
     else
       SetLength(FValidationBuffers, Length(FValidationBuffers) - 1);
+    if IsClock then
+    begin
+      BuildClockSubtreePlacements;
+      BuildSpinePlacement;
+    end;
     if BiasFailed then
       // Nothing to restore to: the expansion failed, so re-running it would only
       // fail again. The caller reports and stops; the failure flag stays latched

@@ -643,6 +643,21 @@ begin
   FreePipelineRows;
   if FPlacementModel = FPipelineModel then
     FPlacementModel := nil; // drop the non-owning alias before its target dies
+  // The placement, the clock nodes and the gate map borrow this model's gate
+  // objects; they cannot outlive it. The next BuildFloorplan rebuilds them.
+  FPlacedComponents := nil;
+  FSpine := nil;
+  FClockSubtree := nil;
+  FGatePlacement.Clear;
+  FFloorplan := nil;
+  FFloorplanValid := False;
+  FRouteTraces := nil;
+  // The bias audit keys on this model's gates and FinalChecks dereferences
+  // them, so it cannot outlive the model either.
+  FreeAndNil(FBiasGateSet);
+  FBiasGatesSeen := 0;
+  FPipeBuiltModel := nil;
+  FPipeBuiltLib := nil;
   FPipelineModel.Free;
   FPipelineModel := nil;
 end;
@@ -810,6 +825,16 @@ var
   end;
 
 begin
+  // Entering the page with nothing changed must not rebuild: the placement
+  // and the routing results reference this model's gate objects, and a rebuild
+  // would free them (the floorplan then fell back to the packed start, and a
+  // macOS build crashed on the dangling reads).
+  if (FModel <> nil) and (FPipelineModel <> nil) and
+     (FPipeBuiltModel = FModel) and (FPipeBuiltLib = FLib) and
+     (FPipeBuiltGateCount = FModel.Gates.Count) and
+     (FPipeBuiltSlider = FSliderPos) and
+     (FPipeBuiltFF = FFlipFlopNames.Text) then
+    Exit;
   // A pipeline change invalidates the derived validation state; scrap it before
   // the old pipeline model (whose gates the clone references) is freed.
   ScrapValidationModel;
@@ -969,9 +994,19 @@ begin
     end;
     FPipelineModel := PM;
     PM := nil;
+    FPipeBuiltModel := FModel;
+    FPipeBuiltLib := FLib;
+    FPipeBuiltGateCount := FModel.Gates.Count;
+    FPipeBuiltSlider := FSliderPos;
+    FPipeBuiltFF := FFlipFlopNames.Text;
   finally
     PM.Free;
   end;
+  // The placement described the previous netlist; FreePipelineModel dropped
+  // its arrays. Make the flow agree so the later pages rebuild from scratch
+  // instead of claiming a placement they no longer have.
+  if FFlowStage > fsSplitters then
+    FFlowStage := fsSplitters;
 end;
 
 procedure TForm1.TrackBar1Change(Sender: TObject);
