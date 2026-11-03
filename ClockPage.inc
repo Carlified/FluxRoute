@@ -21,6 +21,10 @@ begin
   FClockSubtree := nil;
   FClockBuiltPipeline := nil;
   FClockBuiltLib := nil;
+  // The bias audit names spine and clock-tree gates (FinalChecks derefs the
+  // keys); it cannot outlive the models either.
+  FreeAndNil(FBiasGateSet);
+  FBiasGatesSeen := 0;
   FClockBufferedModel.Free;
   FClockBufferedModel := nil;
   FClockModel.Free;

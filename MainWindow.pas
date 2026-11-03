@@ -997,21 +997,32 @@ end;
 procedure TForm1.ScrapValidationModel(APreservePlacement: Boolean);
 var
   Clone: TBlifModel;
+  HadBuffers: Boolean;
 begin
   // Clock validation buffers live in the persistent buffered clock model (the
   // signal ones live on the throwaway placement clone), so take them out
   // explicitly: going back must start from the pristine clock tree.
+  HadBuffers := (Length(FLengthBuffers) > 0) or (Length(FValidationBuffers) > 0);
   RemoveLengthBuffers;
   RemoveClockValidationBuffers;
-  // Both removers free gate objects that the buffer list and the bias audit
-  // set may still name; drop them here, whatever model owns the placement.
   FValidationBuffers := nil;
-  FreeAndNil(FBiasGateSet);
-  FBiasGatesSeen := 0;
+  // Only touch the bias audit when a remover actually freed a gate it may
+  // name. Scrapping the (already pristine) state before validation must NOT
+  // wipe it: RouteBiasLines built it for this netlist and the export preflight
+  // reads it.
+  if HadBuffers then
+  begin
+    FreeAndNil(FBiasGateSet);
+    FBiasGatesSeen := 0;
+  end;
   if FOwnedPlacementModel = nil then
     Exit;
   Clone := FOwnedPlacementModel;
   FOwnedPlacementModel := nil;
+  // Validation buffers placed on the clone are part of the audit set; their
+  // gates die with the clone.
+  FreeAndNil(FBiasGateSet);
+  FBiasGatesSeen := 0;
   // Restore the pristine base: validation results never travel backwards.
   FPlacementModel := FPipelineModel;
   if FPlacementModel = nil then
@@ -1773,6 +1784,10 @@ begin
     ScrapValidationModel(True);
     FRouteTraces := nil;
     MemoRouting.Lines.Clear;
+    // The routed/validated state went with the traces: do not let Export run
+    // against a circuit that is no longer routed.
+    if FFlowStage > fsBias then
+      FFlowStage := fsBias;
   end;
   // Re-entrancy guard: bouncing back from the Routing tab to the Floorplan tab
   // re-fires this handler; the Floorplan branch below does the rebuild.
