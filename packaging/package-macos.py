@@ -20,6 +20,24 @@ import zipfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EXEC_DIR = os.path.join("Contents", "MacOS")
 
+FIRST_LAUNCH = b"""#!/bin/sh
+# Run this once after unzipping (double-click, or: sh first-launch.command).
+# macOS quarantines downloaded archives, and Apple silicon requires every
+# arm64 binary to carry at least an ad-hoc signature; this bundle is built on
+# Windows, where neither can be fixed.
+set -eu
+cd "$(dirname "$0")"
+APP="PnRGUI.app"
+if [ ! -d "$APP" ]; then
+    echo "PnRGUI.app is not next to this script." >&2
+    exit 1
+fi
+xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
+codesign --force --deep --sign - "$APP"
+open "$APP"
+"""
+
+
 
 def add_tree(zf, src, arc_root):
     """Adds src under arc_root, storing Unix modes the way macOS expects."""
@@ -33,6 +51,7 @@ def add_tree(zf, src, arc_root):
         arc_dir = arc_root if rel == "." else os.path.join(arc_root, rel)
         if rel != ".":
             info = zipfile.ZipInfo(arc_dir.replace(os.sep, "/") + "/")
+            info.create_system = 3  # Unix; without it macOS ignores the mode
             info.external_attr = (0o40755 << 16) | 0x10  # dir, drwxr-xr-x
             zf.writestr(info, b"")
         for name in sorted(filenames):
@@ -45,6 +64,7 @@ def add_tree(zf, src, arc_root):
                 continue  # Debug deployment copies source includes; never loaded
             mode = 0o100755 if rel_file.startswith(EXEC_DIR.replace(os.sep, "/") + "/") else 0o100644
             info = zipfile.ZipInfo(arcname)
+            info.create_system = 3
             info.external_attr = mode << 16
             info.compress_type = zipfile.ZIP_DEFLATED
             with open(path, "rb") as f:
@@ -79,12 +99,23 @@ def main():
             if not os.path.exists(src):
                 raise SystemExit(f"missing: {src}")
             info = zipfile.ZipInfo(extra)
+            info.create_system = 3
             info.external_attr = 0o100644 << 16
             info.compress_type = zipfile.ZIP_DEFLATED
             with open(src, "rb") as f:
                 zf.writestr(info, f.read())
+        # Apple silicon refuses to execute an unsigned Mach-O, and codesign
+        # only exists on macOS, so ship the one-liner as a double-clickable
+        # script instead of hoping the user reads the notes.
+        info = zipfile.ZipInfo("first-launch.command")
+        info.create_system = 3
+        info.external_attr = 0o100755 << 16
+        info.compress_type = zipfile.ZIP_DEFLATED
+        zf.writestr(info, FIRST_LAUNCH)
 
     print(f"wrote {out}")
+    print("note: the executable is not code signed; first-launch.command gives it an")
+    print("      ad-hoc signature on the Mac, which Apple silicon requires")
     return 0
 
 

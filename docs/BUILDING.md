@@ -98,21 +98,27 @@ a bundle assembled without it keeps whatever `Resources/PnRGUI.icns` was there
 before. Check the file size - about 174 KB is the FluxRoute icon, 524 KB is the
 generic Delphi one.
 
-### 3.3 First launch on the Mac
+### 3.3 First launch on the Mac - always sign the bundle
 
-A bundle produced this way is unsigned, so macOS quarantines it after a
-download. Either right-click the app → **Open** → **Open**, or remove the
-quarantine flag once:
+A bundle assembled on Windows has **no code signature**, and Apple silicon will
+not execute an arm64 binary without one: the app just reports that it cannot be
+opened. (Deploying through PAServer signs it on the Mac for you; assembling with
+`make-macos-app.py` cannot.) So both steps are required, in this order:
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/PnRGUI.app
-```
-
-If Gatekeeper still refuses it, give it an ad-hoc signature locally:
-
-```sh
 codesign --force --deep --sign - /Applications/PnRGUI.app
 ```
+
+The release archive ships `first-launch.command` next to `PnRGUI.app`, which
+does exactly these two steps and then opens the app - double-click it, or run
+`sh first-launch.command`. If Gatekeeper blocks the script itself, right-click
+it → **Open** once, or run it from Terminal.
+
+To confirm the signature afterwards, `codesign -dv PnRGUI.app` should print
+`Signature=adhoc`, and `spctl --assess --verbose PnRGUI.app` will still reject
+the bundle (ad-hoc signatures are not notarised) - that is expected and does not
+stop it launching.
 
 ### 3.4 Optional: a universal (Intel + ARM) bundle
 
