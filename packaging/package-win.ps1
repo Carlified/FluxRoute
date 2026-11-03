@@ -1,4 +1,4 @@
-# Packages a Windows release: PnRGUI.exe + tools/ + docs, zipped into dist/.
+# Packages a Windows release: PnRGUI.exe + tools/ + docs/ + examples/, zipped into dist/.
 #
 #   pwsh packaging/package-win.ps1 -Version 1.0.0 [-Configuration Release]
 #
@@ -24,7 +24,7 @@ if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -F
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
 
 Copy-Item -LiteralPath $exe -Destination $stage
-foreach ($item in @("tools", "README.md", "LICENSE")) {
+foreach ($item in @("tools", "docs", "examples", "README.md", "LICENSE")) {
   $src = Join-Path $root $item
   if (-not (Test-Path -LiteralPath $src)) { throw "missing: $src" }
   Copy-Item -LiteralPath $src -Destination $stage -Recurse

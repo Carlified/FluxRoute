@@ -7,7 +7,7 @@ Why not just zip it? A .app is a directory bundle and macOS needs the main
 executable to carry the executable bit. Zip tools on Windows do not store Unix
 modes, so this script writes the archive entry by entry with the right modes
 (0755 for Contents/MacOS/*, 0644 elsewhere). The archive layout matches the
-Windows package: PnRGUI.app, tools/, README.md, LICENSE at the zip root.
+Windows package: PnRGUI.app, tools/, docs/, examples/, README.md, LICENSE at the zip root.
 
 Run it on macOS with `ditto` instead if you prefer (packaging/package-macos.sh);
 both produce the same layout.
@@ -72,7 +72,8 @@ def main():
 
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
         add_tree(zf, app, "PnRGUI.app")
-        add_tree(zf, os.path.join(ROOT, "tools"), "tools")
+        for tree in ("tools", "docs", "examples"):
+            add_tree(zf, os.path.join(ROOT, tree), tree)
         for extra in ("README.md", "LICENSE"):
             src = os.path.join(ROOT, extra)
             if not os.path.exists(src):

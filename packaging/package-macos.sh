@@ -26,6 +26,7 @@ mkdir -p "$STAGE"
 
 cp -R "$APP" "$STAGE/"
 cp -R "$ROOT/tools" "$STAGE/"
+cp -R "$ROOT/docs" "$ROOT/examples" "$STAGE/"
 cp "$ROOT/README.md" "$ROOT/LICENSE" "$STAGE/"
 rm -f "$STAGE/tools/config.json"
 # Debug deployments copy the {$I} sources into the bundle; never ship them.
