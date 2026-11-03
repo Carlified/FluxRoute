@@ -119,7 +119,7 @@
             <RemoteCommand/>
             <Overwrite>True</Overwrite>
         </DeployFile>
-        <DeployFile Include="$(BDS)\bin\delphi_PROJECTICNS.icns" Condition="'$(Config)'=='Debug'">
+        <DeployFile Include="PnRGUI_Icns.icns" Condition="'$(Config)'=='Debug'">
             <RemoteDir>PnRGUI.app\Contents\Resources\</RemoteDir>
             <RemoteName>PnRGUI.icns</RemoteName>
             <DeployClass>ProjectOSXResource</DeployClass>
@@ -137,7 +137,7 @@
             <RemoteCommand/>
             <Overwrite>True</Overwrite>
         </DeployFile>
-        <DeployFile Include="$(BDS)\bin\delphi_PROJECTICNS.icns" Condition="'$(Config)'=='Release'">
+        <DeployFile Include="PnRGUI_Icns.icns" Condition="'$(Config)'=='Release'">
             <RemoteDir>PnRGUI.app\Contents\Resources\</RemoteDir>
             <RemoteName>PnRGUI.icns</RemoteName>
             <DeployClass>ProjectOSXResource</DeployClass>
