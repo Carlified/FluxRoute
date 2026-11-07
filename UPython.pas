@@ -98,6 +98,16 @@ begin
   // running from the IDE usually means the working directory is the project
   Dir := IncludeTrailingPathDelimiter(GetCurrentDir);
   ToolsDir := Dir + 'tools' + PathDelim;
+  {$IFDEF MACOS}
+  // A bundle moved to /Applications cannot see the archive's tools/ any
+  // more; a copy in the writable workspace keeps GDS export working.
+  if not FileExists(ToolsDir + AScriptName) then
+  begin
+    Dir := IncludeTrailingPathDelimiter(
+      TPath.Combine(TPath.GetDocumentsPath, 'FluxRoute'));
+    ToolsDir := Dir + 'tools' + PathDelim;
+  end;
+  {$ENDIF}
   if FileExists(ToolsDir + AScriptName) then
     Exit(ToolsDir + AScriptName);
   if FileExists(Dir + AScriptName) then

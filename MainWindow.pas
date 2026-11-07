@@ -520,6 +520,17 @@ procedure AppendScanTally(const D: TExportDesign;
     procedure ReportCellFileStatus(const Cells: TArray<TExportCellCount>;
       const Lines: TStrings; NeedGds, NeedCir: Boolean);
     procedure RefreshExportPreflight;
+    // Folder the app writes its own files into when nothing is configured:
+    // next to the exe on Windows, ~/Documents/FluxRoute on macOS (writing
+    // inside a .app bundle is not allowed practice and breaks its seal).
+    function WorkspaceRoot: string;
+    // Output folder used when the field is empty (never unwritable).
+    function DefaultExportDir: string;
+    // Block-library root: configured, then the workspace, then up to five
+    // levels above the executable (finds examples/RSFQlib/blocklib in the
+    // release layout). '' when nothing exists; AWritable is set to the
+    // workspace path in that case so a template can be written there.
+    function ResolveBlockRoot(out AWritable: string): string;
     procedure RunGdsExport(const OutDir, Stem: string);
     procedure RunCirExport(const OutDir, Stem: string);
     procedure RunTbConfigExport(const OutDir, Stem: string);
@@ -2198,7 +2209,7 @@ procedure TForm1.ReportLibraryCoverage(const D: TExportDesign;
 var
   Kinds: TList<string>;
   Lib: TExportLibrary;
-  BlockRoot, ManifestPath, KindsText: string;
+  BlockRoot, ManifestPath, KindsText, WritableRoot: string;
   Pitch: Double;
   NeedGds, NeedCir: Boolean;
   i: Integer;
@@ -2222,19 +2233,21 @@ begin
     for k in Kinds do
       KindsText := KindsText + k + ', ';
     Lines.Add('    ' + Copy(KindsText, 1, Length(KindsText) - 2));
-    BlockRoot := '';
-    if FBlockLibDir <> '' then
-      BlockRoot := FBlockLibDir
-    else if TDirectory.Exists(TPath.Combine(GetCurrentDir, 'blocklib')) then
-      BlockRoot := TPath.Combine(GetCurrentDir, 'blocklib');
-    if BlockRoot <> '' then
-      ManifestPath := TPath.Combine(BlockRoot, 'manifest.json');
+    BlockRoot := ResolveBlockRoot(WritableRoot);
+    if BlockRoot = '' then
+      BlockRoot := WritableRoot;
+    ManifestPath := TPath.Combine(BlockRoot, 'manifest.json');
     Pitch := FDesignConfig.CoreUm;
     if Pitch <= 0 then
       Pitch := FPlanCore;
-    if (ManifestPath <> '') and TFile.Exists(ManifestPath) then
+    if TFile.Exists(ManifestPath) then
     begin
-      Lib.LoadFile(ManifestPath);
+      try
+        Lib.LoadFile(ManifestPath);
+      except
+        on E: Exception do
+          Lines.Add('  library manifest unreadable: ' + ManifestPath + ': ' + E.Message);
+      end;
       MissingTally := 0;
       for k in Kinds do
       begin
@@ -2261,22 +2274,33 @@ begin
       // Merge scaffolding for the kinds the manifest is missing (never touch the
       // entries the user has already filled in).
       if MissingTally > 0 then
-      begin
+      try
         WriteManifestTemplate(ManifestPath, Pitch, Kinds);
         Lines.Add('    -> added scaffolding for the missing kinds to ' + ManifestPath);
+      except
+        on E: Exception do
+          Lines.Add('    -> could not add scaffolding to ' + ManifestPath +
+            ': ' + E.Message);
       end;
     end
     else
     begin
-      // No library yet: write a ready-to-fill manifest, so the user only supplies
-      // real sizes/pins and drops the block files.
-      if BlockRoot = '' then
-        BlockRoot := TPath.Combine(GetCurrentDir, 'blocklib');
-      TDirectory.CreateDirectory(BlockRoot);
-      ManifestPath := TPath.Combine(BlockRoot, 'manifest.json');
-      WriteManifestTemplate(ManifestPath, Pitch, Kinds);
-      Lines.Add('  no block library; wrote template manifest to ' + ManifestPath);
-      Lines.Add('    fill sizeUm/pins per block, drop the .gds/.lef/.cir files next to it, then re-validate.');
+      // No library yet: write a ready-to-fill manifest into the writable
+      // workspace, so the page never fails on a folder it cannot create.
+      try
+        TDirectory.CreateDirectory(BlockRoot);
+        WriteManifestTemplate(ManifestPath, Pitch, Kinds);
+        Lines.Add('  no block library yet; wrote a template manifest to ' + ManifestPath);
+        Lines.Add('    the archive ships a ready library in examples/RSFQlib/blocklib -' +
+          ' point the Block library field at it (or at your PDK folder).');
+      except
+        on E: Exception do
+        begin
+          Lines.Add('  no block library; could not create ' + BlockRoot +
+            ': ' + E.Message);
+          Lines.Add('    choose a writable Block library folder with Browse.');
+        end;
+      end;
     end;
   finally
     Errors.Free;
@@ -2381,6 +2405,71 @@ begin
       [TargetGHz, MaxGHz]));
 end;
 
+// Folder the app writes its own files into when nothing is configured.
+function TForm1.WorkspaceRoot: string;
+begin
+  {$IFDEF MACOS}
+  // Never write inside the .app bundle: it is covered by the code signature
+  // and macOS treats it as read-only in practice.
+  Result := TPath.Combine(TPath.GetDocumentsPath, 'FluxRoute');
+  {$ELSE}
+  Result := ExtractFilePath(GetModuleName(HInstance));
+  if Result = '' then
+    Result := IncludeTrailingPathDelimiter(GetCurrentDir);
+  {$ENDIF}
+  try
+    TDirectory.CreateDirectory(Result);
+  except
+    // Read-only profile: keep the app usable and report the path it used.
+    Result := TPath.Combine(TPath.GetTempPath, 'FluxRoute');
+    TDirectory.CreateDirectory(Result);
+  end;
+end;
+
+function TForm1.DefaultExportDir: string;
+begin
+  Result := TPath.Combine(WorkspaceRoot, 'output');
+end;
+
+// Block-library root. Configured folder first, then the workspace, then the
+// layouts the release archive ships (blocklib/ next to the app, or
+// examples/RSFQlib/blocklib up to five levels above the executable). When
+// nothing is found, AWritable names the workspace folder a template can go in.
+function TForm1.ResolveBlockRoot(out AWritable: string): string;
+var
+  D: string;
+  i: Integer;
+begin
+  AWritable := TPath.Combine(WorkspaceRoot, 'blocklib');
+  Result := '';
+  if FBlockLibDir <> '' then
+    Exit(FBlockLibDir);
+  D := ExtractFilePath(GetModuleName(HInstance));
+  if D = '' then
+    D := IncludeTrailingPathDelimiter(GetCurrentDir);
+  for i := 0 to 5 do
+  begin
+    if TFile.Exists(TPath.Combine(D, 'manifest.json')) then
+      Exit(ExcludeTrailingPathDelimiter(D));
+    if TFile.Exists(TPath.Combine(D, 'blocklib', 'manifest.json')) then
+      Exit(TPath.Combine(D, 'blocklib'));
+    if TFile.Exists(TPath.Combine(D, 'examples', 'RSFQlib', 'blocklib',
+       'manifest.json')) then
+      Exit(TPath.Combine(D, 'examples', 'RSFQlib', 'blocklib'));
+    D := TPath.GetDirectoryName(ExcludeTrailingPathDelimiter(D));
+    if D = '' then
+      Break;
+    D := IncludeTrailingPathDelimiter(D);
+  end;
+  // Running from the repository root (CWD) is the other common layout.
+  D := IncludeTrailingPathDelimiter(GetCurrentDir);
+  if TFile.Exists(TPath.Combine(D, 'blocklib', 'manifest.json')) then
+    Exit(TPath.Combine(D, 'blocklib'));
+  if TFile.Exists(TPath.Combine(D, 'examples', 'RSFQlib', 'blocklib',
+     'manifest.json')) then
+    Exit(TPath.Combine(D, 'examples', 'RSFQlib', 'blocklib'));
+end;
+
 // Recomputes the export preflight: routed-instance coverage (missing kinds /
 // triple-check failures) and the placed-cell file status. Runs when entering
 // the Export tab or on Recheck.
@@ -2390,9 +2479,25 @@ var
   Cells: TArray<TExportCellCount>;
   Names: TList<string>;
   Gate: TGateInstance;
+  DummyRoot, DummyWritable: string;
 begin
   if FBlockLibDir <> '' then
-    EditBlockLibDir.Text := FBlockLibDir;
+    EditBlockLibDir.Text := FBlockLibDir
+  else
+  begin
+    // Show where the library was found (or where a template will go), so
+    // "cannot find blocklib/manifest" is answerable from the page.
+    DummyRoot := ResolveBlockRoot(DummyWritable);
+    if DummyRoot = '' then
+      DummyRoot := DummyWritable;
+    EditBlockLibDir.Text := DummyRoot;
+  end;
+  // A fresh install has no output folder yet: offer one that is writable,
+  // and never hand an empty path to the exporters.
+  if Trim(EditExportDir.Text) = '' then
+    EditExportDir.Text := DefaultExportDir;
+  if Trim(EditExportStem.Text) = '' then
+    EditExportStem.Text := 'die';
   MemoExportStatus.Lines.Clear;
   MemoExportLog.Lines.Clear;
   if (FLib = nil) or ((Length(FRouteTraces) = 0) and (Length(FBiasCells) = 0)) then
@@ -2443,8 +2548,20 @@ begin
 end;
 
 procedure TForm1.ButtonExportClick(Sender: TObject);
+var
+  OutDir, Stem: string;
 begin
   RefreshExportPreflight;
+  // Fresh installs have no folder configured yet: export into the writable
+  // workspace instead of failing on an empty path.
+  OutDir := Trim(EditExportDir.Text);
+  if OutDir = '' then
+    OutDir := DefaultExportDir;
+  Stem := Trim(EditExportStem.Text);
+  if Stem = '' then
+    Stem := 'die';
+  EditExportDir.Text := OutDir;
+  EditExportStem.Text := Stem;
   if FFlowStage < fsValidated then
   begin
     MemoExportLog.Lines.Add('Export locked: run Routing first.');
@@ -2458,12 +2575,29 @@ begin
     Exit;
   end;
   MemoExportLog.Lines.Add('Export ready - all block kinds present and verified.');
+  // Each format is independent: a failure in one must not stop the others,
+  // and an unwritable folder is reported instead of raised.
   if CheckExportGds.IsChecked then
-    RunGdsExport(EditExportDir.Text, EditExportStem.Text);
+  try
+    RunGdsExport(OutDir, Stem);
+  except
+    on E: Exception do
+      MemoExportLog.Lines.Add('GDS export failed (' + OutDir + '): ' + E.Message);
+  end;
   if CheckExportCir.IsChecked then
-    RunCirExport(EditExportDir.Text, EditExportStem.Text);
+  try
+    RunCirExport(OutDir, Stem);
+  except
+    on E: Exception do
+      MemoExportLog.Lines.Add('CIR export failed (' + OutDir + '): ' + E.Message);
+  end;
   if CheckExportMetrics.IsChecked then
-    RunMetricsExport(EditExportDir.Text, EditExportStem.Text);
+  try
+    RunMetricsExport(OutDir, Stem);
+  except
+    on E: Exception do
+      MemoExportLog.Lines.Add('Metrics export failed (' + OutDir + '): ' + E.Message);
+  end;
   if (not CheckExportGds.IsChecked) and (not CheckExportCir.IsChecked) and
      (not CheckExportMetrics.IsChecked) then
     MemoExportLog.Lines.Add('No output format selected - tick .gds/.cir/.stats first.');
@@ -2480,7 +2614,7 @@ var
   Kinds: TList<string>;
   Sources: TArray<string>;
   Instances: TArray<TGDSInstance>;
-  BlockRoot: string;
+  BlockRoot, DummyRoot: string;
   Core, DieWUm, DieHUm: Double;
   i, j, n: Integer;
   Ent: TExportBlockEntry;
@@ -2508,11 +2642,7 @@ var
   ExitCode: Integer;
 
 begin
-  BlockRoot := '';
-  if FBlockLibDir <> '' then
-    BlockRoot := FBlockLibDir
-  else if TDirectory.Exists(TPath.Combine(GetCurrentDir, 'blocklib')) then
-    BlockRoot := TPath.Combine(GetCurrentDir, 'blocklib');
+  BlockRoot := ResolveBlockRoot(DummyRoot);
   Lib := TExportLibrary.Create;
   Kinds := TList<string>.Create;
   try
@@ -2940,13 +3070,9 @@ procedure TForm1.RunCirExport(const OutDir, Stem: string);
 var
   Lib: TExportLibrary;
   ClockModel: TBlifModel;
-  BlockRoot, OutPath, CirText: string;
+  BlockRoot, OutPath, CirText, DummyRoot: string;
 begin
-  BlockRoot := '';
-  if FBlockLibDir <> '' then
-    BlockRoot := FBlockLibDir
-  else if TDirectory.Exists(TPath.Combine(GetCurrentDir, 'blocklib')) then
-    BlockRoot := TPath.Combine(GetCurrentDir, 'blocklib');
+  BlockRoot := ResolveBlockRoot(DummyRoot);
   Lib := TExportLibrary.Create;
   try
     if (BlockRoot <> '') and

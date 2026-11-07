@@ -285,6 +285,7 @@ def main():
         probe += [f"i(I_{n})" for n in inputs]
         probe += [f"v({n}_i)" for n in inputs]
         probe += [f"p({out_probe}.XR{n})" for n in outputs]
+        probe += [f"v({n}_o)" for n in outputs]
         probe += [f"v(r{n})" for n in outputs]
     L.append(".print " + " ".join(probe))
     L.append(".end")

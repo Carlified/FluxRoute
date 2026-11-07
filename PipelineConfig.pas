@@ -62,6 +62,20 @@ begin
   Result := FConfigPath;
 end;
 
+// Folder this unit may write into. Windows keeps the historical "next to the
+// exe" layout; macOS must not write inside the .app bundle (it is covered by
+// the code signature), so it uses ~/Documents/FluxRoute like the exporters.
+function WritableDir: string;
+begin
+  {$IFDEF MACOS}
+  Result := TPath.Combine(TPath.GetDocumentsPath, 'FluxRoute');
+  {$ELSE}
+  Result := ExtractFilePath(GetModuleName(HInstance));
+  if Result = '' then
+    Result := IncludeTrailingPathDelimiter(GetCurrentDir);
+  {$ENDIF}
+end;
+
 function FindConfigFile: string;
 var
   Cand: string;
@@ -71,6 +85,9 @@ begin
   if TFile.Exists(Cand) then
     Exit(Cand);
   Cand := ExtractFilePath(GetModuleName(HInstance)) + ConfigFileName;
+  if TFile.Exists(Cand) then
+    Exit(Cand);
+  Cand := IncludeTrailingPathDelimiter(WritableDir) + ConfigFileName;
   if TFile.Exists(Cand) then
     Exit(Cand);
 end;
@@ -104,10 +121,16 @@ begin
     WriteDefaultConfig(Path);
   except
     try
-      Path := IncludeTrailingPathDelimiter(GetCurrentDir) + ConfigFileName;
+      TDirectory.CreateDirectory(WritableDir);
+      Path := IncludeTrailingPathDelimiter(WritableDir) + ConfigFileName;
       WriteDefaultConfig(Path);
     except
-      Exit;
+      try
+        Path := IncludeTrailingPathDelimiter(GetCurrentDir) + ConfigFileName;
+        WriteDefaultConfig(Path);
+      except
+        Exit;
+      end;
     end;
   end;
   Result := Path;
