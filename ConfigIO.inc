@@ -521,6 +521,8 @@ begin
   FProject.PTLDelay := EditPTLDelay.Text;
   FProject.PulseWidth := EditPulseWidth.Text;
   FProject.BiasLayer := FBiasLayer;
+  FProject.ExportDir := EditExportDir.Text;
+  FProject.ExportStem := EditExportStem.Text;
   try
     FProject.SaveToFile(FProjectPath);
   except
@@ -589,6 +591,10 @@ begin
   if FSliderPos > 100 then
     FSliderPos := 100;
   CheckBoxSeedBuffers.IsChecked := FProject.ClockSeedBuffers;
+  if FProject.ExportDir <> '' then
+    EditExportDir.Text := FProject.ExportDir;
+  if FProject.ExportStem <> '' then
+    EditExportStem.Text := FProject.ExportStem;
 
   // Restore the placement config verbatim (raw text, so invalid entries and their
   // errors return too); marking it initialized stops the derivation from overwriting.

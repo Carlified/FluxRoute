@@ -84,10 +84,10 @@ begin
   Cand := IncludeTrailingPathDelimiter(GetCurrentDir) + ConfigFileName;
   if TFile.Exists(Cand) then
     Exit(Cand);
-  Cand := ExtractFilePath(GetModuleName(HInstance)) + ConfigFileName;
+  Cand := IncludeTrailingPathDelimiter(WritableDir) + ConfigFileName;
   if TFile.Exists(Cand) then
     Exit(Cand);
-  Cand := IncludeTrailingPathDelimiter(WritableDir) + ConfigFileName;
+  Cand := ExtractFilePath(GetModuleName(HInstance)) + ConfigFileName;
   if TFile.Exists(Cand) then
     Exit(Cand);
 end;
@@ -116,21 +116,18 @@ var
   Path: string;
 begin
   Result := '';
-  Path := ExtractFilePath(GetModuleName(HInstance)) + ConfigFileName;
+  // Write into the workspace, never inside the .app bundle: a write there can
+  // invalidate the ad-hoc signature. On Windows the workspace is the exe folder.
   try
+    TDirectory.CreateDirectory(WritableDir);
+    Path := IncludeTrailingPathDelimiter(WritableDir) + ConfigFileName;
     WriteDefaultConfig(Path);
   except
     try
-      TDirectory.CreateDirectory(WritableDir);
-      Path := IncludeTrailingPathDelimiter(WritableDir) + ConfigFileName;
+      Path := IncludeTrailingPathDelimiter(GetCurrentDir) + ConfigFileName;
       WriteDefaultConfig(Path);
     except
-      try
-        Path := IncludeTrailingPathDelimiter(GetCurrentDir) + ConfigFileName;
-        WriteDefaultConfig(Path);
-      except
-        Exit;
-      end;
+      Exit;
     end;
   end;
   Result := Path;

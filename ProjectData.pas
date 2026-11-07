@@ -41,6 +41,8 @@ type
     FPTLDelay: string;
     FPulseWidth: string;
     FBiasLayer: string;
+    FExportDir: string;
+    FExportStem: string;
     procedure LoadFromJson(Root: TJSONObject);
   public
     constructor Create;
@@ -70,6 +72,10 @@ type
     property PTLDelay: string read FPTLDelay write FPTLDelay;
     property PulseWidth: string read FPulseWidth write FPulseWidth;
     property BiasLayer: string read FBiasLayer write FBiasLayer;
+    // Export page: kept as typed, so the historical './output' resolves
+    // against the app's own workspace on every platform.
+    property ExportDir: string read FExportDir write FExportDir;
+    property ExportStem: string read FExportStem write FExportStem;
   end;
 
 // Path of the small "recent projects" preferences file. Kept next to the
@@ -85,9 +91,22 @@ const
 
 implementation
 
+// Settings files must not live inside the .app bundle: writing there breaks
+// the code signature. Same rule as the exporters and pipeline_config.ini.
+function WritableDir: string;
+begin
+  {$IFDEF MACOS}
+  Result := TPath.Combine(TPath.GetDocumentsPath, 'FluxRoute');
+  {$ELSE}
+  Result := ExtractFilePath(GetModuleName(HInstance));
+  if Result = '' then
+    Result := IncludeTrailingPathDelimiter(GetCurrentDir);
+  {$ENDIF}
+end;
+
 function RecentProjectsFile: string;
 begin
-  Result := ExtractFilePath(GetModuleName(HInstance)) + 'recent_projects.json';
+  Result := IncludeTrailingPathDelimiter(WritableDir) + 'recent_projects.json';
 end;
 
 constructor TProjectFile.Create;
@@ -129,6 +148,8 @@ begin
   FPTLDelay := '';
   FPulseWidth := '';
   FBiasLayer := '';
+  FExportDir := './output';
+  FExportStem := 'die';
 end;
 
 procedure TProjectFile.LoadFromJson(Root: TJSONObject);
@@ -178,6 +199,10 @@ begin
     FPulseWidth := Root.GetValue<string>('pulseWidth');
   if Root.GetValue('biasLayer') is TJSONValue then
     FBiasLayer := Root.GetValue<string>('biasLayer');
+  if Root.GetValue('exportDir') is TJSONValue then
+    FExportDir := Root.GetValue<string>('exportDir');
+  if Root.GetValue('exportStem') is TJSONValue then
+    FExportStem := Root.GetValue<string>('exportStem');
 
   FSplitters.Clear;
   Arr := Root.GetValue('splitters') as TJSONArray;
@@ -237,6 +262,8 @@ begin
     Root.AddPair('ptlDelay', FPTLDelay);
     Root.AddPair('pulseWidth', FPulseWidth);
     Root.AddPair('biasLayer', FBiasLayer);
+    Root.AddPair('exportDir', FExportDir);
+    Root.AddPair('exportStem', FExportStem);
 
     Arr := TJSONArray.Create;
     for i := 0 to FSplitters.Count - 1 do
@@ -299,7 +326,12 @@ begin
       Arr.Add(Recent[i]);
     Root.AddPair('recent', Arr);
     Path := RecentProjectsFile;
-    TFile.WriteAllText(Path, Root.ToJSON);
+    try
+      TDirectory.CreateDirectory(WritableDir);
+      TFile.WriteAllText(Path, Root.ToJSON);
+    except
+      // Losing the recent list must never fail a save or a close.
+    end;
   finally
     Root.Free;
   end;

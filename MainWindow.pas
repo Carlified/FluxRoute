@@ -526,6 +526,10 @@ procedure AppendScanTally(const D: TExportDesign;
     function WorkspaceRoot: string;
     // Output folder used when the field is empty (never unwritable).
     function DefaultExportDir: string;
+    // Resolves the output field: './output' (the form's default) is
+    // relative to the workspace, not to the process working directory,
+    // which is '/' for a Finder-launched app.
+    function ResolveExportDir(const ADir: string): string;
     // Block-library root: configured, then the workspace, then up to five
     // levels above the executable (finds examples/RSFQlib/blocklib in the
     // release layout). '' when nothing exists; AWritable is set to the
@@ -2431,6 +2435,24 @@ begin
   Result := TPath.Combine(WorkspaceRoot, 'output');
 end;
 
+function TForm1.ResolveExportDir(const ADir: string): string;
+var
+  D: string;
+begin
+  D := Trim(ADir);
+  if D = '' then
+    Exit(DefaultExportDir);
+  if (Length(D) >= 2) and (D[1] = '.') and
+     ((D[2] = PathDelim) or (D[2] = '/')) then
+    D := Copy(D, 3, MaxInt);
+  // Rooted when it starts with a separator or a drive letter; everything
+  // else hangs off the workspace.
+  if (D = '') or
+     ((D[1] <> PathDelim) and not ((Length(D) >= 2) and (D[2] = ':'))) then
+    D := TPath.Combine(WorkspaceRoot, D);
+  Result := D;
+end;
+
 // Block-library root. Configured folder first, then the workspace, then the
 // layouts the release archive ships (blocklib/ next to the app, or
 // examples/RSFQlib/blocklib up to five levels above the executable). When
@@ -2493,10 +2515,12 @@ begin
       DummyRoot := DummyWritable;
     EditBlockLibDir.Text := DummyRoot;
   end;
-  // A fresh install has no output folder yet: offer one that is writable,
-  // and never hand an empty path to the exporters.
-  if Trim(EditExportDir.Text) = '' then
-    EditExportDir.Text := DefaultExportDir;
+  // Show where the output will actually go: './output' resolves against the
+  // workspace, so the field never points at a folder next to the process
+  // working directory (which is '/' for a Finder-launched app).
+  DummyRoot := ResolveExportDir(EditExportDir.Text);
+  if DummyRoot <> EditExportDir.Text then
+    EditExportDir.Text := DummyRoot;
   if Trim(EditExportStem.Text) = '' then
     EditExportStem.Text := 'die';
   MemoExportStatus.Lines.Clear;
@@ -2555,9 +2579,7 @@ begin
   RefreshExportPreflight;
   // Fresh installs have no folder configured yet: export into the writable
   // workspace instead of failing on an empty path.
-  OutDir := Trim(EditExportDir.Text);
-  if OutDir = '' then
-    OutDir := DefaultExportDir;
+  OutDir := ResolveExportDir(EditExportDir.Text);
   Stem := Trim(EditExportStem.Text);
   if Stem = '' then
     Stem := 'die';
