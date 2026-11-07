@@ -2437,9 +2437,12 @@ end;
 // nothing is found, AWritable names the workspace folder a template can go in.
 function TForm1.ResolveBlockRoot(out AWritable: string): string;
 var
-  D: string;
+  D, SampleRel: string;
   i: Integer;
 begin
+  // TPath.Combine here only has the 2- and 3-argument overloads, so build
+  // the sample folder once and join it in a single step.
+  SampleRel := 'examples' + PathDelim + 'RSFQlib' + PathDelim + 'blocklib';
   AWritable := TPath.Combine(WorkspaceRoot, 'blocklib');
   Result := '';
   if FBlockLibDir <> '' then
@@ -2453,9 +2456,8 @@ begin
       Exit(ExcludeTrailingPathDelimiter(D));
     if TFile.Exists(TPath.Combine(D, 'blocklib', 'manifest.json')) then
       Exit(TPath.Combine(D, 'blocklib'));
-    if TFile.Exists(TPath.Combine(D, 'examples', 'RSFQlib', 'blocklib',
-       'manifest.json')) then
-      Exit(TPath.Combine(D, 'examples', 'RSFQlib', 'blocklib'));
+    if TFile.Exists(TPath.Combine(D, SampleRel, 'manifest.json')) then
+      Exit(TPath.Combine(D, SampleRel));
     D := TPath.GetDirectoryName(ExcludeTrailingPathDelimiter(D));
     if D = '' then
       Break;
@@ -2465,9 +2467,8 @@ begin
   D := IncludeTrailingPathDelimiter(GetCurrentDir);
   if TFile.Exists(TPath.Combine(D, 'blocklib', 'manifest.json')) then
     Exit(TPath.Combine(D, 'blocklib'));
-  if TFile.Exists(TPath.Combine(D, 'examples', 'RSFQlib', 'blocklib',
-     'manifest.json')) then
-    Exit(TPath.Combine(D, 'examples', 'RSFQlib', 'blocklib'));
+  if TFile.Exists(TPath.Combine(D, SampleRel, 'manifest.json')) then
+    Exit(TPath.Combine(D, SampleRel));
 end;
 
 // Recomputes the export preflight: routed-instance coverage (missing kinds /
